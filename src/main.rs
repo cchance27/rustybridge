@@ -1,7 +1,7 @@
 mod cli;
+mod client;
 mod crypto;
 mod server;
-mod client;
 mod session;
 mod terminal;
 

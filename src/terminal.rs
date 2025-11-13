@@ -2,8 +2,7 @@ use std::env;
 
 use clap::ValueEnum;
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, ValueEnum, Default)]
 pub enum NewlineMode {
     #[default]
     Lf,

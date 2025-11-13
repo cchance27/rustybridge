@@ -175,7 +175,9 @@ fn parse_bracketed_host(input: &str) -> Result<(String, u16)> {
 
 fn fallback_username() -> Option<String> {
     for key in ["LSSH_USER", "USER", "LOGNAME", "USERNAME"] {
-        if let Ok(value) = env::var(key) && !value.is_empty() {
+        if let Ok(value) = env::var(key)
+            && !value.is_empty()
+        {
             return Some(value);
         }
     }

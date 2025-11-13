@@ -1,13 +1,12 @@
-
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use russh::client;
-use crate::session::{self, AcceptAllKeys, ShellOptions, run_command, run_shell};
-use tracing::info;
+use tracing::{info, warn};
 
-use crate::cli::{ClientConfig};
+use crate::cli::ClientConfig;
 use crate::crypto::legacy_preferred;
+use crate::session::{self, AcceptAllKeys, ShellOptions, run_command, run_shell};
 
 pub async fn run_client(args: ClientConfig) -> Result<()> {
     let ClientConfig {
@@ -55,5 +54,8 @@ pub async fn run_client(args: ClientConfig) -> Result<()> {
     };
 
     session::disconnect(&mut session).await;
+    if let Err(err) = session.await {
+        warn!(?err, "SSH session shutdown error");
+    }
     outcome
 }

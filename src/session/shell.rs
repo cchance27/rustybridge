@@ -1,6 +1,7 @@
 use std::env;
 use std::io::{self, Cursor, Read, Write};
 use std::thread;
+use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size as term_size};
@@ -35,7 +36,8 @@ pub async fn run_shell(session: &mut SessionHandle, options: ShellOptions) -> Re
     let _raw_guard = RawModeGuard::activate()?;
 
     let (tx, mut rx) = unbounded_channel::<InputEvent>();
-    spawn_input_thread(tx);
+    spawn_input_thread(tx.clone());
+    spawn_resize_thread(tx);
 
     let mut stdout = tokio::io::stdout();
     let mut stdin_closed = false;
@@ -54,6 +56,13 @@ pub async fn run_shell(session: &mut SessionHandle, options: ShellOptions) -> Re
                             let mut cursor = Cursor::new(mapped);
                             channel.data(&mut cursor).await?;
                         }
+                    }
+                    Some(InputEvent::Resize(cols, rows)) => {
+                        let cols = cols.max(1);
+                        let rows = rows.max(1);
+                        channel
+                            .window_change(cols as u32, rows as u32, 0, 0)
+                            .await?;
                     }
                     Some(InputEvent::Eof) | None => {
                         if !stdin_closed {
@@ -114,11 +123,31 @@ fn spawn_input_thread(tx: UnboundedSender<InputEvent>) {
     });
 }
 
+fn spawn_resize_thread(tx: UnboundedSender<InputEvent>) {
+    thread::spawn(move || {
+        let mut last_size = term_size().unwrap_or((80, 24));
+        loop {
+            thread::sleep(Duration::from_millis(200));
+            match term_size() {
+                Ok(size) => {
+                    if size != last_size {
+                        last_size = size;
+                        if tx.send(InputEvent::Resize(size.0, size.1)).is_err() {
+                            break;
+                        }
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+    });
+}
+
 struct RawModeGuard;
 
 impl RawModeGuard {
     fn activate() -> io::Result<Self> {
-        enable_raw_mode().map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        enable_raw_mode().map_err(io::Error::other)?;
         Ok(Self)
     }
 }
@@ -131,5 +160,6 @@ impl Drop for RawModeGuard {
 
 enum InputEvent {
     Data(Vec<u8>),
+    Resize(u16, u16),
     Eof,
 }

@@ -1,5 +1,3 @@
-use std::future::Future;
-
 use anyhow::Result;
 use russh::keys::PublicKey;
 use russh::{ChannelMsg, Disconnect, client, client::Handle};
@@ -14,11 +12,11 @@ pub struct AcceptAllKeys;
 impl client::Handler for AcceptAllKeys {
     type Error = russh::Error;
 
-    fn check_server_key(
+    async fn check_server_key(
         &mut self,
         _server_public_key: &PublicKey,
-    ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
-        async { Ok(true) }
+    ) -> Result<bool, russh::Error> {
+        Ok(true)
     }
 }
 

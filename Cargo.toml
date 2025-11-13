@@ -15,4 +15,6 @@ russh = { version = "0.54.6", default-features = false, features = ["aws-lc-rs",
 clap = { version = "4.5", features = ["derive"] }
 rpassword = "7"
 whoami = "1"
-rand_core = "0.6"
+rand_core = "0.9.3"
+ratatui = "0.29.0"
+sqlx = { version = "0.8.6", features = ["chrono", "macros", "runtime-tokio", "sqlite"] }
