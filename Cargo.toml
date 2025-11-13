@@ -1,0 +1,18 @@
+# Cargo.toml
+[package]
+name = "lssh"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+crossterm = "0.29.0"
+russh = { version = "0.54.6", default-features = false, features = ["aws-lc-rs", "rsa", "dsa", "des", "flate2"] }
+clap = { version = "4.5", features = ["derive"] }
+rpassword = "7"
+whoami = "1"
+rand_core = "0.6"
