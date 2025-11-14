@@ -1,11 +1,12 @@
 //! Ratatui backend plumbing that knows how to emit escape sequences over russh channels.
 
-use std::io::{self, Write};
-use std::sync::{Arc, Mutex};
+use std::{
+    io::{self, Write}, sync::{Arc, Mutex}
+};
 
-use ratatui::backend::{Backend, ClearType, CrosstermBackend, WindowSize};
-use ratatui::layout::{Position, Rect, Size};
-use ratatui::{Frame, Terminal};
+use ratatui::{
+    Frame, Terminal, backend::{Backend, ClearType, CrosstermBackend, WindowSize}, layout::{Position, Rect, Size}
+};
 
 /// Owns a [`Terminal`] configured with the custom backend that writes into an in-memory buffer.
 ///
@@ -127,10 +128,7 @@ impl Backend for RemoteBackend {
                 width: self.size.width,
                 height: self.size.height,
             },
-            pixels: Size {
-                width: 0,
-                height: 0,
-            },
+            pixels: Size { width: 0, height: 0 },
         })
     }
 

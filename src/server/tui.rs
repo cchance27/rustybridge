@@ -1,21 +1,16 @@
 //! Stateless widgets and helpers that describe the embedded echo TUI.
 
-use std::collections::VecDeque;
-use std::fmt::Write as FmtWrite;
-use std::time::Duration;
+use std::{collections::VecDeque, fmt::Write as FmtWrite, time::Duration};
 
-use ratatui::Frame;
-use ratatui::layout::{Alignment, Position, Rect};
-use ratatui::style::{Color, Style};
-use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::{
+    Frame, layout::{Alignment, Position, Rect}, style::{Color, Style}, text::{Line, Span, Text}, widgets::{Block, Borders, Clear, Paragraph, Wrap}
+};
 
 pub(super) const HELLO_BANNER: &str = r"
 ▄▖▄▖▖▖
 ▚ ▚ ▙▌
 ▄▌▄▌▌▌";
-pub(super) const INSTRUCTIONS: &str =
-    "Type anything to have it echoed back, or 'exit' to disconnect.";
+pub(super) const INSTRUCTIONS: &str = "Type anything to have it echoed back, or 'exit' to disconnect.";
 const PROMPT: &str = "echo> ";
 const MAX_LOG_LINES: usize = 512;
 const STATUS_HEIGHT: u16 = 3;
@@ -95,32 +90,17 @@ impl EchoTui {
             return;
         }
 
-        let content_area = Rect::new(
-            area.x,
-            area.y + status_height,
-            area.width,
-            area.height - status_height,
-        );
+        let content_area = Rect::new(area.x, area.y + status_height, area.width, area.height - status_height);
         let prompt_row = content_area.height.saturating_sub(1);
         if prompt_row > 0 {
-            let log_area = Rect::new(
-                content_area.x,
-                content_area.y,
-                content_area.width,
-                prompt_row,
-            );
+            let log_area = Rect::new(content_area.x, content_area.y, content_area.width, prompt_row);
             let rows = prompt_row as usize;
             let lines = self.visible_lines(rows);
             let log = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
             frame.render_widget(log, log_area);
         }
 
-        let prompt_area = Rect::new(
-            content_area.x,
-            content_area.y + prompt_row,
-            content_area.width,
-            1,
-        );
+        let prompt_area = Rect::new(content_area.x, content_area.y + prompt_row, content_area.width, 1);
         if prompt_area.width == 0 {
             return;
         }
@@ -165,33 +145,20 @@ impl EchoTui {
             return;
         }
         frame.render_widget(Clear, inner);
-        let status_line = Line::from(Span::styled(
-            STATUS_MESSAGE,
-            Style::default().fg(Color::Green),
-        ));
-        frame.render_widget(
-            Paragraph::new(status_line).alignment(Alignment::Left),
-            inner,
-        );
+        let status_line = Line::from(Span::styled(STATUS_MESSAGE, Style::default().fg(Color::Green)));
+        frame.render_widget(Paragraph::new(status_line).alignment(Alignment::Left), inner);
 
         let timer_line = Line::from(Span::styled(
             format!("connected {}", format_duration(connected_for)),
             Style::default().fg(Color::Cyan),
         ));
-        frame.render_widget(
-            Paragraph::new(timer_line).alignment(Alignment::Right),
-            inner,
-        );
+        frame.render_widget(Paragraph::new(timer_line).alignment(Alignment::Right), inner);
     }
 
     fn visible_lines(&self, rows: usize) -> Vec<Line<'static>> {
         let rows = rows.max(1);
         let start = self.lines.len().saturating_sub(rows);
-        self.lines
-            .iter()
-            .skip(start)
-            .map(|line| Line::from(line.clone()))
-            .collect()
+        self.lines.iter().skip(start).map(|line| Line::from(line.clone())).collect()
     }
 }
 
@@ -265,20 +232,8 @@ pub(super) fn status_tick_sequence(size: (u16, u16), connected_for: Duration) ->
     let blanks = " ".repeat(timer_width);
 
     let mut buffer = String::new();
-    let _ = write!(
-        &mut buffer,
-        "\x1b[s\x1b[{};{}H{}",
-        timer_row + 1,
-        timer_col + 1,
-        blanks
-    );
-    let _ = write!(
-        &mut buffer,
-        "\x1b[{};{}H{}",
-        timer_row + 1,
-        timer_col + 1,
-        display
-    );
+    let _ = write!(&mut buffer, "\x1b[s\x1b[{};{}H{}", timer_row + 1, timer_col + 1, blanks);
+    let _ = write!(&mut buffer, "\x1b[{};{}H{}", timer_row + 1, timer_col + 1, display);
     buffer.push_str("\x1b[u");
     Some(buffer.into_bytes())
 }

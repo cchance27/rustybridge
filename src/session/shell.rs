@@ -1,17 +1,18 @@
-use std::env;
-use std::io::{self, Cursor, Read, Write};
-use std::thread;
-use std::time::Duration;
+use std::{
+    env, io::{self, Cursor, Read, Write}, thread, time::Duration
+};
 
 use anyhow::Result;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size as term_size};
-use signal_hook::iterator::Signals;
-use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
-
-use crate::session::SessionHandle;
-use crate::terminal::{NewlineMode, current_pty_modes, map_input};
 use russh::Sig;
+use signal_hook::iterator::Signals;
+use tokio::{
+    io::AsyncWriteExt, sync::mpsc::{UnboundedSender, unbounded_channel}
+};
+
+use crate::{
+    session::SessionHandle, terminal::{NewlineMode, current_pty_modes, map_input}
+};
 
 #[derive(Clone, Copy)]
 pub struct ShellOptions {
@@ -150,7 +151,9 @@ fn spawn_resize_thread(tx: UnboundedSender<InputEvent>) {
         let mut last_size = term_size().unwrap_or((80, 24));
         loop {
             thread::sleep(Duration::from_millis(200));
-            if let Ok(size) = term_size() && size != last_size {
+            if let Ok(size) = term_size()
+                && size != last_size
+            {
                 last_size = size;
                 if tx.send(InputEvent::Resize(size.0, size.1)).is_err() {
                     break;

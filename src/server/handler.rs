@@ -1,17 +1,18 @@
 //! SSH handler implementation that drives per-connection state and the echo TUI.
 
-use std::net::SocketAddr;
-use std::time::{Duration, Instant};
+use std::{
+    net::SocketAddr, time::{Duration, Instant}
+};
 
-use russh::server::{self as ssh_server, Auth, Session};
-use russh::{Channel, ChannelId, CryptoVec, Pty};
-use tokio::sync::watch;
-use tokio::task::JoinHandle;
-use tokio::time;
+use russh::{
+    Channel, ChannelId, CryptoVec, Pty, server::{self as ssh_server, Auth, Session}
+};
+use tokio::{sync::watch, task::JoinHandle, time};
 use tracing::{info, warn};
 
-use crate::server::remote_backend::ServerTerminal;
-use crate::server::tui::{EchoTui, HELLO_BANNER, INSTRUCTIONS, desired_rect, status_tick_sequence};
+use crate::server::{
+    remote_backend::ServerTerminal, tui::{EchoTui, HELLO_BANNER, INSTRUCTIONS, desired_rect, status_tick_sequence}
+};
 
 /// Tracks the lifecycle of a single SSH session, including authentication, PTY events, and TUI I/O.
 pub(super) struct ServerHandler {
@@ -51,23 +52,13 @@ impl ServerHandler {
         }
     }
 
-    fn send_bytes(
-        &self,
-        session: &mut Session,
-        channel: ChannelId,
-        bytes: &[u8],
-    ) -> Result<(), russh::Error> {
+    fn send_bytes(&self, session: &mut Session, channel: ChannelId, bytes: &[u8]) -> Result<(), russh::Error> {
         let mut payload = CryptoVec::new();
         payload.extend(bytes);
         session.data(channel, payload)
     }
 
-    fn send_line(
-        &self,
-        session: &mut Session,
-        channel: ChannelId,
-        line: &str,
-    ) -> Result<(), russh::Error> {
+    fn send_line(&self, session: &mut Session, channel: ChannelId, line: &str) -> Result<(), russh::Error> {
         let mut payload = CryptoVec::new();
         payload.extend(line.as_bytes());
         payload.extend(b"\r\n");
@@ -91,11 +82,7 @@ impl ServerHandler {
     }
 
     /// Send the closing sequence, tear down terminal state, and emit disconnect logs.
-    fn handle_exit(
-        &mut self,
-        session: &mut Session,
-        channel: ChannelId,
-    ) -> Result<(), russh::Error> {
+    fn handle_exit(&mut self, session: &mut Session, channel: ChannelId) -> Result<(), russh::Error> {
         self.drop_terminal();
         if self.alt_screen {
             self.leave_alt_screen(session, channel)?;
@@ -128,11 +115,7 @@ impl ServerHandler {
     }
 
     /// Render the TUI and forward any emitted bytes to the SSH client.
-    fn render_terminal(
-        &mut self,
-        session: &mut Session,
-        channel: ChannelId,
-    ) -> Result<(), russh::Error> {
+    fn render_terminal(&mut self, session: &mut Session, channel: ChannelId) -> Result<(), russh::Error> {
         if self.tui.is_none() {
             return Ok(());
         }
@@ -146,19 +129,14 @@ impl ServerHandler {
             term.ensure_size(rect).map_err(russh::Error::IO)?;
             if let Some(tui) = self.tui.as_ref() {
                 let connected_for = self.connected_at.elapsed();
-                term.draw(|frame| tui.render(frame, connected_for))
-                    .map_err(russh::Error::IO)?;
+                term.draw(|frame| tui.render(frame, connected_for)).map_err(russh::Error::IO)?;
             }
         }
         self.flush_terminal(session, channel)
     }
 
     /// Push accumulated escape sequences toward the remote SSH channel.
-    fn flush_terminal(
-        &mut self,
-        session: &mut Session,
-        channel: ChannelId,
-    ) -> Result<(), russh::Error> {
+    fn flush_terminal(&mut self, session: &mut Session, channel: ChannelId) -> Result<(), russh::Error> {
         if let Some(term) = self.terminal.as_ref() {
             let bytes = term.drain_bytes();
             if !bytes.is_empty() {
@@ -173,11 +151,7 @@ impl ServerHandler {
     }
 
     /// Switch the remote PTY into the alternate screen buffer once per session.
-    fn enter_alt_screen(
-        &mut self,
-        session: &mut Session,
-        channel: ChannelId,
-    ) -> Result<(), russh::Error> {
+    fn enter_alt_screen(&mut self, session: &mut Session, channel: ChannelId) -> Result<(), russh::Error> {
         if !self.alt_screen {
             self.send_bytes(session, channel, b"\x1b[?1049h\x1b[2J\x1b[H")?;
             self.alt_screen = true;
@@ -186,11 +160,7 @@ impl ServerHandler {
     }
 
     /// Restore the remote PTY to the main screen when the session ends.
-    fn leave_alt_screen(
-        &mut self,
-        session: &mut Session,
-        channel: ChannelId,
-    ) -> Result<(), russh::Error> {
+    fn leave_alt_screen(&mut self, session: &mut Session, channel: ChannelId) -> Result<(), russh::Error> {
         if self.alt_screen {
             self.send_bytes(session, channel, b"\x1b[?1049l")?;
             self.alt_screen = false;
@@ -257,11 +227,7 @@ impl ServerHandler {
     }
 
     /// Remove the most recent character from the TUI input buffer and refresh the view.
-    fn handle_backspace(
-        &mut self,
-        session: &mut Session,
-        channel: ChannelId,
-    ) -> Result<(), russh::Error> {
+    fn handle_backspace(&mut self, session: &mut Session, channel: ChannelId) -> Result<(), russh::Error> {
         if let Some(tui) = self.tui.as_mut()
             && tui.pop_char()
         {
@@ -271,12 +237,7 @@ impl ServerHandler {
     }
 
     /// Append a printable character to the input buffer and trigger a redraw.
-    fn handle_printable(
-        &mut self,
-        ch: char,
-        session: &mut Session,
-        channel: ChannelId,
-    ) -> Result<(), russh::Error> {
+    fn handle_printable(&mut self, ch: char, session: &mut Session, channel: ChannelId) -> Result<(), russh::Error> {
         if let Some(tui) = self.tui.as_mut()
             && tui.push_char(ch)
         {
@@ -286,11 +247,7 @@ impl ServerHandler {
     }
 
     /// Process a full line (exit, echo, etc.) once the user presses Enter.
-    fn complete_line(
-        &mut self,
-        session: &mut Session,
-        channel: ChannelId,
-    ) -> Result<LineAction, russh::Error> {
+    fn complete_line(&mut self, session: &mut Session, channel: ChannelId) -> Result<LineAction, russh::Error> {
         let Some(tui) = self.tui.as_mut() else {
             return Ok(LineAction::Continue);
         };
@@ -330,11 +287,7 @@ impl Drop for ServerHandler {
 impl ssh_server::Handler for ServerHandler {
     type Error = russh::Error;
 
-    async fn channel_open_session(
-        &mut self,
-        channel: Channel<ssh_server::Msg>,
-        _session: &mut Session,
-    ) -> Result<bool, Self::Error> {
+    async fn channel_open_session(&mut self, channel: Channel<ssh_server::Msg>, _session: &mut Session) -> Result<bool, Self::Error> {
         self.channel = Some(channel.id());
         Ok(true)
     }
@@ -367,11 +320,7 @@ impl ssh_server::Handler for ServerHandler {
         Ok(())
     }
 
-    async fn shell_request(
-        &mut self,
-        channel: ChannelId,
-        session: &mut Session,
-    ) -> Result<(), Self::Error> {
+    async fn shell_request(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
         session.channel_success(channel)?;
         self.channel = Some(channel);
         self.init_shell()?;
@@ -380,12 +329,7 @@ impl ssh_server::Handler for ServerHandler {
         self.render_terminal(session, channel)
     }
 
-    async fn exec_request(
-        &mut self,
-        channel: ChannelId,
-        data: &[u8],
-        session: &mut Session,
-    ) -> Result<(), Self::Error> {
+    async fn exec_request(&mut self, channel: ChannelId, data: &[u8], session: &mut Session) -> Result<(), Self::Error> {
         session.channel_success(channel)?;
         self.channel = Some(channel);
         self.send_line(session, channel, HELLO_BANNER)?;
@@ -400,12 +344,7 @@ impl ssh_server::Handler for ServerHandler {
         self.handle_exit(session, channel)
     }
 
-    async fn data(
-        &mut self,
-        channel: ChannelId,
-        data: &[u8],
-        session: &mut Session,
-    ) -> Result<(), Self::Error> {
+    async fn data(&mut self, channel: ChannelId, data: &[u8], session: &mut Session) -> Result<(), Self::Error> {
         if Some(channel) != self.channel {
             return Ok(());
         }
@@ -479,11 +418,7 @@ impl ssh_server::Handler for ServerHandler {
         self.render_terminal(session, channel)
     }
 
-    async fn channel_close(
-        &mut self,
-        channel: ChannelId,
-        session: &mut Session,
-    ) -> Result<(), Self::Error> {
+    async fn channel_close(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
         if Some(channel) == self.channel {
             self.leave_alt_screen(session, channel)?;
             self.stop_tick_task();
@@ -497,8 +432,7 @@ impl ssh_server::Handler for ServerHandler {
 
 /// Display helper used for tracing; keeps logging concise when the socket address is unavailable.
 pub(super) fn display_addr(addr: Option<SocketAddr>) -> String {
-    addr.map(|a| a.to_string())
-        .unwrap_or_else(|| "<unknown>".into())
+    addr.map(|a| a.to_string()).unwrap_or_else(|| "<unknown>".into())
 }
 
 /// Signal used inside `data` to determine whether the SSH channel should remain open.

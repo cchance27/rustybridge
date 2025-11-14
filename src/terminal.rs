@@ -1,11 +1,8 @@
-use std::env;
-use std::os::fd::AsFd;
+use std::{env, os::fd::AsFd};
 
 use clap::ValueEnum;
 use russh::Pty;
-use rustix::termios::{
-    self, ControlModes, InputModes, LocalModes, OutputModes, SpecialCodeIndex as Sc, Termios,
-};
+use rustix::termios::{self, ControlModes, InputModes, LocalModes, OutputModes, SpecialCodeIndex as Sc, Termios};
 use tracing::warn;
 
 #[derive(Clone, Copy, Debug, ValueEnum, Default)]
@@ -54,10 +51,7 @@ pub fn current_pty_modes() -> Vec<(Pty, u32)> {
     match termios::tcgetattr(stdin.as_fd()) {
         Ok(term) => modes_from_termios(&term),
         Err(err) => {
-            warn!(
-                ?err,
-                "failed to read local termios; falling back to defaults"
-            );
+            warn!(?err, "failed to read local termios; falling back to defaults");
             default_pty_modes()
         }
     }
@@ -155,11 +149,7 @@ fn modes_from_termios(term: &Termios) -> Vec<(Pty, u32)> {
     push_flag(&mut modes, local.contains(LocalModes::IEXTEN), Pty::IEXTEN);
     #[cfg(not(target_os = "redox"))]
     {
-        push_flag(
-            &mut modes,
-            local.contains(LocalModes::ECHOCTL),
-            Pty::ECHOCTL,
-        );
+        push_flag(&mut modes, local.contains(LocalModes::ECHOCTL), Pty::ECHOCTL);
     }
 
     let input = term.input_modes;
@@ -172,11 +162,7 @@ fn modes_from_termios(term: &Termios) -> Vec<(Pty, u32)> {
     push_flag(&mut modes, input.contains(InputModes::IGNCR), Pty::IGNCR);
     #[cfg(not(any(target_os = "redox", target_os = "haiku")))]
     {
-        push_flag(
-            &mut modes,
-            input.contains(InputModes::IMAXBEL),
-            Pty::IMAXBEL,
-        );
+        push_flag(&mut modes, input.contains(InputModes::IMAXBEL), Pty::IMAXBEL);
     }
 
     let output = term.output_modes;
@@ -184,23 +170,11 @@ fn modes_from_termios(term: &Termios) -> Vec<(Pty, u32)> {
     push_flag(&mut modes, output.contains(OutputModes::ONLCR), Pty::ONLCR);
     push_flag(&mut modes, output.contains(OutputModes::OCRNL), Pty::OCRNL);
     push_flag(&mut modes, output.contains(OutputModes::ONOCR), Pty::ONOCR);
-    push_flag(
-        &mut modes,
-        output.contains(OutputModes::ONLRET),
-        Pty::ONLRET,
-    );
+    push_flag(&mut modes, output.contains(OutputModes::ONLRET), Pty::ONLRET);
 
     let control = term.control_modes;
-    push_flag(
-        &mut modes,
-        control.contains(ControlModes::PARENB),
-        Pty::PARENB,
-    );
-    push_flag(
-        &mut modes,
-        control.contains(ControlModes::PARODD),
-        Pty::PARODD,
-    );
+    push_flag(&mut modes, control.contains(ControlModes::PARENB), Pty::PARENB);
+    push_flag(&mut modes, control.contains(ControlModes::PARODD), Pty::PARODD);
     if control.contains(ControlModes::CS8) {
         modes.push((Pty::CS8, 1));
     } else if control.contains(ControlModes::CS7) {

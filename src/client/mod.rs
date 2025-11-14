@@ -1,14 +1,12 @@
-use std::borrow::Cow;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{borrow::Cow, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use russh::client;
 use tracing::{info, warn};
 
-use crate::cli::ClientConfig;
-use crate::crypto::legacy_preferred;
-use crate::session::{self, AcceptAllKeys, ShellOptions, run_command, run_shell};
+use crate::{
+    cli::ClientConfig, crypto::legacy_preferred, session::{self, AcceptAllKeys, ShellOptions, run_command, run_shell}
+};
 
 pub async fn run_client(args: ClientConfig) -> Result<()> {
     let ClientConfig {
@@ -75,10 +73,7 @@ pub async fn run_client(args: ClientConfig) -> Result<()> {
     let outcome = if let Some(command) = &command {
         run_command(&mut session, command).await
     } else {
-        let shell_opts = ShellOptions {
-            newline_mode,
-            local_echo,
-        };
+        let shell_opts = ShellOptions { newline_mode, local_echo };
         run_shell(&mut session, shell_opts).await
     };
 

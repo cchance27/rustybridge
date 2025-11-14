@@ -8,20 +8,16 @@ mod remote_backend;
 mod server_manager;
 mod tui;
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
-use russh::keys::ssh_key::rand_core::OsRng;
-use russh::keys::{Algorithm, PrivateKey};
-use russh::server::{self as ssh_server, Server as _};
-use russh::{MethodKind, MethodSet};
+use russh::{
+    MethodKind, MethodSet, keys::{Algorithm, PrivateKey, ssh_key::rand_core::OsRng}, server::{self as ssh_server, Server as _}
+};
+use server_manager::ServerManager;
 use tracing::info;
 
-use crate::cli::ServerConfig;
-use crate::crypto::legacy_preferred;
-
-use server_manager::ServerManager;
+use crate::{cli::ServerConfig, crypto::legacy_preferred};
 
 /// Launch the embedded SSH server using the parsed CLI configuration.
 ///
@@ -39,9 +35,7 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
 
     server_config.methods = MethodSet::empty();
     server_config.methods.push(MethodKind::Password);
-    server_config
-        .keys
-        .push(PrivateKey::random(&mut OsRng, Algorithm::Ed25519)?);
+    server_config.keys.push(PrivateKey::random(&mut OsRng, Algorithm::Ed25519)?);
 
     let mut server = ServerManager;
     info!(

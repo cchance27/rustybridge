@@ -1,6 +1,5 @@
 use anyhow::Result;
-use russh::keys::PublicKey;
-use russh::{ChannelMsg, Disconnect, client, client::Handle};
+use russh::{ChannelMsg, Disconnect, client, client::Handle, keys::PublicKey};
 use tokio::io::AsyncWriteExt;
 
 mod shell;
@@ -12,10 +11,7 @@ pub struct AcceptAllKeys;
 impl client::Handler for AcceptAllKeys {
     type Error = russh::Error;
 
-    async fn check_server_key(
-        &mut self,
-        _server_public_key: &PublicKey,
-    ) -> Result<bool, russh::Error> {
+    async fn check_server_key(&mut self, _server_public_key: &PublicKey) -> Result<bool, russh::Error> {
         Ok(true)
     }
 }

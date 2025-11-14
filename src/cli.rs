@@ -1,5 +1,4 @@
-use std::env;
-use std::time::Duration;
+use std::{env, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{ArgAction, Parser};
@@ -10,10 +9,7 @@ use crate::terminal::{NewlineMode, newline_mode_from_env};
 const DEFAULT_SERVER_PORT: u16 = 2222;
 
 #[derive(Debug, Parser)]
-#[command(
-    name = "lssh",
-    about = "Legacy-friendly SSH client with relaxed crypto preferences"
-)]
+#[command(name = "lssh", about = "Legacy-friendly SSH client with relaxed crypto preferences")]
 struct RawArgs {
     /// Start an embedded SSH server instead of connecting to one
     #[arg(long, action = ArgAction::SetTrue)]
@@ -102,30 +98,20 @@ impl TryFrom<RawArgs> for CliConfig {
             if !args.command.is_empty() {
                 bail!("command arguments are not supported when --server is present");
             }
-            let bind = args
-                .bind
-                .or_else(|| args.target.take())
-                .unwrap_or_else(|| "0.0.0.0".to_string());
+            let bind = args.bind.or_else(|| args.target.take()).unwrap_or_else(|| "0.0.0.0".to_string());
             let port = args.port.unwrap_or(DEFAULT_SERVER_PORT);
             return Ok(CliConfig::Server(ServerConfig { bind, port }));
         }
 
-        let target_raw = args
-            .target
-            .ok_or_else(|| anyhow!("missing HOST argument"))?;
+        let target_raw = args.target.ok_or_else(|| anyhow!("missing HOST argument"))?;
         let target = parse_target(&target_raw)?;
         let port = args.port.unwrap_or(target.port);
-        let newline_mode = args
-            .newline
-            .or_else(newline_mode_from_env)
-            .unwrap_or_default();
+        let newline_mode = args.newline.or_else(newline_mode_from_env).unwrap_or_default();
 
         let local_echo = if args.local_echo {
             true
         } else {
-            env::var("LSSH_LOCAL_ECHO")
-                .map(|v| v != "0")
-                .unwrap_or(false)
+            env::var("LSSH_LOCAL_ECHO").map(|v| v != "0").unwrap_or(false)
         };
 
         let username = args
@@ -213,11 +199,7 @@ fn fallback_username() -> Option<String> {
         }
     }
     let current = whoami::username();
-    if current.is_empty() {
-        None
-    } else {
-        Some(current)
-    }
+    if current.is_empty() { None } else { Some(current) }
 }
 
 fn resolve_password(provided: Option<&str>, username: &str, host: &str) -> Result<String> {
