@@ -1,4 +1,5 @@
 use std::env;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{ArgAction, Parser};
@@ -41,6 +42,21 @@ struct RawArgs {
     /// Force local echo regardless of environment defaults
     #[arg(long, action = ArgAction::SetTrue)]
     local_echo: bool,
+    /// Prefer zlib compression (similar to OpenSSH's -C)
+    #[arg(short = 'C', long, action = ArgAction::SetTrue)]
+    compress: bool,
+    /// Rekey interval in seconds (default 3600)
+    #[arg(long = "rekey-interval", value_name = "SECONDS")]
+    rekey_interval: Option<u64>,
+    /// Rekey after this many bytes in each direction (default 1 GiB)
+    #[arg(long = "rekey-bytes", value_name = "BYTES")]
+    rekey_bytes: Option<u64>,
+    /// Send keepalive probes every N seconds (default 30)
+    #[arg(long = "keepalive-interval", value_name = "SECONDS")]
+    keepalive_interval: Option<u64>,
+    /// Disconnect after this many unanswered keepalives (default 3)
+    #[arg(long = "keepalive-max", value_name = "COUNT")]
+    keepalive_max: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -58,6 +74,11 @@ pub struct ClientConfig {
     pub command: Option<String>,
     pub newline_mode: NewlineMode,
     pub local_echo: bool,
+    pub prefer_compression: bool,
+    pub rekey_interval: Option<Duration>,
+    pub rekey_bytes: Option<usize>,
+    pub keepalive_interval: Option<Duration>,
+    pub keepalive_max: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -121,6 +142,11 @@ impl TryFrom<RawArgs> for CliConfig {
             Some(args.command.join(" "))
         };
 
+        let rekey_interval = args.rekey_interval.map(Duration::from_secs);
+        let rekey_bytes = args.rekey_bytes.map(validate_rekey_bytes).transpose()?;
+        let keepalive_interval = args.keepalive_interval.map(Duration::from_secs);
+        let keepalive_max = args.keepalive_max;
+
         Ok(CliConfig::Client(ClientConfig {
             host: target.host,
             port,
@@ -129,6 +155,11 @@ impl TryFrom<RawArgs> for CliConfig {
             command,
             newline_mode,
             local_echo,
+            prefer_compression: args.compress,
+            rekey_interval,
+            rekey_bytes,
+            keepalive_interval,
+            keepalive_max,
         }))
     }
 }
@@ -200,4 +231,15 @@ fn resolve_password(provided: Option<&str>, username: &str, host: &str) -> Resul
 
     let prompt = format!("{username}@{host} password: ");
     prompt_password(prompt).context("failed to read password interactively")
+}
+
+fn validate_rekey_bytes(value: u64) -> Result<usize> {
+    const MAX: u64 = 1 << 30; // 1 GiB per RFC 4253 recommendations
+    if value == 0 {
+        bail!("--rekey-bytes must be greater than zero");
+    }
+    if value > MAX {
+        bail!("--rekey-bytes must be <= {} bytes", MAX);
+    }
+    Ok(value as usize)
 }

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,17 +19,42 @@ pub async fn run_client(args: ClientConfig) -> Result<()> {
         command,
         newline_mode,
         local_echo,
+        prefer_compression,
+        rekey_interval,
+        rekey_bytes,
+        keepalive_interval,
+        keepalive_max,
     } = args;
-    let preferred = legacy_preferred();
+    let mut preferred = legacy_preferred();
+    preferred.compression = if prefer_compression {
+        Cow::Owned(vec![
+            russh::compression::ZLIB,
+            russh::compression::ZLIB_LEGACY,
+            russh::compression::NONE,
+        ])
+    } else {
+        Cow::Owned(vec![
+            russh::compression::NONE,
+            russh::compression::ZLIB,
+            russh::compression::ZLIB_LEGACY,
+        ])
+    };
 
-    let config = russh::client::Config {
+    let mut config = russh::client::Config {
         preferred,
         nodelay: true,
         inactivity_timeout: None,
-        keepalive_interval: Some(Duration::from_secs(30)),
-        keepalive_max: 3,
+        keepalive_interval: keepalive_interval.or(Some(Duration::from_secs(30))),
+        keepalive_max: keepalive_max.unwrap_or(3),
         ..Default::default()
     };
+    if let Some(interval) = rekey_interval {
+        config.limits.rekey_time_limit = interval;
+    }
+    if let Some(limit) = rekey_bytes {
+        config.limits.rekey_read_limit = limit;
+        config.limits.rekey_write_limit = limit;
+    }
     let config = Arc::new(config);
 
     let handler = AcceptAllKeys;

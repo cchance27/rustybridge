@@ -150,16 +150,11 @@ fn spawn_resize_thread(tx: UnboundedSender<InputEvent>) {
         let mut last_size = term_size().unwrap_or((80, 24));
         loop {
             thread::sleep(Duration::from_millis(200));
-            match term_size() {
-                Ok(size) => {
-                    if size != last_size {
-                        last_size = size;
-                        if tx.send(InputEvent::Resize(size.0, size.1)).is_err() {
-                            break;
-                        }
-                    }
+            if let Ok(size) = term_size() && size != last_size {
+                last_size = size;
+                if tx.send(InputEvent::Resize(size.0, size.1)).is_err() {
+                    break;
                 }
-                Err(_) => {}
             }
         }
     });

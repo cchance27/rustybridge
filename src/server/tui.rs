@@ -54,9 +54,7 @@ impl EchoTui {
             pushed = true;
             self.push_line(line);
         }
-        if !pushed {
-            self.push_line("");
-        } else if text.ends_with('\n') {
+        if !pushed || text.ends_with('\n') {
             self.push_line("");
         }
     }

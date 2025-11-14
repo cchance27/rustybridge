@@ -51,10 +51,13 @@ pub fn map_input(data: &[u8], mode: NewlineMode) -> Vec<u8> {
 /// Read the host terminal settings if possible and convert them into SSH PTY modes.
 pub fn current_pty_modes() -> Vec<(Pty, u32)> {
     let stdin = std::io::stdin();
-    match termios::tcgetattr(&stdin.as_fd()) {
+    match termios::tcgetattr(stdin.as_fd()) {
         Ok(term) => modes_from_termios(&term),
         Err(err) => {
-            warn!(?err, "failed to read local termios; falling back to defaults");
+            warn!(
+                ?err,
+                "failed to read local termios; falling back to defaults"
+            );
             default_pty_modes()
         }
     }
@@ -76,45 +79,45 @@ pub fn default_pty_modes() -> Vec<(Pty, u32)> {
     const BACKSPACE: u32 = 0x7f;
     const DEFAULT_SPEED: u32 = 38400;
 
-    let mut modes = Vec::new();
+    let modes = vec![
+        (Pty::VINTR, CTRL_C),
+        (Pty::VQUIT, CTRL_BACKSLASH),
+        (Pty::VERASE, BACKSPACE),
+        (Pty::VKILL, CTRL_U),
+        (Pty::VEOF, CTRL_D),
+        (Pty::VSTART, CTRL_Q),
+        (Pty::VSTOP, CTRL_S),
+        (Pty::VSUSP, CTRL_Z),
+        (Pty::VREPRINT, CTRL_R),
+        (Pty::VWERASE, CTRL_W),
+        (Pty::VLNEXT, CTRL_V),
+        (Pty::VDISCARD, CTRL_O),
+        (Pty::ISIG, 1),
+        (Pty::ICANON, 1),
+        (Pty::ECHO, 1),
+        (Pty::ECHOE, 1),
+        (Pty::ECHOK, 1),
+        (Pty::ECHOCTL, 1),
+        (Pty::IEXTEN, 1),
+        (Pty::IXON, 1),
+        (Pty::IXOFF, 0),
+        (Pty::INPCK, 0),
+        (Pty::ISTRIP, 0),
+        (Pty::ICRNL, 1),
+        (Pty::IGNCR, 0),
+        (Pty::IMAXBEL, 1),
+        (Pty::OPOST, 1),
+        (Pty::ONLCR, 1),
+        (Pty::OCRNL, 0),
+        (Pty::ONOCR, 0),
+        (Pty::ONLRET, 0),
+        (Pty::CS8, 1),
+        (Pty::PARENB, 0),
+        (Pty::PARODD, 0),
+        (Pty::TTY_OP_OSPEED, DEFAULT_SPEED),
+        (Pty::TTY_OP_ISPEED, DEFAULT_SPEED),
+    ];
 
-    modes.push((Pty::VINTR, CTRL_C));
-    modes.push((Pty::VQUIT, CTRL_BACKSLASH));
-    modes.push((Pty::VERASE, BACKSPACE));
-    modes.push((Pty::VKILL, CTRL_U));
-    modes.push((Pty::VEOF, CTRL_D));
-    modes.push((Pty::VSTART, CTRL_Q));
-    modes.push((Pty::VSTOP, CTRL_S));
-    modes.push((Pty::VSUSP, CTRL_Z));
-    modes.push((Pty::VREPRINT, CTRL_R));
-    modes.push((Pty::VWERASE, CTRL_W));
-    modes.push((Pty::VLNEXT, CTRL_V));
-    modes.push((Pty::VDISCARD, CTRL_O));
-
-    modes.push((Pty::ISIG, 1));
-    modes.push((Pty::ICANON, 1));
-    modes.push((Pty::ECHO, 1));
-    modes.push((Pty::ECHOE, 1));
-    modes.push((Pty::ECHOK, 1));
-    modes.push((Pty::ECHOCTL, 1));
-    modes.push((Pty::IEXTEN, 1));
-    modes.push((Pty::IXON, 1));
-    modes.push((Pty::IXOFF, 0));
-    modes.push((Pty::INPCK, 0));
-    modes.push((Pty::ISTRIP, 0));
-    modes.push((Pty::ICRNL, 1));
-    modes.push((Pty::IGNCR, 0));
-    modes.push((Pty::IMAXBEL, 1));
-    modes.push((Pty::OPOST, 1));
-    modes.push((Pty::ONLCR, 1));
-    modes.push((Pty::OCRNL, 0));
-    modes.push((Pty::ONOCR, 0));
-    modes.push((Pty::ONLRET, 0));
-    modes.push((Pty::CS8, 1));
-    modes.push((Pty::PARENB, 0));
-    modes.push((Pty::PARODD, 0));
-    modes.push((Pty::TTY_OP_OSPEED, DEFAULT_SPEED));
-    modes.push((Pty::TTY_OP_ISPEED, DEFAULT_SPEED));
     modes
 }
 
