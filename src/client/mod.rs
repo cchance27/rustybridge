@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use russh::client;
@@ -24,6 +25,8 @@ pub async fn run_client(args: ClientConfig) -> Result<()> {
         preferred,
         nodelay: true,
         inactivity_timeout: None,
+        keepalive_interval: Some(Duration::from_secs(30)),
+        keepalive_max: 3,
         ..Default::default()
     };
     let config = Arc::new(config);

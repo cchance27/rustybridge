@@ -1670,6 +1670,7 @@ dependencies = [
  "ratatui",
  "rpassword",
  "russh",
+ "signal-hook",
  "sqlx",
  "tokio",
  "tracing",
