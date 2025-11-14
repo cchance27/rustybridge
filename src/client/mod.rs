@@ -1,3 +1,5 @@
+mod hostkeys;
+
 use std::{borrow::Cow, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, bail};
@@ -5,8 +7,11 @@ use russh::client;
 use tracing::{info, warn};
 
 use crate::{
-    cli::ClientConfig, crypto::legacy_preferred, session::{self, AcceptAllKeys, ShellOptions, run_command, run_shell}
+    cli::ClientConfig,
+    crypto::legacy_preferred,
+    session::{self, ShellOptions, run_command, run_shell},
 };
+use hostkeys::{HostKeyHandler, HostKeyPolicy, HostKeyVerifier};
 
 pub async fn run_client(args: ClientConfig) -> Result<()> {
     let ClientConfig {
@@ -22,6 +27,9 @@ pub async fn run_client(args: ClientConfig) -> Result<()> {
         rekey_bytes,
         keepalive_interval,
         keepalive_max,
+        accept_hostkey_once,
+        accept_store_hostkey,
+        replace_hostkey,
     } = args;
     let mut preferred = legacy_preferred();
     preferred.compression = if prefer_compression {
@@ -53,14 +61,23 @@ pub async fn run_client(args: ClientConfig) -> Result<()> {
         config.limits.rekey_read_limit = limit;
         config.limits.rekey_write_limit = limit;
     }
+    let hostkey_policy = if accept_store_hostkey {
+        HostKeyPolicy::AcceptAndStore
+    } else if accept_hostkey_once {
+        HostKeyPolicy::AcceptOnce
+    } else {
+        HostKeyPolicy::Prompt
+    };
+    let authority = format!("{host}:{port}");
+    let verifier = HostKeyVerifier::new(authority, hostkey_policy).await?;
+    if replace_hostkey {
+        verifier.clear().await?;
+    }
+    let handler = HostKeyHandler::new(verifier);
     let config = Arc::new(config);
-
-    let handler = AcceptAllKeys;
     let target = format!("{host}:{port}");
     info!("connecting to {target}");
-    let mut session = client::connect(config, (host.as_str(), port), handler)
-        .await
-        .context("failed to establish TCP connection")?;
+    let mut session = client::connect(config, (host.as_str(), port), handler).await?;
 
     let auth = session
         .authenticate_password(username.clone(), password.clone())

@@ -3,7 +3,11 @@
 use std::{collections::VecDeque, fmt::Write as FmtWrite, time::Duration};
 
 use ratatui::{
-    Frame, layout::{Alignment, Position, Rect}, style::{Color, Style}, text::{Line, Span, Text}, widgets::{Block, Borders, Clear, Paragraph, Wrap}
+    Frame,
+    layout::{Alignment, Position, Rect},
+    style::{Color, Style},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
 pub(super) const HELLO_BANNER: &str = r"

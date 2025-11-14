@@ -1,24 +1,20 @@
 use anyhow::Result;
-use russh::{ChannelMsg, Disconnect, client, client::Handle, keys::PublicKey};
+use russh::{
+    ChannelMsg, Disconnect,
+    client::{self, Handle},
+};
 use tokio::io::AsyncWriteExt;
 
 mod shell;
 
 pub use shell::{ShellOptions, run_shell};
 
-pub struct AcceptAllKeys;
+pub type SessionHandle<H> = Handle<H>;
 
-impl client::Handler for AcceptAllKeys {
-    type Error = russh::Error;
-
-    async fn check_server_key(&mut self, _server_public_key: &PublicKey) -> Result<bool, russh::Error> {
-        Ok(true)
-    }
-}
-
-pub type SessionHandle = Handle<AcceptAllKeys>;
-
-pub async fn run_command(session: &mut SessionHandle, command: &str) -> Result<()> {
+pub async fn run_command<H>(session: &mut SessionHandle<H>, command: &str) -> Result<()>
+where
+    H: client::Handler + Send,
+{
     let mut channel = session.channel_open_session().await?;
     channel.exec(true, command.as_bytes()).await?;
 
@@ -51,6 +47,9 @@ pub async fn run_command(session: &mut SessionHandle, command: &str) -> Result<(
     Ok(())
 }
 
-pub async fn disconnect(session: &mut SessionHandle) {
+pub async fn disconnect<H>(session: &mut SessionHandle<H>)
+where
+    H: client::Handler + Send,
+{
     let _ = session.disconnect(Disconnect::ByApplication, "", "").await;
 }

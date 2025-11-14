@@ -1,7 +1,8 @@
 use std::borrow::Cow;
 
 use russh::{
-    Preferred, keys::{Algorithm, HashAlg}
+    Preferred,
+    keys::{Algorithm, HashAlg},
 };
 
 pub fn legacy_preferred() -> Preferred {

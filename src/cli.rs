@@ -17,6 +17,9 @@ struct RawArgs {
     /// Address to bind the embedded server to (defaults to 0.0.0.0)
     #[arg(long, value_name = "ADDR", requires = "server")]
     bind: Option<String>,
+    /// Force regeneration of the stored server host key on startup
+    #[arg(long, action = ArgAction::SetTrue, requires = "server")]
+    roll_hostkey: bool,
     /// Target host; supports optional [user@]host[:port] syntax
     #[arg(value_name = "HOST", required_unless_present = "server")]
     target: Option<String>,
@@ -53,6 +56,15 @@ struct RawArgs {
     /// Disconnect after this many unanswered keepalives (default 3)
     #[arg(long = "keepalive-max", value_name = "COUNT")]
     keepalive_max: Option<usize>,
+    /// Accept an unknown host key for this session only
+    #[arg(long = "accept-hostkey", action = ArgAction::SetTrue)]
+    accept_hostkey_once: bool,
+    /// Accept and store an unknown host key for future sessions
+    #[arg(long = "accept-store-hostkey", action = ArgAction::SetTrue)]
+    accept_store_hostkey: bool,
+    /// Replace any cached host key for the target before connecting
+    #[arg(long = "replace-hostkey", action = ArgAction::SetTrue)]
+    replace_hostkey: bool,
 }
 
 #[derive(Clone)]
@@ -75,12 +87,16 @@ pub struct ClientConfig {
     pub rekey_bytes: Option<usize>,
     pub keepalive_interval: Option<Duration>,
     pub keepalive_max: Option<usize>,
+    pub accept_hostkey_once: bool,
+    pub accept_store_hostkey: bool,
+    pub replace_hostkey: bool,
 }
 
 #[derive(Clone)]
 pub struct ServerConfig {
     pub bind: String,
     pub port: u16,
+    pub roll_hostkey: bool,
 }
 
 impl CliConfig {
@@ -100,7 +116,11 @@ impl TryFrom<RawArgs> for CliConfig {
             }
             let bind = args.bind.or_else(|| args.target.take()).unwrap_or_else(|| "0.0.0.0".to_string());
             let port = args.port.unwrap_or(DEFAULT_SERVER_PORT);
-            return Ok(CliConfig::Server(ServerConfig { bind, port }));
+            return Ok(CliConfig::Server(ServerConfig {
+                bind,
+                port,
+                roll_hostkey: args.roll_hostkey,
+            }));
         }
 
         let target_raw = args.target.ok_or_else(|| anyhow!("missing HOST argument"))?;
@@ -146,6 +166,9 @@ impl TryFrom<RawArgs> for CliConfig {
             rekey_bytes,
             keepalive_interval,
             keepalive_max,
+            accept_hostkey_once: args.accept_hostkey_once,
+            accept_store_hostkey: args.accept_store_hostkey,
+            replace_hostkey: args.replace_hostkey,
         }))
     }
 }

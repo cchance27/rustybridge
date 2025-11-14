@@ -1670,7 +1670,7 @@ dependencies = [
  "ratatui",
  "rpassword",
  "russh",
- "rustix 0.38.44",
+ "rustix 1.1.2",
  "signal-hook",
  "sqlx",
  "tokio",
