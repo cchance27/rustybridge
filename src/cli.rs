@@ -12,58 +12,58 @@ const DEFAULT_SERVER_PORT: u16 = 2222;
 #[command(name = "lssh", about = "Legacy-friendly SSH client with relaxed crypto preferences")]
 struct RawArgs {
     /// Start an embedded SSH server instead of connecting to one
-    #[arg(long, action = ArgAction::SetTrue)]
+    #[arg(long, action = ArgAction::SetTrue, help_heading = "Server Options")]
     server: bool,
     /// Address to bind the embedded server to (defaults to 0.0.0.0)
-    #[arg(long, value_name = "ADDR", requires = "server")]
+    #[arg(long, value_name = "ADDR", requires = "server", help_heading = "Server Options")]
     bind: Option<String>,
     /// Force regeneration of the stored server host key on startup
-    #[arg(long, action = ArgAction::SetTrue, requires = "server")]
+    #[arg(long, action = ArgAction::SetTrue, requires = "server", help_heading = "Server Options")]
     roll_hostkey: bool,
     /// Target host; supports optional [user@]host[:port] syntax
     #[arg(value_name = "HOST", required_unless_present = "server")]
     target: Option<String>,
     /// Optional remote command (everything after HOST)
-    #[arg(value_name = "COMMAND", trailing_var_arg = true, requires = "target")]
+    #[arg(value_name = "COMMAND", trailing_var_arg = true, requires = "target", help_heading = "Client Options")]
     command: Vec<String>,
     /// Override remote username (defaults to user@host or current user)
-    #[arg(short = 'l', long = "username", value_name = "USER")]
+    #[arg(short = 'l', long = "username", value_name = "USER", help_heading = "Client Options")]
     username: Option<String>,
     /// Provide password non-interactively; otherwise we prompt like OpenSSH
-    #[arg(short = 'p', long = "password", value_name = "PASSWORD")]
+    #[arg(short = 'p', long = "password", value_name = "PASSWORD", help_heading = "Client Options")]
     password: Option<String>,
     /// Override the parsed port (defaults to 22 or the :port suffix)
-    #[arg(short, long, value_name = "PORT")]
+    #[arg(short = 'P', long, value_name = "PORT")]
     port: Option<u16>,
     /// Override the newline translation mode (defaults to env or LF)
-    #[arg(long, value_enum, value_name = "MODE")]
+    #[arg(long, value_enum, value_name = "MODE", help_heading = "Client Options")]
     newline: Option<NewlineMode>,
     /// Force local echo regardless of environment defaults
-    #[arg(long, action = ArgAction::SetTrue)]
+    #[arg(long, action = ArgAction::SetTrue, help_heading = "Client Options")]
     local_echo: bool,
     /// Prefer zlib compression (similar to OpenSSH's -C)
-    #[arg(short = 'C', long, action = ArgAction::SetTrue)]
+    #[arg(short = 'C', long, action = ArgAction::SetTrue, help_heading = "Client Options")]
     compress: bool,
     /// Rekey interval in seconds (default 3600)
-    #[arg(long = "rekey-interval", value_name = "SECONDS")]
+    #[arg(long = "rekey-interval", value_name = "SECONDS", help_heading = "Client Options")]
     rekey_interval: Option<u64>,
     /// Rekey after this many bytes in each direction (default 1 GiB)
-    #[arg(long = "rekey-bytes", value_name = "BYTES")]
+    #[arg(long = "rekey-bytes", value_name = "BYTES", help_heading = "Client Options")]
     rekey_bytes: Option<u64>,
     /// Send keepalive probes every N seconds (default 30)
-    #[arg(long = "keepalive-interval", value_name = "SECONDS")]
+    #[arg(long = "keepalive-interval", value_name = "SECONDS", help_heading = "Client Options")]
     keepalive_interval: Option<u64>,
     /// Disconnect after this many unanswered keepalives (default 3)
-    #[arg(long = "keepalive-max", value_name = "COUNT")]
+    #[arg(long = "keepalive-max", value_name = "COUNT", help_heading = "Client Options")]
     keepalive_max: Option<usize>,
     /// Accept an unknown host key for this session only
-    #[arg(long = "accept-hostkey", action = ArgAction::SetTrue)]
+    #[arg(long = "accept-hostkey", action = ArgAction::SetTrue, help_heading = "Client Options")]
     accept_hostkey_once: bool,
     /// Accept and store an unknown host key for future sessions
-    #[arg(long = "accept-store-hostkey", action = ArgAction::SetTrue)]
+    #[arg(long = "accept-store-hostkey", action = ArgAction::SetTrue, help_heading = "Client Options")]
     accept_store_hostkey: bool,
     /// Replace any cached host key for the target before connecting
-    #[arg(long = "replace-hostkey", action = ArgAction::SetTrue)]
+    #[arg(long = "replace-hostkey", action = ArgAction::SetTrue, help_heading = "Client Options")]
     replace_hostkey: bool,
 }
 

@@ -22,7 +22,6 @@ use tracing::info;
 
 use crate::{cli::ServerConfig, crypto::legacy_preferred};
 
-
 /// Launch the embedded SSH server using the parsed CLI configuration.
 ///
 /// This configures russh with our crypto preferences, enables only password auth,
