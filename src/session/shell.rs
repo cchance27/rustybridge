@@ -10,7 +10,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 use crate::session::SessionHandle;
-use crate::terminal::{NewlineMode, default_pty_modes, map_input};
+use crate::terminal::{NewlineMode, current_pty_modes, map_input};
 use russh::Sig;
 
 #[derive(Clone, Copy)]
@@ -22,7 +22,7 @@ pub struct ShellOptions {
 pub async fn run_shell(session: &mut SessionHandle, options: ShellOptions) -> Result<()> {
     let mut channel = session.channel_open_session().await?;
     let (cols, rows) = term_size().unwrap_or((80, 24));
-    let pty_modes = default_pty_modes();
+    let pty_modes = current_pty_modes();
     channel
         .request_pty(
             true,

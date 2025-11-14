@@ -12,6 +12,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 crossterm = "0.29.0"
 signal-hook = "0.3"
+rustix = { version = "0.38", default-features = false, features = ["termios"] }
 russh = { version = "0.54.6", default-features = false, features = ["aws-lc-rs", "rsa", "dsa", "des", "flate2"] }
 clap = { version = "4.5", features = ["derive"] }
 rpassword = "7"
