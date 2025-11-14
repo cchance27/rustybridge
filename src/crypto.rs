@@ -5,6 +5,10 @@ use russh::{
     keys::{Algorithm, HashAlg},
 };
 
+pub fn default_preferred() -> Preferred {
+    Preferred::DEFAULT.clone()
+}
+
 pub fn legacy_preferred() -> Preferred {
     Preferred {
         kex: Cow::Owned(vec![russh::kex::DH_G1_SHA1, russh::kex::DH_G14_SHA1, russh::kex::CURVE25519]),

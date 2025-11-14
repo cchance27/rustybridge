@@ -65,6 +65,9 @@ struct RawArgs {
     /// Replace any cached host key for the target before connecting
     #[arg(long = "replace-hostkey", action = ArgAction::SetTrue, help_heading = "Client Options")]
     replace_hostkey: bool,
+    /// Allow legacy/insecure crypto suites (equivalent to old behavior)
+    #[arg(short = 'i', long = "insecure", action = ArgAction::SetTrue, help_heading = "Client Options")]
+    insecure: bool,
 }
 
 #[derive(Clone)]
@@ -90,6 +93,7 @@ pub struct ClientConfig {
     pub accept_hostkey_once: bool,
     pub accept_store_hostkey: bool,
     pub replace_hostkey: bool,
+    pub insecure: bool,
 }
 
 #[derive(Clone)]
@@ -169,6 +173,7 @@ impl TryFrom<RawArgs> for CliConfig {
             accept_hostkey_once: args.accept_hostkey_once,
             accept_store_hostkey: args.accept_store_hostkey,
             replace_hostkey: args.replace_hostkey,
+            insecure: args.insecure,
         }))
     }
 }

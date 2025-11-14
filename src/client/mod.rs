@@ -8,7 +8,7 @@ use tracing::{info, warn};
 
 use crate::{
     cli::ClientConfig,
-    crypto::legacy_preferred,
+    crypto::{default_preferred, legacy_preferred},
     session::{self, ShellOptions, run_command, run_shell},
 };
 use hostkeys::{HostKeyHandler, HostKeyPolicy, HostKeyVerifier};
@@ -30,8 +30,14 @@ pub async fn run_client(args: ClientConfig) -> Result<()> {
         accept_hostkey_once,
         accept_store_hostkey,
         replace_hostkey,
+        insecure,
     } = args;
-    let mut preferred = legacy_preferred();
+    let mut preferred = if insecure {
+        warn!("insecure mode enabled: using legacy cipher suite");
+        legacy_preferred()
+    } else {
+        default_preferred()
+    };
     preferred.compression = if prefer_compression {
         Cow::Owned(vec![
             russh::compression::ZLIB,
