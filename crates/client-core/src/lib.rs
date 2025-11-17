@@ -3,15 +3,32 @@ mod hostkeys;
 use std::{borrow::Cow, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, bail};
+use hostkeys::{HostKeyHandler, HostKeyPolicy, HostKeyVerifier};
 use russh::client;
+use ssh_core::{
+    crypto::{default_preferred, legacy_preferred}, session::{self, ShellOptions, run_command, run_shell}, terminal::NewlineMode
+};
 use tracing::{info, warn};
 
-use crate::{
-    cli::ClientConfig,
-    crypto::{default_preferred, legacy_preferred},
-    session::{self, ShellOptions, run_command, run_shell},
-};
-use hostkeys::{HostKeyHandler, HostKeyPolicy, HostKeyVerifier};
+#[derive(Clone)]
+pub struct ClientConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub command: Option<String>,
+    pub newline_mode: NewlineMode,
+    pub local_echo: bool,
+    pub prefer_compression: bool,
+    pub rekey_interval: Option<Duration>,
+    pub rekey_bytes: Option<usize>,
+    pub keepalive_interval: Option<Duration>,
+    pub keepalive_max: Option<usize>,
+    pub accept_hostkey_once: bool,
+    pub accept_store_hostkey: bool,
+    pub replace_hostkey: bool,
+    pub insecure: bool,
+}
 
 pub async fn run_client(args: ClientConfig) -> Result<()> {
     let ClientConfig {

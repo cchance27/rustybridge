@@ -1,0 +1,13 @@
+[package]
+name = "client-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+russh.workspace = true
+sqlx.workspace = true
+ssh-core = { path = "../ssh-core" }
+state-store = { path = "../state-store" }
+tokio.workspace = true
+tracing.workspace = true

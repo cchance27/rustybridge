@@ -8,21 +8,26 @@ mod remote_backend;
 mod server_manager;
 mod tui;
 
-use std::{env, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use russh::{
-    MethodKind, MethodSet,
-    keys::{Algorithm, PrivateKey, ssh_key::LineEnding, ssh_key::rand_core::OsRng},
-    server::{self as ssh_server, Server as _},
+    MethodKind, MethodSet, keys::{
+        Algorithm, PrivateKey, ssh_key::{LineEnding, rand_core::OsRng}
+    }, server::{self as ssh_server, Server as _}
 };
 use server_manager::ServerManager;
-use sqlx::{SqlitePool, migrate::Migrator, sqlite::SqlitePoolOptions};
+use sqlx::SqlitePool;
+use ssh_core::crypto::legacy_preferred;
+use state_store::{migrate_server, server_db};
 use tracing::info;
 
-use crate::{cli::ServerConfig, crypto::legacy_preferred};
-
-static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
+#[derive(Clone)]
+pub struct ServerConfig {
+    pub bind: String,
+    pub port: u16,
+    pub roll_hostkey: bool,
+}
 
 /// Launch the embedded SSH server using the parsed CLI configuration.
 ///
@@ -30,9 +35,9 @@ static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 /// and defers to [`ServerManager`] (and ultimately [`handler::ServerHandler`]) for per-connection
 /// state machines.
 pub async fn run_server(config: ServerConfig) -> Result<()> {
-    let db_url = state_db_url();
-    let pool = init_state_store(&db_url).await?;
-    MIGRATOR.run(&pool).await?;
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
 
     if config.roll_hostkey {
         sqlx::query!("DELETE FROM server_options WHERE key = 'server_hostkey'")
@@ -67,29 +72,11 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
     Ok(())
 }
 
-fn state_db_url() -> String {
-    match env::var("DATABASE_URL") {
-        Ok(value) if value.starts_with("sqlite:") => value,
-        Ok(value) => format!("sqlite://{value}"),
-        Err(_) => "sqlite://rustybridge.db".to_string(),
-    }
-}
-
-async fn init_state_store(db_url: &str) -> Result<SqlitePool> {
-    let pool = SqlitePoolOptions::new()
-        .max_connections(20)
-        .connect(db_url)
-        .await
-        .with_context(|| format!("failed to open state database at {db_url}"))?;
-
-    Ok(pool)
-}
-
 pub async fn add_relay_host(endpoint: &str, name: &str) -> Result<()> {
     let (ip, port) = parse_endpoint(endpoint)?;
-    let db_url = state_db_url();
-    let pool = init_state_store(&db_url).await?;
-    MIGRATOR.run(&pool).await?;
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
     sqlx::query!(
         "INSERT INTO relay_hosts (name, ip, port) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET ip = excluded.ip, port = excluded.port",
         name,

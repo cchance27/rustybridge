@@ -2,40 +2,23 @@ use std::{env, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{ArgAction, Parser};
+use client_core::ClientConfig;
 use rpassword::prompt_password;
-
-use crate::terminal::{NewlineMode, newline_mode_from_env};
-
-const DEFAULT_SERVER_PORT: u16 = 2222;
+use ssh_core::terminal::{NewlineMode, newline_mode_from_env};
 
 #[derive(Debug, Parser)]
-#[command(name = "rb", about = "Legacy-friendly SSH bridge/cleint with relaxed crypto options")]
-struct RawArgs {
-    /// Start an embedded SSH server instead of connecting to one
-    #[arg(short = 's', long, action = ArgAction::SetTrue, help_heading = "Server Options")]
-    server: bool,
-    /// Address to bind the embedded server to (defaults to 0.0.0.0)
-    #[arg(long, value_name = "ADDR", requires = "server", help_heading = "Server Options")]
-    bind: Option<String>,
-    /// Force regeneration of the stored server host key on startup
-    #[arg(long, action = ArgAction::SetTrue, requires = "server", help_heading = "Server Options")]
-    roll_hostkey: bool,
-    /// Add or update a relay host entry (ip:port)
-    #[arg(long = "add-host", value_name = "IP:PORT", requires = "server", help_heading = "Server Options")]
-    add_host: Option<String>,
-    /// Friendly name to associate with --add-host
-    #[arg(long = "hostname", value_name = "NAME", requires = "add_host", help_heading = "Server Options")]
-    add_hostname: Option<String>,
+#[command(name = "rb", about = "Legacy-friendly SSH client with relaxed crypto options")]
+pub struct ClientArgs {
     /// Target host; supports optional [user@]host[:port] syntax
-    #[arg(value_name = "HOST", required_unless_present = "server")]
-    target: Option<String>,
+    #[arg(value_name = "HOST")]
+    target: String,
     /// Optional remote command (everything after HOST)
-    #[arg(value_name = "COMMAND", trailing_var_arg = true, requires = "target", help_heading = "Client Options")]
+    #[arg(value_name = "COMMAND", trailing_var_arg = true, help_heading = "Client Options")]
     command: Vec<String>,
     /// Override remote username (defaults to user@host or current user)
     #[arg(short = 'l', long = "username", value_name = "USER", help_heading = "Client Options")]
     username: Option<String>,
-    /// Provide password non-interactively; otherwise we prompt like OpenSSH
+    /// Provide password non-interactively; otherwise prompt like OpenSSH
     #[arg(short = 'p', long = "password", value_name = "PASSWORD", help_heading = "Client Options")]
     password: Option<String>,
     /// Override the parsed port (defaults to 22 or the :port suffix)
@@ -76,106 +59,60 @@ struct RawArgs {
     insecure: bool,
 }
 
-#[derive(Clone)]
-pub enum CliConfig {
-    Client(ClientConfig),
-    Server(ServerCommand),
-}
-
-#[derive(Clone)]
-pub struct ClientConfig {
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub password: String,
-    pub command: Option<String>,
-    pub newline_mode: NewlineMode,
-    pub local_echo: bool,
-    pub prefer_compression: bool,
-    pub rekey_interval: Option<Duration>,
-    pub rekey_bytes: Option<usize>,
-    pub keepalive_interval: Option<Duration>,
-    pub keepalive_max: Option<usize>,
-    pub accept_hostkey_once: bool,
-    pub accept_store_hostkey: bool,
-    pub replace_hostkey: bool,
-    pub insecure: bool,
-}
-
-#[derive(Clone)]
-pub struct ServerConfig {
-    pub bind: String,
-    pub port: u16,
-    pub roll_hostkey: bool,
-}
-
-#[derive(Clone)]
-pub enum ServerCommand {
-    Run(ServerConfig),
-    AddRelayHost { endpoint: String, name: String },
-}
-
-impl CliConfig {
-    pub fn parse() -> Result<Self> {
-        let args = RawArgs::parse();
-        Self::try_from(args)
+impl ClientArgs {
+    pub fn parse_config() -> Result<ClientConfig> {
+        let args = ClientArgs::parse();
+        ClientConfig::try_from(args)
     }
 }
 
-impl TryFrom<RawArgs> for CliConfig {
+impl TryFrom<ClientArgs> for ClientConfig {
     type Error = anyhow::Error;
 
-    fn try_from(mut args: RawArgs) -> Result<Self> {
-        if args.server {
-            if let Some(endpoint) = args.add_host {
-                let name = args
-                    .add_hostname
-                    .ok_or_else(|| anyhow!("--hostname is required when using --add-host"))?;
-                return Ok(CliConfig::Server(ServerCommand::AddRelayHost { endpoint, name }));
-            }
-            if !args.command.is_empty() {
-                bail!("command arguments are not supported when --server is present");
-            }
-            let bind = args.bind.or_else(|| args.target.take()).unwrap_or_else(|| "0.0.0.0".to_string());
-            let port = args.port.unwrap_or(DEFAULT_SERVER_PORT);
-            return Ok(CliConfig::Server(ServerCommand::Run(ServerConfig {
-                bind,
-                port,
-                roll_hostkey: args.roll_hostkey,
-            })));
-        }
+    fn try_from(args: ClientArgs) -> Result<Self> {
+        let ClientArgs {
+            target,
+            command,
+            username,
+            password,
+            port,
+            newline,
+            local_echo,
+            compress,
+            rekey_interval,
+            rekey_bytes,
+            keepalive_interval,
+            keepalive_max,
+            accept_hostkey_once,
+            accept_store_hostkey,
+            replace_hostkey,
+            insecure,
+        } = args;
 
-        let target_raw = args.target.ok_or_else(|| anyhow!("missing HOST argument"))?;
-        let target = parse_target(&target_raw)?;
-        let port = args.port.unwrap_or(target.port);
-        let newline_mode = args.newline.or_else(newline_mode_from_env).unwrap_or_default();
+        let target = parse_target(&target)?;
+        let port = port.unwrap_or(target.port);
+        let newline_mode = newline.or_else(newline_mode_from_env).unwrap_or_default();
 
-        let local_echo = if args.local_echo {
+        let local_echo = if local_echo {
             true
         } else {
             env::var("RB_LOCAL_ECHO").map(|v| v != "0").unwrap_or(false)
         };
 
-        let username = args
-            .username
+        let username = username
             .or(target.inferred_username)
             .or_else(fallback_username)
             .ok_or_else(|| anyhow!("unable to determine username; use --username or user@host"))?;
 
-        let password = resolve_password(args.password.as_deref(), &username, &target.host)?;
+        let password = resolve_password(password.as_deref(), &username, &target.host)?;
 
-        let command = if args.command.is_empty() {
-            None
-        } else {
-            Some(args.command.join(" "))
-        };
+        let command = if command.is_empty() { None } else { Some(command.join(" ")) };
 
-        let rekey_interval = args.rekey_interval.map(Duration::from_secs);
-        let rekey_bytes = args.rekey_bytes.map(validate_rekey_bytes).transpose()?;
-        let keepalive_interval = args.keepalive_interval.map(Duration::from_secs);
-        let keepalive_max = args.keepalive_max;
+        let rekey_interval = rekey_interval.map(Duration::from_secs);
+        let rekey_bytes = rekey_bytes.map(validate_rekey_bytes).transpose()?;
+        let keepalive_interval = keepalive_interval.map(Duration::from_secs);
 
-        Ok(CliConfig::Client(ClientConfig {
+        Ok(ClientConfig {
             host: target.host,
             port,
             username,
@@ -183,16 +120,16 @@ impl TryFrom<RawArgs> for CliConfig {
             command,
             newline_mode,
             local_echo,
-            prefer_compression: args.compress,
+            prefer_compression: compress,
             rekey_interval,
             rekey_bytes,
             keepalive_interval,
             keepalive_max,
-            accept_hostkey_once: args.accept_hostkey_once,
-            accept_store_hostkey: args.accept_store_hostkey,
-            replace_hostkey: args.replace_hostkey,
-            insecure: args.insecure,
-        }))
+            accept_hostkey_once,
+            accept_store_hostkey,
+            replace_hostkey,
+            insecure,
+        })
     }
 }
 
@@ -267,7 +204,7 @@ fn validate_rekey_bytes(value: u64) -> Result<usize> {
         bail!("--rekey-bytes must be greater than zero");
     }
     if value > MAX {
-        bail!("--rekey-bytes must be <= {} bytes", MAX);
+        bail!("--rekey-bytes must be <= {MAX} bytes");
     }
     Ok(value as usize)
 }

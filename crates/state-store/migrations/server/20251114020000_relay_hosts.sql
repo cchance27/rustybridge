@@ -12,4 +12,3 @@ CREATE TABLE IF NOT EXISTS relay_host_options (
     value TEXT NOT NULL,
     UNIQUE(relay_host_id, key)
 );
-

@@ -1,7 +1,6 @@
 use anyhow::Result;
 use russh::{
-    ChannelMsg, Disconnect,
-    client::{self, Handle},
+    ChannelMsg, Disconnect, client::{self, Handle}
 };
 use tokio::io::AsyncWriteExt;
 

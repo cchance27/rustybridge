@@ -1,32 +1,38 @@
-# Cargo.toml
-[package]
-name = "rustybridge"
+[workspace]
+members = [
+    "crates/rb-cli",
+    "crates/client-core",
+    "crates/server-core",
+    "crates/ssh-core",
+    "crates/state-store",
+]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
+
+[workspace.dependencies]
 anyhow = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
-
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 crossterm = "0.29.0"
 signal-hook = "0.3"
 rustix = { version = "1.1.2", default-features = false, features = ["termios"] }
 russh = { version = "0.54.6", default-features = false, features = ["aws-lc-rs", "rsa", "dsa", "des", "flate2"] }
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5.52", features = ["derive"] }
 rpassword = "7"
 whoami = "1"
 rand_core = "0.9.3"
 ratatui = "0.29.0"
 sqlx = { version = "0.8.6", features = ["chrono", "macros", "runtime-tokio", "sqlite"] }
+dirs = "6.0.0"
+url = "2.5"
 
 [profile.dev.package.sqlx-macros]
 opt-level = 3
 
-[package.metadata.sqlx]
+[workspace.metadata.sqlx]
 offline = true
-
-[[bin]]
-name = "rb"
-path = "src/main.rs"

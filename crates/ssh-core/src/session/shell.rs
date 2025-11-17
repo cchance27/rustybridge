@@ -1,8 +1,5 @@
 use std::{
-    env,
-    io::{self, Cursor, Read, Write},
-    thread,
-    time::Duration,
+    env, io::{self, Cursor, Read, Write}, thread, time::Duration
 };
 
 use anyhow::Result;
@@ -10,14 +7,11 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size as term_size};
 use russh::Sig;
 use signal_hook::iterator::Signals;
 use tokio::{
-    io::AsyncWriteExt,
-    sync::mpsc::{UnboundedSender, unbounded_channel},
+    io::AsyncWriteExt, sync::mpsc::{UnboundedSender, unbounded_channel}
 };
 
-use crate::{
-    session::SessionHandle,
-    terminal::{NewlineMode, current_pty_modes, map_input},
-};
+use super::SessionHandle;
+use crate::terminal::{NewlineMode, current_pty_modes, map_input};
 
 #[derive(Clone, Copy)]
 pub struct ShellOptions {

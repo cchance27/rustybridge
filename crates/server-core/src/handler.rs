@@ -1,20 +1,17 @@
 //! SSH handler implementation that drives per-connection state and the echo TUI.
 
 use std::{
-    net::SocketAddr,
-    time::{Duration, Instant},
+    net::SocketAddr, time::{Duration, Instant}
 };
 
 use russh::{
-    Channel, ChannelId, CryptoVec, Pty,
-    server::{self as ssh_server, Auth, Session},
+    Channel, ChannelId, CryptoVec, Pty, server::{self as ssh_server, Auth, Session}
 };
 use tokio::{sync::watch, task::JoinHandle, time};
 use tracing::{info, warn};
 
-use crate::server::{
-    remote_backend::ServerTerminal,
-    tui::{EchoTui, HELLO_BANNER, INSTRUCTIONS, desired_rect, status_tick_sequence},
+use crate::{
+    remote_backend::ServerTerminal, tui::{EchoTui, HELLO_BANNER, INSTRUCTIONS, desired_rect, status_tick_sequence}
 };
 
 /// Tracks the lifecycle of a single SSH session, including authentication, PTY events, and TUI I/O.

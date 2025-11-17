@@ -1,16 +1,13 @@
 use std::{
-    env,
-    io::{self, Write},
-    sync::Arc,
+    io::{self, Write}, sync::Arc
 };
 
 use anyhow::{Context, Result, bail};
 use russh::keys::{self, HashAlg, PublicKey};
-use sqlx::{Row, SqlitePool, migrate::Migrator, sqlite::SqlitePoolOptions};
+use sqlx::{Row, SqlitePool};
+use state_store::{client_db, migrate_client};
 use tokio::task;
 use tracing::info;
-
-static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 #[derive(Clone, Copy)]
 pub enum HostKeyPolicy {
@@ -27,15 +24,14 @@ pub struct HostKeyVerifier {
 
 impl HostKeyVerifier {
     pub async fn new(authority: String, policy: HostKeyPolicy) -> Result<Self> {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(20)
-            .connect(&client_db_url())
-            .await
-            .context("failed to open client state database")?;
-        
-        MIGRATOR.run(&pool).await?;
+        let handle = client_db().await.context("failed to open client state database")?;
+        migrate_client(&handle).await?;
 
-        Ok(Self { pool, authority, policy })
+        Ok(Self {
+            pool: handle.into_pool(),
+            authority,
+            policy,
+        })
     }
 
     pub async fn clear(&self) -> Result<()> {
@@ -106,14 +102,6 @@ impl HostKeyVerifier {
                 Ok(true)
             }
         }
-    }
-}
-
-fn client_db_url() -> String {
-    match env::var("DATABASE_URL") {
-        Ok(value) if value.starts_with("sqlite:") => value,
-        Ok(value) => format!("sqlite://{value}"),
-        Err(_) => "sqlite://rustybridge.db".to_string(),
     }
 }
 
