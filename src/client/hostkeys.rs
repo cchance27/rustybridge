@@ -6,9 +6,11 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use russh::keys::{self, HashAlg, PublicKey};
-use sqlx::{Row, SqlitePool, sqlite::SqlitePoolOptions};
+use sqlx::{Row, SqlitePool, migrate::Migrator, sqlite::SqlitePoolOptions};
 use tokio::task;
 use tracing::info;
+
+static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 #[derive(Clone, Copy)]
 pub enum HostKeyPolicy {
@@ -30,6 +32,9 @@ impl HostKeyVerifier {
             .connect(&client_db_url())
             .await
             .context("failed to open client state database")?;
+        
+        MIGRATOR.run(&pool).await?;
+
         Ok(Self { pool, authority, policy })
     }
 
@@ -108,7 +113,7 @@ fn client_db_url() -> String {
     match env::var("DATABASE_URL") {
         Ok(value) if value.starts_with("sqlite:") => value,
         Ok(value) => format!("sqlite://{value}"),
-        Err(_) => "sqlite://rustybridge.sqlite".to_string(),
+        Err(_) => "sqlite://rustybridge.db".to_string(),
     }
 }
 

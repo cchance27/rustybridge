@@ -5,14 +5,19 @@ mod server;
 mod session;
 mod terminal;
 
-use crate::{cli::CliConfig, client::run_client, server::run_server};
+use crate::{
+    cli::{CliConfig, ServerCommand},
+    client::run_client,
+    server::{add_relay_host, run_server},
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_tracing();
 
     match CliConfig::parse()? {
-        CliConfig::Server(cfg) => run_server(cfg).await?,
+        CliConfig::Server(ServerCommand::Run(cfg)) => run_server(cfg).await?,
+        CliConfig::Server(ServerCommand::AddRelayHost { endpoint, name }) => add_relay_host(&endpoint, &name).await?,
         CliConfig::Client(cfg) => run_client(cfg).await?,
     }
 

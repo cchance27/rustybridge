@@ -12,7 +12,7 @@ const DEFAULT_SERVER_PORT: u16 = 2222;
 #[command(name = "rb", about = "Legacy-friendly SSH bridge/cleint with relaxed crypto options")]
 struct RawArgs {
     /// Start an embedded SSH server instead of connecting to one
-    #[arg(long, action = ArgAction::SetTrue, help_heading = "Server Options")]
+    #[arg(short = 's', long, action = ArgAction::SetTrue, help_heading = "Server Options")]
     server: bool,
     /// Address to bind the embedded server to (defaults to 0.0.0.0)
     #[arg(long, value_name = "ADDR", requires = "server", help_heading = "Server Options")]
@@ -20,6 +20,12 @@ struct RawArgs {
     /// Force regeneration of the stored server host key on startup
     #[arg(long, action = ArgAction::SetTrue, requires = "server", help_heading = "Server Options")]
     roll_hostkey: bool,
+    /// Add or update a relay host entry (ip:port)
+    #[arg(long = "add-host", value_name = "IP:PORT", requires = "server", help_heading = "Server Options")]
+    add_host: Option<String>,
+    /// Friendly name to associate with --add-host
+    #[arg(long = "hostname", value_name = "NAME", requires = "add_host", help_heading = "Server Options")]
+    add_hostname: Option<String>,
     /// Target host; supports optional [user@]host[:port] syntax
     #[arg(value_name = "HOST", required_unless_present = "server")]
     target: Option<String>,
@@ -73,7 +79,7 @@ struct RawArgs {
 #[derive(Clone)]
 pub enum CliConfig {
     Client(ClientConfig),
-    Server(ServerConfig),
+    Server(ServerCommand),
 }
 
 #[derive(Clone)]
@@ -103,6 +109,12 @@ pub struct ServerConfig {
     pub roll_hostkey: bool,
 }
 
+#[derive(Clone)]
+pub enum ServerCommand {
+    Run(ServerConfig),
+    AddRelayHost { endpoint: String, name: String },
+}
+
 impl CliConfig {
     pub fn parse() -> Result<Self> {
         let args = RawArgs::parse();
@@ -115,16 +127,22 @@ impl TryFrom<RawArgs> for CliConfig {
 
     fn try_from(mut args: RawArgs) -> Result<Self> {
         if args.server {
+            if let Some(endpoint) = args.add_host {
+                let name = args
+                    .add_hostname
+                    .ok_or_else(|| anyhow!("--hostname is required when using --add-host"))?;
+                return Ok(CliConfig::Server(ServerCommand::AddRelayHost { endpoint, name }));
+            }
             if !args.command.is_empty() {
                 bail!("command arguments are not supported when --server is present");
             }
             let bind = args.bind.or_else(|| args.target.take()).unwrap_or_else(|| "0.0.0.0".to_string());
             let port = args.port.unwrap_or(DEFAULT_SERVER_PORT);
-            return Ok(CliConfig::Server(ServerConfig {
+            return Ok(CliConfig::Server(ServerCommand::Run(ServerConfig {
                 bind,
                 port,
                 roll_hostkey: args.roll_hostkey,
-            }));
+            })));
         }
 
         let target_raw = args.target.ok_or_else(|| anyhow!("missing HOST argument"))?;
@@ -135,7 +153,7 @@ impl TryFrom<RawArgs> for CliConfig {
         let local_echo = if args.local_echo {
             true
         } else {
-            env::var("LSSH_LOCAL_ECHO").map(|v| v != "0").unwrap_or(false)
+            env::var("RB_LOCAL_ECHO").map(|v| v != "0").unwrap_or(false)
         };
 
         let username = args
@@ -219,7 +237,7 @@ fn parse_bracketed_host(input: &str) -> Result<(String, u16)> {
 }
 
 fn fallback_username() -> Option<String> {
-    for key in ["LSSH_USER", "USER", "LOGNAME", "USERNAME"] {
+    for key in ["RB_USER", "USER", "LOGNAME", "USERNAME"] {
         if let Ok(value) = env::var(key)
             && !value.is_empty()
         {
@@ -235,7 +253,7 @@ fn resolve_password(provided: Option<&str>, username: &str, host: &str) -> Resul
         return Ok(value.to_string());
     }
 
-    if let Ok(value) = env::var("LSSH_PASSWORD") {
+    if let Ok(value) = env::var("RB_PASSWORD") {
         return Ok(value);
     }
 

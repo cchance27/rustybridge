@@ -1,0 +1,15 @@
+CREATE TABLE IF NOT EXISTS relay_hosts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    ip TEXT NOT NULL,
+    port INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS relay_host_options (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    relay_host_id INTEGER NOT NULL REFERENCES relay_hosts(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    UNIQUE(relay_host_id, key)
+);
+

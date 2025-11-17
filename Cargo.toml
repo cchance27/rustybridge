@@ -23,3 +23,10 @@ sqlx = { version = "0.8.6", features = ["chrono", "macros", "runtime-tokio", "sq
 
 [profile.dev.package.sqlx-macros]
 opt-level = 3
+
+[package.metadata.sqlx]
+offline = true
+
+[[bin]]
+name = "rb"
+path = "src/main.rs"
