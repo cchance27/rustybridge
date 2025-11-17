@@ -9,7 +9,7 @@ use crate::terminal::{NewlineMode, newline_mode_from_env};
 const DEFAULT_SERVER_PORT: u16 = 2222;
 
 #[derive(Debug, Parser)]
-#[command(name = "lssh", about = "Legacy-friendly SSH client with relaxed crypto preferences")]
+#[command(name = "rb", about = "Legacy-friendly SSH bridge/cleint with relaxed crypto options")]
 struct RawArgs {
     /// Start an embedded SSH server instead of connecting to one
     #[arg(long, action = ArgAction::SetTrue, help_heading = "Server Options")]

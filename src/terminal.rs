@@ -14,7 +14,7 @@ pub enum NewlineMode {
 }
 
 pub fn newline_mode_from_env() -> Option<NewlineMode> {
-    if let Ok(mode) = env::var("LSSH_NL") {
+    if let Ok(mode) = env::var("RB_NL") {
         match mode.to_ascii_lowercase().as_str() {
             "cr" => return Some(NewlineMode::Cr),
             "crlf" => return Some(NewlineMode::CrLf),
@@ -23,7 +23,7 @@ pub fn newline_mode_from_env() -> Option<NewlineMode> {
         }
     }
 
-    if env::var("LSSH_CRLF").map(|v| v != "0").unwrap_or(false) {
+    if env::var("RB_CRLF").map(|v| v != "0").unwrap_or(false) {
         Some(NewlineMode::CrLf)
     } else {
         None

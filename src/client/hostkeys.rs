@@ -108,7 +108,7 @@ fn client_db_url() -> String {
     match env::var("DATABASE_URL") {
         Ok(value) if value.starts_with("sqlite:") => value,
         Ok(value) => format!("sqlite://{value}"),
-        Err(_) => "sqlite://lssh.sqlite".to_string(),
+        Err(_) => "sqlite://rustybridge.sqlite".to_string(),
     }
 }
 
