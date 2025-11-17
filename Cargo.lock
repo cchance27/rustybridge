@@ -434,9 +434,17 @@ name = "client-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
+ "cbc",
+ "des",
+ "hex",
+ "md5 0.8.0",
+ "rpassword",
+ "rsa",
  "russh",
  "sqlx",
  "ssh-core",
+ "ssh-key",
  "state-store",
  "tokio",
  "tracing",
@@ -1719,6 +1727,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 
 [[package]]
+name = "md5"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae960838283323069879657ca3de837e9f7bbb4c7bf6ea7f1b290d5e9476d2e0"
+
+[[package]]
 name = "memchr"
 version = "2.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2391,7 +2405,7 @@ dependencies = [
  "internal-russh-forked-ssh-key",
  "libcrux-ml-kem",
  "log",
- "md5",
+ "md5 0.7.0",
  "num-bigint",
  "once_cell",
  "p256",
@@ -2973,6 +2987,26 @@ dependencies = [
  "bytes",
  "pem-rfc7468",
  "sha2",
+]
+
+[[package]]
+name = "ssh-key"
+version = "0.6.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b86f5297f0f04d08cabaa0f6bff7cb6aec4d9c3b49d87990d63da9d9156a8c3"
+dependencies = [
+ "p256",
+ "p384",
+ "p521",
+ "rand_core 0.6.4",
+ "rsa",
+ "sec1",
+ "sha2",
+ "signature",
+ "ssh-cipher",
+ "ssh-encoding",
+ "subtle",
+ "zeroize",
 ]
 
 [[package]]

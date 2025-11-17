@@ -1,6 +1,7 @@
 use anyhow::Result;
 use russh::{
-    ChannelMsg, Disconnect, client::{self, Handle}
+    ChannelMsg, Disconnect,
+    client::{self, Handle},
 };
 use tokio::io::AsyncWriteExt;
 
@@ -10,11 +11,14 @@ pub use shell::{ShellOptions, run_shell};
 
 pub type SessionHandle<H> = Handle<H>;
 
-pub async fn run_command<H>(session: &mut SessionHandle<H>, command: &str) -> Result<()>
+pub async fn run_command<H>(session: &mut SessionHandle<H>, command: &str, forward_agent: bool) -> Result<()>
 where
     H: client::Handler + Send,
 {
     let mut channel = session.channel_open_session().await?;
+    if forward_agent {
+        channel.agent_forward(false).await?;
+    }
     channel.exec(true, command.as_bytes()).await?;
 
     let mut stdout = tokio::io::stdout();

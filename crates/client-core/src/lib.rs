@@ -1,12 +1,16 @@
+mod auth;
 mod hostkeys;
 
-use std::{borrow::Cow, sync::Arc, time::Duration};
+use std::{borrow::Cow, path::PathBuf, sync::Arc, time::Duration};
 
-use anyhow::{Context, Result, bail};
-use hostkeys::{HostKeyHandler, HostKeyPolicy, HostKeyVerifier};
+use anyhow::{Result, anyhow};
+use auth::{AuthPreferences, authenticate};
+use hostkeys::{ClientHandler, HostKeyPolicy, HostKeyVerifier};
 use russh::client;
 use ssh_core::{
-    crypto::{default_preferred, legacy_preferred}, session::{self, ShellOptions, run_command, run_shell}, terminal::NewlineMode
+    crypto::{default_preferred, legacy_preferred},
+    session::{self, ShellOptions, run_command, run_shell},
+    terminal::NewlineMode,
 };
 use tracing::{info, warn};
 
@@ -15,7 +19,7 @@ pub struct ClientConfig {
     pub host: String,
     pub port: u16,
     pub username: String,
-    pub password: String,
+    pub password: Option<String>,
     pub command: Option<String>,
     pub newline_mode: NewlineMode,
     pub local_echo: bool,
@@ -28,6 +32,19 @@ pub struct ClientConfig {
     pub accept_store_hostkey: bool,
     pub replace_hostkey: bool,
     pub insecure: bool,
+    pub identities: Vec<ClientIdentity>,
+    pub allow_keyboard_interactive: bool,
+    pub agent_auth: bool,
+    pub forward_agent: bool,
+    pub ssh_agent_socket: Option<PathBuf>,
+    pub prompt_password: bool,
+    pub password_prompt: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct ClientIdentity {
+    pub key_path: PathBuf,
+    pub cert_path: Option<PathBuf>,
 }
 
 pub async fn run_client(args: ClientConfig) -> Result<()> {
@@ -48,7 +65,17 @@ pub async fn run_client(args: ClientConfig) -> Result<()> {
         accept_store_hostkey,
         replace_hostkey,
         insecure,
+        identities,
+        allow_keyboard_interactive,
+        agent_auth,
+        forward_agent,
+        ssh_agent_socket,
+        prompt_password,
+        password_prompt,
     } = args;
+    if forward_agent && ssh_agent_socket.is_none() {
+        return Err(anyhow!("--forward-agent requires SSH_AUTH_SOCK to be set"));
+    }
     let mut preferred = if insecure {
         warn!("insecure mode enabled: using legacy cipher suite");
         legacy_preferred()
@@ -96,24 +123,35 @@ pub async fn run_client(args: ClientConfig) -> Result<()> {
     if replace_hostkey {
         verifier.clear().await?;
     }
-    let handler = HostKeyHandler::new(verifier);
+    let handler = ClientHandler::new(verifier, ssh_agent_socket.clone(), forward_agent);
     let config = Arc::new(config);
     let target = format!("{host}:{port}");
     info!("connecting to {target}");
     let mut session = client::connect(config, (host.as_str(), port), handler).await?;
 
-    let auth = session
-        .authenticate_password(username.clone(), password.clone())
-        .await
-        .context("password authentication failed")?;
-    if !auth.success() {
-        bail!("authentication rejected by server");
-    }
+    authenticate(
+        &mut session,
+        AuthPreferences {
+            username: &username,
+            password: password.as_deref(),
+            prompt_password,
+            password_prompt: password_prompt.as_deref(),
+            identities: &identities,
+            allow_keyboard_interactive,
+            use_agent_auth: agent_auth,
+            agent_socket: ssh_agent_socket.as_deref(),
+        },
+    )
+    .await?;
 
     let outcome = if let Some(command) = &command {
-        run_command(&mut session, command).await
+        run_command(&mut session, command, forward_agent).await
     } else {
-        let shell_opts = ShellOptions { newline_mode, local_echo };
+        let shell_opts = ShellOptions {
+            newline_mode,
+            local_echo,
+            forward_agent,
+        };
         run_shell(&mut session, shell_opts).await
     };
 

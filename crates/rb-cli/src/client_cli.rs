@@ -1,9 +1,8 @@
-use std::{env, time::Duration};
+use std::{collections::HashMap, env, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{ArgAction, Parser};
-use client_core::ClientConfig;
-use rpassword::prompt_password;
+use client_core::{ClientConfig, ClientIdentity};
 use ssh_core::terminal::{NewlineMode, newline_mode_from_env};
 
 #[derive(Debug, Parser)]
@@ -57,6 +56,24 @@ pub struct ClientArgs {
     /// Allow legacy/insecure crypto suites (equivalent to old behavior)
     #[arg(short = 'i', long = "insecure", action = ArgAction::SetTrue, help_heading = "Client Options")]
     insecure: bool,
+    /// Private key to use for public-key authentication (repeatable)
+    #[arg(long = "identity", value_name = "KEY", action = ArgAction::Append, help_heading = "Auth Options")]
+    identities: Vec<PathBuf>,
+    /// Explicit certificate mapping in KEY=CERT form (repeatable)
+    #[arg(long = "identity-cert", value_name = "KEY=CERT", action = ArgAction::Append, help_heading = "Auth Options")]
+    identity_certs: Vec<String>,
+    /// Attempt authentication via the SSH agent specified in SSH_AUTH_SOCK
+    #[arg(long = "agent-auth", action = ArgAction::SetTrue, help_heading = "Auth Options")]
+    agent_auth: bool,
+    /// Request OpenSSH agent forwarding for the interactive session
+    #[arg(long = "forward-agent", action = ArgAction::SetTrue, help_heading = "Auth Options")]
+    forward_agent: bool,
+    /// Disable keyboard-interactive authentication
+    #[arg(long = "no-keyboard-interactive", action = ArgAction::SetTrue, help_heading = "Auth Options")]
+    no_keyboard_interactive: bool,
+    /// Suppress password prompts (useful for key-only auth)
+    #[arg(long = "no-password", action = ArgAction::SetTrue, help_heading = "Auth Options")]
+    no_password: bool,
 }
 
 impl ClientArgs {
@@ -87,6 +104,12 @@ impl TryFrom<ClientArgs> for ClientConfig {
             accept_store_hostkey,
             replace_hostkey,
             insecure,
+            identities,
+            identity_certs,
+            agent_auth,
+            forward_agent,
+            no_keyboard_interactive,
+            no_password,
         } = args;
 
         let target = parse_target(&target)?;
@@ -104,13 +127,30 @@ impl TryFrom<ClientArgs> for ClientConfig {
             .or_else(fallback_username)
             .ok_or_else(|| anyhow!("unable to determine username; use --username or user@host"))?;
 
-        let password = resolve_password(password.as_deref(), &username, &target.host)?;
+        let (password, prompt_password) = resolve_password_source(password.as_deref(), no_password)?;
 
         let command = if command.is_empty() { None } else { Some(command.join(" ")) };
 
         let rekey_interval = rekey_interval.map(Duration::from_secs);
         let rekey_bytes = rekey_bytes.map(validate_rekey_bytes).transpose()?;
         let keepalive_interval = keepalive_interval.map(Duration::from_secs);
+
+        let mut cert_overrides = parse_cert_overrides(&identity_certs)?;
+        let identities = build_identities(&identities, &mut cert_overrides)?;
+        if !cert_overrides.is_empty() {
+            bail!("unused --identity-cert entries: {:?}", cert_overrides.keys().collect::<Vec<_>>());
+        }
+
+        let agent_socket = env::var_os("SSH_AUTH_SOCK").map(PathBuf::from);
+        if (agent_auth || forward_agent) && agent_socket.is_none() {
+            bail!("SSH_AUTH_SOCK must be set to use --agent-auth or --forward-agent");
+        }
+
+        let password_prompt = if prompt_password {
+            Some(format!("{username}@{} password: ", target.host))
+        } else {
+            None
+        };
 
         Ok(ClientConfig {
             host: target.host,
@@ -129,6 +169,13 @@ impl TryFrom<ClientArgs> for ClientConfig {
             accept_store_hostkey,
             replace_hostkey,
             insecure,
+            identities,
+            allow_keyboard_interactive: !no_keyboard_interactive,
+            agent_auth,
+            forward_agent,
+            ssh_agent_socket: agent_socket,
+            prompt_password,
+            password_prompt,
         })
     }
 }
@@ -185,17 +232,17 @@ fn fallback_username() -> Option<String> {
     if current.is_empty() { None } else { Some(current) }
 }
 
-fn resolve_password(provided: Option<&str>, username: &str, host: &str) -> Result<String> {
+fn resolve_password_source(provided: Option<&str>, no_password: bool) -> Result<(Option<String>, bool)> {
+    if no_password {
+        return Ok((None, false));
+    }
     if let Some(value) = provided {
-        return Ok(value.to_string());
+        return Ok((Some(value.to_string()), false));
     }
-
     if let Ok(value) = env::var("RB_PASSWORD") {
-        return Ok(value);
+        return Ok((Some(value), false));
     }
-
-    let prompt = format!("{username}@{host} password: ");
-    prompt_password(prompt).context("failed to read password interactively")
+    Ok((None, true))
 }
 
 fn validate_rekey_bytes(value: u64) -> Result<usize> {
@@ -207,4 +254,26 @@ fn validate_rekey_bytes(value: u64) -> Result<usize> {
         bail!("--rekey-bytes must be <= {MAX} bytes");
     }
     Ok(value as usize)
+}
+fn parse_cert_overrides(values: &[String]) -> Result<HashMap<PathBuf, PathBuf>> {
+    let mut map = HashMap::new();
+    for value in values {
+        let (key, cert) = value
+            .split_once('=')
+            .ok_or_else(|| anyhow!("--identity-cert entries must be KEY=CERT"))?;
+        map.insert(PathBuf::from(key), PathBuf::from(cert));
+    }
+    Ok(map)
+}
+
+fn build_identities(paths: &[PathBuf], overrides: &mut HashMap<PathBuf, PathBuf>) -> Result<Vec<ClientIdentity>> {
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let cert = overrides.remove(path);
+        out.push(ClientIdentity {
+            key_path: path.clone(),
+            cert_path: cert,
+        });
+    }
+    Ok(out)
 }

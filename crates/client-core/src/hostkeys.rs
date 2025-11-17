@@ -1,13 +1,21 @@
 use std::{
-    io::{self, Write}, sync::Arc
+    io::{self, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use anyhow::{Context, Result, bail};
-use russh::keys::{self, HashAlg, PublicKey};
+use russh::{
+    Channel,
+    client::{Msg, Session},
+    keys::{self, HashAlg, PublicKey},
+};
 use sqlx::{Row, SqlitePool};
 use state_store::{client_db, migrate_client};
+#[cfg(unix)]
+use tokio::io::{AsyncWriteExt, copy_bidirectional};
 use tokio::task;
-use tracing::info;
+use tracing::{info, warn};
 
 #[derive(Clone, Copy)]
 pub enum HostKeyPolicy {
@@ -106,25 +114,58 @@ impl HostKeyVerifier {
 }
 
 #[derive(Clone)]
-pub struct HostKeyHandler {
+pub struct ClientHandler {
     verifier: Arc<HostKeyVerifier>,
+    agent_socket: Option<Arc<PathBuf>>,
+    forward_agent: bool,
 }
 
-impl HostKeyHandler {
-    pub fn new(verifier: HostKeyVerifier) -> Self {
+impl ClientHandler {
+    pub fn new(verifier: HostKeyVerifier, agent_socket: Option<PathBuf>, forward_agent: bool) -> Self {
         Self {
             verifier: Arc::new(verifier),
+            agent_socket: agent_socket.map(Arc::new),
+            forward_agent,
         }
     }
 }
 
-impl russh::client::Handler for HostKeyHandler {
+impl russh::client::Handler for ClientHandler {
     type Error = anyhow::Error;
 
     fn check_server_key(&mut self, server_public_key: &PublicKey) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
         let verifier = Arc::clone(&self.verifier);
         let key = server_public_key.clone();
         async move { verifier.check(&key).await }
+    }
+
+    fn server_channel_open_agent_forward(
+        &mut self,
+        channel: Channel<Msg>,
+        _session: &mut Session,
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        let allow = self.forward_agent;
+        let socket = self.agent_socket.clone();
+        async move {
+            if !allow {
+                return Ok(());
+            }
+            let Some(path) = socket else {
+                warn!("server requested agent forwarding but no SSH_AUTH_SOCK is configured");
+                return Ok(());
+            };
+            #[cfg(unix)]
+            {
+                if let Err(err) = proxy_agent_channel(channel, path.as_ref()).await {
+                    warn!(error = ?err, "agent forwarding channel closed with error");
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                warn!("agent forwarding is not supported on this platform");
+            }
+            Ok(())
+        }
     }
 }
 
@@ -164,4 +205,19 @@ fn fingerprint_for_string(blob: &str) -> Option<String> {
     }?;
     let parsed = keys::parse_public_key_base64(maybe_key).ok()?;
     Some(parsed.fingerprint(HashAlg::Sha256).to_string())
+}
+
+#[cfg(unix)]
+async fn proxy_agent_channel(channel: Channel<Msg>, socket: &Path) -> Result<()> {
+    use tokio::net::UnixStream;
+
+    let mut agent = UnixStream::connect(socket)
+        .await
+        .with_context(|| format!("failed to connect to SSH agent at {}", socket.display()))?;
+
+    let mut stream = channel.into_stream();
+    let _ = copy_bidirectional(&mut stream, &mut agent).await?;
+    let _ = stream.shutdown().await;
+    let _ = agent.shutdown().await;
+    Ok(())
 }

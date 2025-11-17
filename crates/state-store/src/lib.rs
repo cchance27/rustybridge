@@ -1,5 +1,7 @@
 use std::{
-    env, fs::{self, File}, path::{Path, PathBuf}
+    env,
+    fs::{self, File},
+    path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, anyhow};
@@ -136,7 +138,7 @@ fn preferred_data_dir() -> PathBuf {
 
 fn preferred_state_dir() -> PathBuf {
     dirs::state_dir()
-        .or_else(|| dirs::data_dir())
+        .or_else(dirs::data_dir)
         .unwrap_or_else(|| fallback_home().join(".local/state"))
 }
 
