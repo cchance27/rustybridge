@@ -581,7 +581,7 @@ pub async fn unassign_credential(hostname: &str) -> Result<()> {
     let host = state_store::fetch_relay_host_by_name(&pool, hostname)
         .await?
         .ok_or_else(|| anyhow!("unknown relay host: {hostname}"))?;
-    sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key IN ('auth.source','auth.id')")
+    sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key IN ('auth.source','auth.id','auth.method')")
         .bind(host.id)
         .execute(&pool)
         .await?;

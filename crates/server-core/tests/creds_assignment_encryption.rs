@@ -36,7 +36,7 @@ async fn assign_writes_encrypted_values_and_unassign_removes() -> Result<()> {
 
     server_core::unassign_credential("h4").await?;
 
-    let count: i64 = sqlx::query("SELECT COUNT(*) as c FROM relay_host_options WHERE relay_host_id=(SELECT id FROM relay_hosts WHERE name='h4') AND key in ('auth.source','auth.id')")
+    let count: i64 = sqlx::query("SELECT COUNT(*) as c FROM relay_host_options WHERE relay_host_id=(SELECT id FROM relay_hosts WHERE name='h4') AND key in ('auth.source','auth.id','auth.method')")
         .fetch_one(&pool)
         .await?
         .get("c");
