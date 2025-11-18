@@ -2,7 +2,8 @@ use std::{
     collections::HashMap, path::{Path, PathBuf}, sync::Arc
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+// Internal Result type alias
+type Result<T> = crate::ClientResult<T>;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use cbc::{
     Decryptor, cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7}
@@ -44,7 +45,7 @@ where
     if prefs.use_agent_auth {
         let socket = prefs
             .agent_socket
-            .ok_or_else(|| anyhow!("SSH agent requested but SSH_AUTH_SOCK is unset"))?;
+            .ok_or_else(|| crate::ClientError::Other("SSH agent requested but SSH_AUTH_SOCK is unset".to_string()))?;
         methods.push(AuthMethod::Agent {
             socket: socket.to_path_buf(),
         });
@@ -64,7 +65,9 @@ where
     }
 
     if methods.is_empty() {
-        bail!("no authentication methods configured; supply a password, identity, --agent-auth, or --keyboard-interactive");
+        return Err(crate::ClientError::AuthFailed(
+            "no authentication methods configured; supply a password, identity, --agent-auth, or --keyboard-interactive".to_string(),
+        ));
     }
 
     let rsa_hash_hint = session.best_supported_rsa_hash().await.unwrap_or(None).flatten();
@@ -85,7 +88,9 @@ where
         }
     }
 
-    bail!("all authentication methods were rejected by the server")
+    Err(crate::ClientError::AuthFailed(
+        "all authentication methods were rejected by the server".to_string(),
+    ))
 }
 
 enum AuthMethod {
@@ -140,7 +145,7 @@ async fn load_identities(identities: &[ClientIdentity]) -> Result<Vec<LoadedIden
     for identity in identities {
         let key_data = fs::read_to_string(&identity.key_path)
             .await
-            .with_context(|| format!("failed to read {}", identity.key_path.display()))?;
+            .map_err(crate::ClientError::Io)?;
         let key = Arc::new(load_private_key(&key_data, &identity.key_path)?);
 
         let cert = resolve_certificate(identity).await?;
@@ -158,14 +163,15 @@ async fn resolve_certificate(identity: &ClientIdentity) -> Result<Option<Certifi
     if let Some(path) = candidate {
         if !path.exists() {
             if was_explicit {
-                bail!("specified certificate {} does not exist", path.display());
+                return Err(crate::ClientError::Other(format!(
+                    "specified certificate {} does not exist",
+                    path.display()
+                )));
             }
             return Ok(None);
         }
-        let blob = fs::read_to_string(&path)
-            .await
-            .with_context(|| format!("failed to read certificate {}", path.display()))?;
-        let cert = Certificate::from_openssh(&blob).with_context(|| format!("{} is not a valid OpenSSH certificate", path.display()))?;
+        let blob = fs::read_to_string(&path).await.map_err(crate::ClientError::Io)?;
+        let cert = Certificate::from_openssh(&blob).map_err(|e| crate::ClientError::Crypto(e.to_string()))?;
         return Ok(Some(cert));
     }
     Ok(None)
@@ -174,20 +180,23 @@ async fn resolve_certificate(identity: &ClientIdentity) -> Result<Option<Certifi
 fn load_private_key(data: &str, path: &Path) -> Result<keys::PrivateKey> {
     match keys::PrivateKey::from_openssh(data) {
         Ok(key) => Ok(key),
-        Err(openssh_err) => match keys::decode_secret_key(data, None) {
+        Err(_openssh_err) => match keys::decode_secret_key(data, None) {
             Ok(key) => Ok(key),
             Err(keys::Error::KeyIsEncrypted) => {
                 let prompt = format!("Enter passphrase for {}: ", path.display());
                 let passphrase = prompt_password(prompt)?;
                 let key = keys::decode_secret_key(data, Some(&passphrase))
-                    .map_err(|err| anyhow!("failed to decrypt {}: {err}", path.display()))?;
+                    .map_err(|err| crate::ClientError::Crypto(format!("failed to decrypt {}: {err}", path.display())))?;
                 Ok(key)
             }
-            Err(err) => {
+            Err(_err) => {
                 if let Some(key) = try_convert_legacy_pem(data, path)? {
                     return Ok(key);
                 }
-                Err(anyhow!("{} is not a valid OpenSSH or PEM private key ({openssh_err})", path.display()).context(err))
+                Err(crate::ClientError::Crypto(format!(
+                    "{} is not a valid OpenSSH or PEM private key",
+                    path.display()
+                )))
             }
         },
     }
@@ -198,7 +207,9 @@ fn try_convert_legacy_pem(data: &str, path: &Path) -> Result<Option<keys::Privat
         return Ok(None);
     };
     let PemParts { headers, body } = parts;
-    let mut der = BASE64.decode(body)?;
+    let mut der = BASE64
+        .decode(body)
+        .map_err(|e| crate::ClientError::Crypto(format!("base64 decode error: {e}")))?;
 
     if is_encrypted(&headers) {
         der = decrypt_traditional_pem(&headers, &der, path)?;
@@ -253,30 +264,39 @@ fn is_encrypted(headers: &HashMap<String, String>) -> bool {
 fn decrypt_traditional_pem(headers: &HashMap<String, String>, ciphertext: &[u8], path: &Path) -> Result<Vec<u8>> {
     let dek_info = headers
         .get("DEK-Info")
-        .ok_or_else(|| anyhow!("missing DEK-Info header in {}", path.display()))?;
+        .ok_or_else(|| crate::ClientError::Crypto(format!("missing DEK-Info header in {}", path.display())))?;
     let mut parts = dek_info.split(',');
     let algo = parts.next().unwrap_or_default().trim();
     let iv_hex = parts.next().unwrap_or_default().trim();
-    let iv = Vec::from_hex(iv_hex).map_err(|_| anyhow!("invalid DEK-Info IV for {}", path.display()))?;
+    let iv = Vec::from_hex(iv_hex).map_err(|_| crate::ClientError::Crypto(format!("invalid DEK-Info IV for {}", path.display())))?;
     match algo {
         "DES-EDE3-CBC" => decrypt_des_ede3(ciphertext, &iv, path),
-        other => bail!("unsupported PEM cipher {other} in {}", path.display()),
+        other => {
+            Err(crate::ClientError::Crypto(format!(
+                "unsupported PEM cipher {other} in {}",
+                path.display()
+            )))
+        }
     }
 }
 
 fn decrypt_des_ede3(ciphertext: &[u8], iv: &[u8], path: &Path) -> Result<Vec<u8>> {
     if iv.len() < 8 {
-        bail!("invalid IV for DES-EDE3-CBC in {}", path.display());
+        return Err(crate::ClientError::Crypto(format!(
+            "invalid IV for DES-EDE3-CBC in {}",
+            path.display()
+        )));
     }
     let salt = &iv[..8];
     let prompt = format!("Enter passphrase for {}: ", path.display());
     let passphrase = prompt_password(prompt)?;
     let key = evp_bytes_to_key(passphrase.as_bytes(), salt, 24);
-    let cipher = Decryptor::<TdesEde3>::new_from_slices(&key, &iv[..8]).map_err(|err| anyhow!("unable to init DES-EDE3 cipher: {err}"))?;
+    let cipher = Decryptor::<TdesEde3>::new_from_slices(&key, &iv[..8])
+        .map_err(|err| crate::ClientError::Crypto(format!("unable to init DES-EDE3 cipher: {err}")))?;
     let mut buf = ciphertext.to_vec();
     let decrypted = cipher
         .decrypt_padded_mut::<Pkcs7>(&mut buf)
-        .map_err(|err| anyhow!("failed to decrypt {}: {err}", path.display()))?
+        .map_err(|err| crate::ClientError::Crypto(format!("failed to decrypt {}: {err}", path.display())))?
         .to_vec();
     Ok(decrypted)
 }
@@ -300,9 +320,11 @@ fn evp_bytes_to_key(passphrase: &[u8], salt: &[u8], key_len: usize) -> Vec<u8> {
 }
 
 fn load_pkcs1(der: &[u8]) -> Result<keys::PrivateKey> {
-    let rsa = RsaPrivateKey::from_pkcs1_der(der)?;
-    let pkcs8 = rsa.to_pkcs8_pem(Default::default())?;
-    let key = keys::decode_secret_key(pkcs8.as_str(), None)?;
+    let rsa = RsaPrivateKey::from_pkcs1_der(der).map_err(|e| crate::ClientError::Crypto(format!("PKCS1 decode error: {e}")))?;
+    let pkcs8 = rsa
+        .to_pkcs8_pem(Default::default())
+        .map_err(|e| crate::ClientError::Crypto(format!("PKCS8 encode error: {e}")))?;
+    let key = keys::decode_secret_key(pkcs8.as_str(), None).map_err(|e| crate::ClientError::Crypto(e.to_string()))?;
     Ok(key)
 }
 
@@ -371,17 +393,15 @@ where
     {
         use tokio::net::UnixStream;
 
-        let stream = UnixStream::connect(socket)
-            .await
-            .with_context(|| format!("failed to connect to SSH agent at {}", socket.display()))?;
+        let stream = UnixStream::connect(socket).await.map_err(crate::ClientError::Io)?;
         let mut agent = russh::keys::agent::client::AgentClient::connect(stream);
 
         let mut identities = agent
             .request_identities()
             .await
-            .context("failed to list identities from SSH agent")?;
+            .map_err(|e| crate::ClientError::Other(format!("failed to list identities from SSH agent: {e}")))?;
         if identities.is_empty() {
-            bail!("SSH agent has no loaded keys");
+            return Err(crate::ClientError::AuthFailed("SSH agent has no loaded keys".to_string()));
         }
 
         debug!(count = identities.len(), "attempting agent-based authentication");
@@ -480,10 +500,13 @@ async fn spawn_prompt(name: &str, instructions: &str, prompt: &russh::client::Pr
             read_password().map_err(Into::into)
         }
     })
-    .await?
+    .await
+    .map_err(|e| crate::ClientError::Other(format!("task join error: {e}")))?
 }
 
 async fn prompt_for_password(prompt: &str) -> Result<String> {
     let prompt = prompt.to_string();
-    task::spawn_blocking(move || prompt_password(prompt).map_err(Into::into)).await?
+    task::spawn_blocking(move || prompt_password(prompt).map_err(Into::into))
+        .await
+        .map_err(|e| crate::ClientError::Other(format!("task join error: {e}")))?
 }

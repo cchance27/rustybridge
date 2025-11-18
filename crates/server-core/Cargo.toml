@@ -4,12 +4,12 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-anyhow.workspace = true
 ratatui.workspace = true
 russh.workspace = true
 sqlx.workspace = true
 ssh-core = { path = "../ssh-core" }
 state-store = { path = "../state-store" }
+thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 argon2.workspace = true
@@ -23,6 +23,7 @@ base64.workspace = true
 futures = "0.3"
 
 [dev-dependencies]
+anyhow.workspace = true
 serial_test = "3"
 sqlx = { version = "0.8.6", features = ["chrono", "macros", "runtime-tokio", "sqlite"] }
 state-store = { path = "../state-store" }

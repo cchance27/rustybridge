@@ -2,7 +2,6 @@ use std::{
     env, io::{self, Cursor, Read, Write}, thread, time::Duration
 };
 
-use anyhow::Result;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size as term_size};
 use russh::Sig;
 use signal_hook::iterator::Signals;
@@ -23,7 +22,7 @@ pub struct ShellOptions {
     pub forwarding: ForwardingManager,
 }
 
-pub async fn run_shell<H>(session: &SharedSessionHandle<H>, options: ShellOptions) -> Result<()>
+pub async fn run_shell<H>(session: &SharedSessionHandle<H>, options: ShellOptions) -> crate::SshResult<()>
 where
     H: russh::client::Handler + Send,
 {

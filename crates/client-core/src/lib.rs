@@ -1,10 +1,11 @@
 mod auth;
+pub mod error;
 mod hostkeys;
 
 use std::{borrow::Cow, path::PathBuf, sync::Arc, time::Duration};
 
-use anyhow::{Result, anyhow};
 use auth::{AuthPreferences, authenticate};
+pub use error::{ClientError, ClientResult};
 use hostkeys::{ClientHandler, HostKeyPolicy, HostKeyVerifier};
 use russh::client;
 use ssh_core::{
@@ -46,7 +47,7 @@ pub struct ClientIdentity {
     pub cert_path: Option<PathBuf>,
 }
 
-pub async fn run_client(args: ClientConfig) -> Result<()> {
+pub async fn run_client(args: ClientConfig) -> ClientResult<()> {
     let ClientConfig {
         host,
         port,
@@ -74,7 +75,7 @@ pub async fn run_client(args: ClientConfig) -> Result<()> {
         forwarding,
     } = args;
     if forward_agent && ssh_agent_socket.is_none() {
-        return Err(anyhow!("--forward-agent requires SSH_AUTH_SOCK to be set"));
+        return Err(ClientError::Other("--forward-agent requires SSH_AUTH_SOCK to be set".to_string()));
     }
     let mut preferred = if insecure {
         warn!("insecure mode enabled: using legacy cipher suite");
@@ -191,5 +192,5 @@ pub async fn run_client(args: ClientConfig) -> Result<()> {
         }
         Err(_) => warn!("SSH session handle still in use; skipping shutdown wait"),
     }
-    outcome
+    Ok(outcome?)
 }

@@ -7,11 +7,11 @@ edition.workspace = true
 forwarding-tests = []
 
 [dependencies]
-anyhow.workspace = true
 russh.workspace = true
 sqlx.workspace = true
 ssh-core = { path = "../ssh-core" }
 state-store = { path = "../state-store" }
+thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 ssh-key.workspace = true

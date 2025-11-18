@@ -24,7 +24,7 @@ async fn ssh_key_credential_store_and_assign() -> Result<()> {
     let key = russh::keys::PrivateKey::random(&mut osrng, russh::keys::Algorithm::Ed25519)?;
     let key_pem = key.to_openssh(russh::keys::ssh_key::LineEnding::LF)?.to_string();
 
-    let id = server_core::create_ssh_key_credential("credK", Some("userK"), &key_pem, None, None).await?;
+    let _id = server_core::create_ssh_key_credential("credK", Some("userK"), &key_pem, None, None).await?;
     // Ensure stored secret is there
     let row = sqlx::query("SELECT salt, nonce, secret FROM relay_credentials WHERE name='credK'")
         .fetch_one(&pool)

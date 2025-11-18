@@ -1,6 +1,5 @@
 use std::io::Cursor;
 
-use anyhow::{Result, anyhow};
 use russh::{ChannelMsg, client};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt}, sync::mpsc::{UnboundedSender, unbounded_channel}
@@ -15,7 +14,7 @@ pub async fn run_subsystem<H>(
     subsystem: &str,
     forward_agent: bool,
     forwarding: &ForwardingManager,
-) -> Result<()>
+) -> crate::SshResult<()>
 where
     H: client::Handler + Send,
 {
@@ -38,7 +37,7 @@ pub async fn run_subsystem_with_io<H, R, W>(
     forwarding: &ForwardingManager,
     input: R,
     mut output: W,
-) -> Result<()>
+) -> crate::SshResult<()>
 where
     H: client::Handler + Send,
     R: AsyncRead + Send + Unpin + 'static,
@@ -111,7 +110,7 @@ where
 enum InputChunk {
     Data(Vec<u8>),
     Eof,
-    Error(anyhow::Error),
+    Error(crate::SshCoreError),
 }
 
 async fn pump_input<R>(mut reader: R, tx: UnboundedSender<InputChunk>)
@@ -133,7 +132,7 @@ where
                 }
             }
             Err(err) => {
-                let _ = tx.send(InputChunk::Error(anyhow!(err)));
+                let _ = tx.send(InputChunk::Error(crate::SshCoreError::Io(err)));
                 break;
             }
         }

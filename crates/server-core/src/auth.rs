@@ -1,7 +1,8 @@
-use anyhow::{Result, anyhow};
 use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
 use password_hash::{PasswordHash, PasswordVerifier};
 use rand::rngs::OsRng;
+
+use crate::error::{ServerError, ServerResult};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoginTarget {
@@ -28,7 +29,7 @@ pub enum AuthDecision {
     Reject,
 }
 
-pub async fn authenticate_password(login: &LoginTarget, password: &str) -> Result<AuthDecision> {
+pub async fn authenticate_password(login: &LoginTarget, password: &str) -> ServerResult<AuthDecision> {
     let handle = match state_store::server_db().await {
         Ok(h) => h,
         Err(e) => {
@@ -75,11 +76,11 @@ pub async fn authenticate_password(login: &LoginTarget, password: &str) -> Resul
     }
 }
 
-pub fn hash_password(password: &str) -> Result<String> {
+pub fn hash_password(password: &str) -> ServerResult<String> {
     let salt = SaltString::generate(&mut OsRng);
     let hashed = Argon2::default()
         .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| anyhow!("failed to hash password: {e}"))?
+        .map_err(|e| ServerError::PasswordHash(format!("failed to hash password: {e}")))?
         .to_string();
     Ok(hashed)
 }

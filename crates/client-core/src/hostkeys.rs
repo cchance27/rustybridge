@@ -2,7 +2,8 @@ use std::{
     io::{self, Write}, path::{Path, PathBuf}, sync::Arc
 };
 
-use anyhow::{Context, Result, bail};
+// Internal Result type alias
+type Result<T> = crate::ClientResult<T>;
 use russh::{
     Channel, client::{Msg, Session}, keys::{self, HashAlg, PublicKey}
 };
@@ -29,7 +30,7 @@ pub struct HostKeyVerifier {
 
 impl HostKeyVerifier {
     pub async fn new(authority: String, policy: HostKeyPolicy) -> Result<Self> {
-        let handle = client_db().await.context("failed to open client state database")?;
+        let handle = client_db().await.map_err(crate::ClientError::Database)?;
         migrate_client(&handle).await?;
 
         Ok(Self {
@@ -49,7 +50,10 @@ impl HostKeyVerifier {
     }
 
     pub async fn check(&self, server_key: &PublicKey) -> Result<bool> {
-        let presented = server_key.to_openssh()?.to_string();
+        let presented = server_key
+            .to_openssh()
+            .map_err(|e| crate::ClientError::Crypto(e.to_string()))?
+            .to_string();
         if let Some(row) = sqlx::query("SELECT key FROM client_hostkeys WHERE authority = ?")
             .bind(&self.authority)
             .fetch_optional(&self.pool)
@@ -62,12 +66,10 @@ impl HostKeyVerifier {
             }
             let cached_fp = fingerprint_for_string(&key).unwrap_or_else(|| "<invalid cache>".into());
             let presented_fp = server_key.fingerprint(HashAlg::Sha256).to_string();
-            bail!(
+            return Err(crate::ClientError::HostKeyFailed(format!(
                 "host key mismatch for {} (cached SHA256 {} vs received {})",
-                self.authority,
-                cached_fp,
-                presented_fp
-            );
+                self.authority, cached_fp, presented_fp
+            )));
         }
 
         match self.policy {
@@ -88,7 +90,7 @@ impl HostKeyVerifier {
                         info!("stored host key for {} after user confirmation", self.authority);
                         Ok(true)
                     }
-                    PromptDecision::Reject => bail!("host key rejected by user"),
+                    PromptDecision::Reject => Err(crate::ClientError::HostKeyFailed("host key rejected by user".to_string())),
                 }
             }
             HostKeyPolicy::AcceptOnce => {
@@ -130,9 +132,12 @@ impl ClientHandler {
 }
 
 impl russh::client::Handler for ClientHandler {
-    type Error = anyhow::Error;
+    type Error = crate::ClientError;
 
-    fn check_server_key(&mut self, server_public_key: &PublicKey) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
+    fn check_server_key(
+        &mut self,
+        server_public_key: &PublicKey,
+    ) -> impl std::future::Future<Output = std::result::Result<bool, Self::Error>> + Send {
         let verifier = Arc::clone(&self.verifier);
         let key = server_public_key.clone();
         async move { verifier.check(&key).await }
@@ -142,7 +147,7 @@ impl russh::client::Handler for ClientHandler {
         &mut self,
         channel: Channel<Msg>,
         _session: &mut Session,
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+    ) -> impl std::future::Future<Output = std::result::Result<(), Self::Error>> + Send {
         let allow = self.forward_agent;
         let socket = self.agent_socket.clone();
         async move {
@@ -175,7 +180,7 @@ impl russh::client::Handler for ClientHandler {
         originator_address: &str,
         originator_port: u32,
         _session: &mut Session,
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+    ) -> impl std::future::Future<Output = std::result::Result<(), Self::Error>> + Send {
         let forwarding = self.forwarding.clone();
         async move {
             if let Err(err) = forwarding
@@ -193,7 +198,7 @@ impl russh::client::Handler for ClientHandler {
         channel: Channel<Msg>,
         socket_path: &str,
         _session: &mut Session,
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+    ) -> impl std::future::Future<Output = std::result::Result<(), Self::Error>> + Send {
         let forwarding = self.forwarding.clone();
         async move {
             if let Err(err) = forwarding.handle_remote_streamlocal_channel(channel, socket_path).await {
@@ -221,14 +226,15 @@ async fn prompt_for_hostkey(authority: &str, algo: &str, fingerprint: &str) -> R
         print!("Accept host key? [y]es/[s]tore/[N]o: ");
         io::stdout().flush().ok();
         let mut input = String::new();
-        io::stdin().read_line(&mut input).context("failed to read host-key confirmation")?;
+        io::stdin().read_line(&mut input).map_err(crate::ClientError::Io)?;
         match input.trim().to_lowercase().as_str() {
             "y" | "yes" => Ok(PromptDecision::AcceptSession),
             "s" | "store" => Ok(PromptDecision::AcceptAndStore),
             _ => Ok(PromptDecision::Reject),
         }
     })
-    .await?
+    .await
+    .map_err(|e| crate::ClientError::Other(format!("task join error: {e}")))?
 }
 
 fn fingerprint_for_string(blob: &str) -> Option<String> {
@@ -246,9 +252,7 @@ fn fingerprint_for_string(blob: &str) -> Option<String> {
 async fn proxy_agent_channel(channel: Channel<Msg>, socket: &Path) -> Result<()> {
     use tokio::net::UnixStream;
 
-    let mut agent = UnixStream::connect(socket)
-        .await
-        .with_context(|| format!("failed to connect to SSH agent at {}", socket.display()))?;
+    let mut agent = UnixStream::connect(socket).await.map_err(crate::ClientError::Io)?;
 
     let mut stream = channel.into_stream();
     let _ = copy_bidirectional(&mut stream, &mut agent).await?;

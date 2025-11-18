@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use anyhow::Result;
 use russh::{
     ChannelMsg, Disconnect, client::{self, Handle}
 };
@@ -22,7 +21,7 @@ pub async fn run_command<H>(
     command: &str,
     forward_agent: bool,
     forwarding: &ForwardingManager,
-) -> Result<()>
+) -> crate::SshResult<()>
 where
     H: client::Handler + Send,
 {

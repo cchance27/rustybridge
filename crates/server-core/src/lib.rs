@@ -4,6 +4,7 @@
 //! configuration, while the heavy lifting lives in the submodules.
 
 mod auth;
+pub mod error;
 mod handler;
 mod relay;
 mod remote_backend;
@@ -13,7 +14,6 @@ mod tui;
 
 use std::{sync::Arc, time::Duration};
 
-use anyhow::{Result, anyhow};
 use russh::{
     MethodKind, MethodSet, keys::{
         Algorithm, PrivateKey, ssh_key::{LineEnding, rand_core::OsRng}
@@ -24,6 +24,8 @@ use sqlx::{Row, SqlitePool};
 use ssh_core::crypto::legacy_preferred;
 use state_store::{migrate_server, server_db};
 use tracing::info;
+
+use crate::error::{ServerError, ServerResult};
 
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -37,7 +39,7 @@ pub struct ServerConfig {
 /// This configures russh with our crypto preferences, enables only password auth,
 /// and defers to [`ServerManager`] (and ultimately [`handler::ServerHandler`]) for per-connection
 /// state machines.
-pub async fn run_server(config: ServerConfig) -> Result<()> {
+pub async fn run_server(config: ServerConfig) -> ServerResult<()> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
@@ -45,8 +47,8 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
     // Require at least one user to be present; avoid starting an unauthenticated server.
     let user_count = state_store::count_users(&pool).await?;
     if user_count == 0 {
-        return Err(anyhow!(
-            "no users configured; add one with: rb-server --add-user --user <name> --password <pass>"
+        return Err(ServerError::InvalidConfig(
+            "no users configured; add one with: rb-server --add-user --user <name> --password <pass>".to_string(),
         ));
     }
 
@@ -80,7 +82,7 @@ pub async fn run_server(config: ServerConfig) -> Result<()> {
     Ok(())
 }
 
-pub async fn add_relay_host(endpoint: &str, name: &str) -> Result<()> {
+pub async fn add_relay_host(endpoint: &str, name: &str) -> ServerResult<()> {
     let (ip, port) = parse_endpoint(endpoint)?;
     let db = server_db().await?;
     migrate_server(&db).await?;
@@ -102,16 +104,16 @@ pub async fn add_relay_host(endpoint: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn grant_relay_access(name: &str, user: &str) -> Result<()> {
+pub async fn grant_relay_access(name: &str, user: &str) -> ServerResult<()> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
-        .ok_or_else(|| anyhow!("unknown relay host: {name}"))?;
+        .ok_or_else(|| ServerError::not_found("relay host", name))?;
     let _uid = state_store::fetch_user_id_by_name(&pool, user)
         .await?
-        .ok_or_else(|| anyhow!("unknown user: {user}"))?;
+        .ok_or_else(|| ServerError::not_found("user", user))?;
     sqlx::query("INSERT OR IGNORE INTO relay_host_acl (username, relay_host_id) VALUES (?, ?)")
         .bind(user)
         .bind(host.id)
@@ -121,13 +123,13 @@ pub async fn grant_relay_access(name: &str, user: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn set_relay_option(name: &str, key: &str, value: &str) -> Result<()> {
+pub async fn set_relay_option(name: &str, key: &str, value: &str) -> ServerResult<()> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
-        .ok_or_else(|| anyhow!("unknown relay host: {name}"))?;
+        .ok_or_else(|| ServerError::not_found("relay host", name))?;
     let stored = crate::secrets::encrypt_string(value)?;
     sqlx::query(
         "INSERT INTO relay_host_options (relay_host_id, key, value) VALUES (?, ?, ?) \
@@ -142,16 +144,16 @@ pub async fn set_relay_option(name: &str, key: &str, value: &str) -> Result<()> 
     Ok(())
 }
 
-pub async fn revoke_relay_access(name: &str, user: &str) -> Result<()> {
+pub async fn revoke_relay_access(name: &str, user: &str) -> ServerResult<()> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
-        .ok_or_else(|| anyhow!("unknown relay host: {name}"))?;
+        .ok_or_else(|| ServerError::not_found("relay host", name))?;
     let _uid = state_store::fetch_user_id_by_name(&pool, user)
         .await?
-        .ok_or_else(|| anyhow!("unknown user: {user}"))?;
+        .ok_or_else(|| ServerError::not_found("user", user))?;
     sqlx::query("DELETE FROM relay_host_acl WHERE username = ? AND relay_host_id = ?")
         .bind(user)
         .bind(host.id)
@@ -161,13 +163,13 @@ pub async fn revoke_relay_access(name: &str, user: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn unset_relay_option(name: &str, key: &str) -> Result<()> {
+pub async fn unset_relay_option(name: &str, key: &str) -> ServerResult<()> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
-        .ok_or_else(|| anyhow!("unknown relay host: {name}"))?;
+        .ok_or_else(|| ServerError::not_found("relay host", name))?;
     sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key = ?")
         .bind(host.id)
         .bind(key)
@@ -177,7 +179,7 @@ pub async fn unset_relay_option(name: &str, key: &str) -> Result<()> {
     Ok(())
 }
 
-async fn fetch_and_optionally_store_hostkey(pool: &sqlx::SqlitePool, name: &str, ip: &str, port: u16) -> Result<()> {
+async fn fetch_and_optionally_store_hostkey(pool: &sqlx::SqlitePool, name: &str, ip: &str, port: u16) -> ServerResult<()> {
     use std::{
         io::{self, Write}, sync::{Arc, Mutex}
     };
@@ -190,7 +192,7 @@ async fn fetch_and_optionally_store_hostkey(pool: &sqlx::SqlitePool, name: &str,
         key: Arc<Mutex<Option<PublicKey>>>,
     }
     impl russh::client::Handler for CaptureHandler {
-        type Error = anyhow::Error;
+        type Error = crate::ServerError;
         fn check_server_key(&mut self, key: &PublicKey) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
             let captured = self.key.clone();
             let key = key.clone();
@@ -215,7 +217,7 @@ async fn fetch_and_optionally_store_hostkey(pool: &sqlx::SqlitePool, name: &str,
         return Ok(());
     };
     let fp = key.fingerprint(HashAlg::Sha256).to_string();
-    let pem = key.to_openssh()?.to_string();
+    let pem = key.to_openssh().map_err(|e| ServerError::Crypto(e.to_string()))?.to_string();
 
     // Prompt to store.
     println!("Discovered host key for {name} ({ip}:{port})");
@@ -228,7 +230,7 @@ async fn fetch_and_optionally_store_hostkey(pool: &sqlx::SqlitePool, name: &str,
     if yes {
         let host = state_store::fetch_relay_host_by_name(pool, name)
             .await?
-            .ok_or_else(|| anyhow!("relay host disappeared during hostkey store"))?;
+            .ok_or_else(|| ServerError::Other("relay host disappeared during hostkey store".to_string()))?;
         let stored = crate::secrets::encrypt_string(&pem)?;
         sqlx::query(
             "INSERT INTO relay_host_options (relay_host_id, key, value) VALUES (?, ?, ?) \
@@ -244,7 +246,7 @@ async fn fetch_and_optionally_store_hostkey(pool: &sqlx::SqlitePool, name: &str,
     Ok(())
 }
 
-pub async fn list_hosts() -> Result<Vec<state_store::RelayHost>> {
+pub async fn list_hosts() -> ServerResult<Vec<state_store::RelayHost>> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
@@ -252,13 +254,13 @@ pub async fn list_hosts() -> Result<Vec<state_store::RelayHost>> {
     Ok(hosts)
 }
 
-pub async fn list_options(name: &str) -> Result<Vec<(String, String)>> {
+pub async fn list_options(name: &str) -> ServerResult<Vec<(String, String)>> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
-        .ok_or_else(|| anyhow!("unknown relay host: {name}"))?;
+        .ok_or_else(|| ServerError::not_found("relay host", name))?;
     let map = state_store::fetch_relay_host_options(&pool, host.id).await?;
     // For CLI display, mask encrypted values to avoid leaking secrets.
     let mut items: Vec<(String, String)> = map
@@ -275,18 +277,18 @@ pub async fn list_options(name: &str) -> Result<Vec<(String, String)>> {
     Ok(items)
 }
 
-pub async fn list_access(name: &str) -> Result<Vec<String>> {
+pub async fn list_access(name: &str) -> ServerResult<Vec<String>> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
-        .ok_or_else(|| anyhow!("unknown relay host: {name}"))?;
+        .ok_or_else(|| ServerError::not_found("relay host", name))?;
     let users = state_store::fetch_relay_access_usernames(&pool, host.id).await?;
     Ok(users)
 }
 
-pub async fn delete_relay_host(name: &str) -> Result<()> {
+pub async fn delete_relay_host(name: &str) -> ServerResult<()> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
@@ -298,13 +300,13 @@ pub async fn delete_relay_host(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn refresh_target_hostkey(name: &str) -> Result<()> {
+pub async fn refresh_target_hostkey(name: &str) -> ServerResult<()> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
-        .ok_or_else(|| anyhow!("unknown relay host: {name}"))?;
+        .ok_or_else(|| ServerError::not_found("relay host", name))?;
     // Wipe existing stored key if present
     sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key = 'hostkey.openssh'")
         .bind(host.id)
@@ -316,7 +318,7 @@ pub async fn refresh_target_hostkey(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn add_user(user: &str, password: &str) -> Result<()> {
+pub async fn add_user(user: &str, password: &str) -> ServerResult<()> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
@@ -333,7 +335,7 @@ pub async fn add_user(user: &str, password: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn remove_user(user: &str) -> Result<()> {
+pub async fn remove_user(user: &str) -> ServerResult<()> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
@@ -351,7 +353,7 @@ pub async fn remove_user(user: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn list_users() -> Result<Vec<String>> {
+pub async fn list_users() -> ServerResult<Vec<String>> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
@@ -359,7 +361,7 @@ pub async fn list_users() -> Result<Vec<String>> {
     Ok(users)
 }
 
-pub async fn create_password_credential(name: &str, username: Option<&str>, password: &str) -> Result<i64> {
+pub async fn create_password_credential(name: &str, username: Option<&str>, password: &str) -> ServerResult<i64> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
@@ -377,7 +379,7 @@ pub async fn create_ssh_key_credential(
     private_key_pem: &str,
     cert_openssh: Option<&str>,
     passphrase: Option<&str>,
-) -> Result<i64> {
+) -> ServerResult<i64> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
@@ -399,14 +401,14 @@ pub async fn create_ssh_key_credential(
     Ok(id)
 }
 
-pub async fn create_agent_credential(name: &str, username: Option<&str>, public_key_openssh: &str) -> Result<i64> {
+pub async fn create_agent_credential(name: &str, username: Option<&str>, public_key_openssh: &str) -> ServerResult<i64> {
     use russh::keys::{HashAlg, PublicKey};
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
 
     // Validate and fingerprint
-    let pk = PublicKey::from_openssh(public_key_openssh).map_err(|e| anyhow!("invalid OpenSSH public key: {e}"))?;
+    let pk = PublicKey::from_openssh(public_key_openssh).map_err(|e| ServerError::Crypto(format!("invalid OpenSSH public key: {e}")))?;
     let fingerprint = pk.fingerprint(HashAlg::Sha256).to_string();
 
     let secret = serde_json::json!({
@@ -421,14 +423,14 @@ pub async fn create_agent_credential(name: &str, username: Option<&str>, public_
     Ok(id)
 }
 
-pub async fn delete_credential(name: &str) -> Result<()> {
+pub async fn delete_credential(name: &str) -> ServerResult<()> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
     // Resolve credential id
     let cred = state_store::get_relay_credential_by_name(&pool, name)
         .await?
-        .ok_or_else(|| anyhow!("unknown credential: {name}"))?;
+        .ok_or_else(|| ServerError::not_found("credential", name))?;
     // Guard: prevent deletion if in use by any relay host
     let rows = sqlx::query("SELECT relay_host_id, value FROM relay_host_options WHERE key = 'auth.id'")
         .fetch_all(&pool)
@@ -445,8 +447,9 @@ pub async fn delete_credential(name: &str) -> Result<()> {
             value
         };
         if resolved == target_id_str {
-            return Err(anyhow!(
-                "credential '{name}' is assigned to at least one host; unassign it first (--unassign-credential --hostname <HOST>)"
+            return Err(ServerError::not_permitted(
+                format!("delete credential '{name}'"),
+                "credential is assigned to at least one host; unassign it first (--unassign-credential --hostname <HOST>)",
             ));
         }
     }
@@ -455,7 +458,7 @@ pub async fn delete_credential(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn list_credentials() -> Result<Vec<(i64, String, String)>> {
+pub async fn list_credentials() -> ServerResult<Vec<(i64, String, String)>> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
@@ -463,7 +466,7 @@ pub async fn list_credentials() -> Result<Vec<(i64, String, String)>> {
     Ok(rows)
 }
 
-pub async fn rotate_secrets_key(old_input: &str, new_input: &str) -> Result<()> {
+pub async fn rotate_secrets_key(old_input: &str, new_input: &str) -> ServerResult<()> {
     let old_master = crate::secrets::normalize_master_input(old_input);
     let new_master = crate::secrets::normalize_master_input(new_input);
 
@@ -527,16 +530,16 @@ pub async fn rotate_secrets_key(old_input: &str, new_input: &str) -> Result<()> 
     Ok(())
 }
 
-pub async fn assign_credential(hostname: &str, cred_name: &str) -> Result<()> {
+pub async fn assign_credential(hostname: &str, cred_name: &str) -> ServerResult<()> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
     let cred = state_store::get_relay_credential_by_name(&pool, cred_name)
         .await?
-        .ok_or_else(|| anyhow!("unknown credential: {cred_name}"))?;
+        .ok_or_else(|| ServerError::not_found("credential", cred_name))?;
     let host = state_store::fetch_relay_host_by_name(&pool, hostname)
         .await?
-        .ok_or_else(|| anyhow!("unknown relay host: {hostname}"))?;
+        .ok_or_else(|| ServerError::not_found("relay host", hostname))?;
     // Write auth.source and auth.id; also record normalized method inferred from credential kind for convenience
     let enc_source = crate::secrets::encrypt_string("credential")?;
     let enc_id = crate::secrets::encrypt_string(&cred.id.to_string())?;
@@ -574,13 +577,13 @@ pub async fn assign_credential(hostname: &str, cred_name: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn unassign_credential(hostname: &str) -> Result<()> {
+pub async fn unassign_credential(hostname: &str) -> ServerResult<()> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, hostname)
         .await?
-        .ok_or_else(|| anyhow!("unknown relay host: {hostname}"))?;
+        .ok_or_else(|| ServerError::not_found("relay host", hostname))?;
     sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key IN ('auth.source','auth.id','auth.method')")
         .bind(host.id)
         .execute(&pool)
@@ -589,7 +592,7 @@ pub async fn unassign_credential(hostname: &str) -> Result<()> {
     Ok(())
 }
 
-async fn load_or_create_host_key(pool: &SqlitePool) -> Result<PrivateKey> {
+async fn load_or_create_host_key(pool: &SqlitePool) -> ServerResult<PrivateKey> {
     const KEY_NAME: &str = "server_hostkey";
     if let Some(row) = sqlx::query("SELECT value FROM server_options WHERE key = ?")
         .bind(KEY_NAME)
@@ -597,12 +600,15 @@ async fn load_or_create_host_key(pool: &SqlitePool) -> Result<PrivateKey> {
         .await?
     {
         let pem: String = row.get("value");
-        let key = PrivateKey::from_openssh(&pem)?;
+        let key = PrivateKey::from_openssh(&pem).map_err(|e| ServerError::Crypto(e.to_string()))?;
         info!("loaded persisted server host key");
         Ok(key)
     } else {
-        let key = PrivateKey::random(&mut OsRng, Algorithm::Ed25519)?;
-        let pem = key.to_openssh(LineEnding::LF)?.to_string();
+        let key = PrivateKey::random(&mut OsRng, Algorithm::Ed25519).map_err(|e| ServerError::Crypto(e.to_string()))?;
+        let pem = key
+            .to_openssh(LineEnding::LF)
+            .map_err(|e| ServerError::Crypto(e.to_string()))?
+            .to_string();
 
         sqlx::query("INSERT OR REPLACE INTO server_options (key, value) VALUES (?, ?)")
             .bind(KEY_NAME)
@@ -615,10 +621,12 @@ async fn load_or_create_host_key(pool: &SqlitePool) -> Result<PrivateKey> {
     }
 }
 
-fn parse_endpoint(endpoint: &str) -> Result<(String, i64)> {
+fn parse_endpoint(endpoint: &str) -> ServerResult<(String, i64)> {
     let (host, port_str) = endpoint
         .rsplit_once(':')
-        .ok_or_else(|| anyhow!("relay hosts must be specified as ip:port"))?;
-    let port = port_str.parse::<u16>().map_err(|_| anyhow!("invalid relay host port"))?;
+        .ok_or_else(|| ServerError::InvalidEndpoint("relay hosts must be specified as ip:port".to_string()))?;
+    let port = port_str
+        .parse::<u16>()
+        .map_err(|_| ServerError::InvalidEndpoint("invalid relay host port".to_string()))?;
     Ok((host.to_string(), port as i64))
 }

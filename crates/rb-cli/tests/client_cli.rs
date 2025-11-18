@@ -65,13 +65,13 @@ fn forwarding_arg_matrix_parses_expected_configs() {
 #[serial]
 fn invalid_forward_specs_error() {
     match parse_config(&["-L", "bad-spec", "demo"]) {
-        Err(err) => assert!(err.to_string().contains("local forward spec must be"), "unexpected error: {err:?}"),
+        Err(err) => assert!(err.to_string().contains("invalid local TCP forward spec"), "unexpected error: {err:?}"),
         Ok(cfg) => panic!("expected local forward error, got {:?}", cfg.forwarding),
     }
 
     match parse_config(&["-D", "addr:too:many:fields", "demo"]) {
         Err(err) => assert!(
-            err.to_string().contains("dynamic forward spec must be"),
+            err.to_string().contains("invalid dynamic SOCKS forward spec"),
             "unexpected error: {err:?}"
         ),
         Ok(cfg) => panic!("expected dynamic forward error, got {:?}", cfg.forwarding),

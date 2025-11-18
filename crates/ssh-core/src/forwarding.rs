@@ -2,7 +2,6 @@
 use std::fs;
 use std::{collections::HashSet, env, net::SocketAddr, path::PathBuf, sync::Arc};
 
-use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use russh::{Channel, ChannelStream, client};
 #[cfg(unix)]
@@ -13,6 +12,9 @@ use tokio::{
 use tracing::{info, warn};
 
 use crate::session::{SessionHandle, SharedSessionHandle};
+
+// Internal Result type alias for convenience
+type Result<T> = crate::SshResult<T>;
 
 #[derive(Clone, Debug, Default)]
 pub struct ForwardingConfig {
@@ -142,7 +144,7 @@ impl ForwardingConfig {
     }
 }
 
-pub fn parse_local_tcp(spec: &str) -> Result<LocalTcpForward> {
+pub fn parse_local_tcp(spec: &str) -> crate::SshResult<LocalTcpForward> {
     let fields = split_colon_parts(spec);
     if fields.len() == 4 {
         Ok(LocalTcpForward {
@@ -159,11 +161,14 @@ pub fn parse_local_tcp(spec: &str) -> Result<LocalTcpForward> {
             target_port: parse_port(&fields[2])?,
         })
     } else {
-        bail!("local forward spec must be [bind_address:]port:host:hostport");
+        Err(crate::SshCoreError::invalid_forward(
+            "local TCP",
+            "spec must be [bind_address:]port:host:hostport",
+        ))
     }
 }
 
-pub fn parse_remote_tcp(spec: &str) -> Result<RemoteTcpForward> {
+pub fn parse_remote_tcp(spec: &str) -> crate::SshResult<RemoteTcpForward> {
     let fields = split_colon_parts(spec);
     if fields.len() == 4 {
         Ok(RemoteTcpForward {
@@ -180,14 +185,20 @@ pub fn parse_remote_tcp(spec: &str) -> Result<RemoteTcpForward> {
             target_port: parse_port(&fields[2])?,
         })
     } else {
-        bail!("remote forward spec must be [bind_address:]port:host:hostport");
+        Err(crate::SshCoreError::invalid_forward(
+            "remote TCP",
+            "spec must be [bind_address:]port:host:hostport",
+        ))
     }
 }
 
-pub fn parse_dynamic_socks(spec: &str) -> Result<DynamicSocksForward> {
+pub fn parse_dynamic_socks(spec: &str) -> crate::SshResult<DynamicSocksForward> {
     let fields = split_colon_parts(spec);
     if fields.is_empty() || fields.len() > 2 {
-        bail!("dynamic forward spec must be [bind_address:]port");
+        return Err(crate::SshCoreError::invalid_forward(
+            "dynamic SOCKS",
+            "spec must be [bind_address:]port",
+        ));
     }
     let bind_address = if fields.len() == 2 { normalize_host(&fields[0]) } else { None };
     let port_str = fields.last().expect("port field present");
@@ -197,7 +208,7 @@ pub fn parse_dynamic_socks(spec: &str) -> Result<DynamicSocksForward> {
     })
 }
 
-pub fn parse_local_unix(spec: &str) -> Result<LocalUnixForward> {
+pub fn parse_local_unix(spec: &str) -> crate::SshResult<LocalUnixForward> {
     let (local, remote) = split_socket_pair(spec)?;
     Ok(LocalUnixForward {
         local_socket: local,
@@ -205,7 +216,7 @@ pub fn parse_local_unix(spec: &str) -> Result<LocalUnixForward> {
     })
 }
 
-pub fn parse_remote_unix(spec: &str) -> Result<RemoteUnixForward> {
+pub fn parse_remote_unix(spec: &str) -> crate::SshResult<RemoteUnixForward> {
     let (remote, local) = split_socket_pair(spec)?;
     Ok(RemoteUnixForward {
         remote_socket: remote,
@@ -213,17 +224,17 @@ pub fn parse_remote_unix(spec: &str) -> Result<RemoteUnixForward> {
     })
 }
 
-pub fn parse_env_entry(entry: &str) -> Result<EnvEntry> {
+pub fn parse_env_entry(entry: &str) -> crate::SshResult<EnvEntry> {
     let (name, value) = if let Some((name, value)) = entry.split_once('=') {
         (name.trim(), Some(value.to_string()))
     } else {
         (entry.trim(), None)
     };
     if name.is_empty() {
-        bail!("environment variable name must not be empty");
+        return Err(crate::SshCoreError::empty("environment variable name"));
     }
     if !name.chars().all(|c| c == '_' || c.is_ascii_alphanumeric()) {
-        bail!("invalid environment variable name: {name}");
+        return Err(crate::SshCoreError::InvalidEnvVar(name.to_string()));
     }
     Ok(EnvEntry {
         name: name.to_string(),
@@ -231,24 +242,29 @@ pub fn parse_env_entry(entry: &str) -> Result<EnvEntry> {
     })
 }
 
-pub fn parse_subsystem(name: &str) -> Result<SubsystemRequest> {
+pub fn parse_subsystem(name: &str) -> crate::SshResult<SubsystemRequest> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
-        bail!("subsystem name must not be empty");
+        return Err(crate::SshCoreError::empty("subsystem name"));
     }
     Ok(SubsystemRequest { name: trimmed.to_string() })
 }
 
-fn split_socket_pair(spec: &str) -> Result<(PathBuf, PathBuf)> {
-    let (lhs, rhs) = spec.split_once('=').context("unix forward spec must use local=remote format")?;
+fn split_socket_pair(spec: &str) -> crate::SshResult<(PathBuf, PathBuf)> {
+    let (lhs, rhs) = spec
+        .split_once('=')
+        .ok_or_else(|| crate::SshCoreError::invalid_forward("unix", "spec must use local=remote format"))?;
     if lhs.trim().is_empty() || rhs.trim().is_empty() {
-        bail!("unix forward spec must not contain empty paths");
+        return Err(crate::SshCoreError::invalid_forward("unix", "spec must not contain empty paths"));
     }
     Ok((PathBuf::from(lhs.trim()), PathBuf::from(rhs.trim())))
 }
 
-fn parse_port(value: &str) -> Result<u16> {
-    value.trim().parse::<u16>().context("port must be a valid number between 0-65535")
+fn parse_port(value: &str) -> crate::SshResult<u16> {
+    value
+        .trim()
+        .parse::<u16>()
+        .map_err(|_| crate::SshCoreError::InvalidPort(value.to_string()))
 }
 
 fn normalize_host(value: &str) -> Option<String> {
