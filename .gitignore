@@ -2,5 +2,4 @@ target
 .DS_Store
 .env
 *.db
-.sqlx
 config.toml
