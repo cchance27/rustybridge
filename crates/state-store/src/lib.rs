@@ -3,7 +3,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use sqlx::{SqlitePool, migrate::Migrator, sqlite::SqlitePoolOptions};
+use sqlx::{Row, SqlitePool, migrate::Migrator, prelude::FromRow, sqlite::SqlitePoolOptions};
 use tracing::warn;
 use url::Url;
 
@@ -24,6 +24,111 @@ impl DbHandle {
     pub fn into_pool(self) -> SqlitePool {
         self.pool
     }
+}
+
+// -----------------------------
+// Server-side relay host access
+// -----------------------------
+
+#[derive(Debug, Clone, FromRow)]
+pub struct RelayHost {
+    pub id: i64,
+    pub name: String,
+    pub ip: String,
+    pub port: i64,
+}
+
+pub async fn fetch_relay_host_by_name(pool: &SqlitePool, name: &str) -> Result<Option<RelayHost>> {
+    if let Some(row) = sqlx::query_as::<_, RelayHost>(
+        "SELECT id, name, ip, port FROM relay_hosts WHERE name = ?",
+    )
+    .bind(name)
+    .fetch_optional(pool)
+    .await? {
+        Ok(Some(RelayHost {
+            id: row.id,
+            name: row.name,
+            ip: row.ip,
+            port: row.port,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+pub async fn fetch_relay_host_options(pool: &SqlitePool, relay_host_id: i64) -> Result<std::collections::HashMap<String, String>> {
+    let mut map = std::collections::HashMap::new();
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT key, value FROM relay_host_options WHERE relay_host_id = ?"
+    )
+    .bind(relay_host_id)
+    .fetch_all(pool)
+    .await?;
+    for row in rows {
+        map.insert(row.0, row.1);
+    }
+    Ok(map)
+}
+
+pub async fn user_has_relay_access(pool: &SqlitePool, username: &str, relay_host_id: i64) -> Result<bool> {
+    let row = sqlx::query(
+        "SELECT id FROM relay_host_acl WHERE username = ? AND relay_host_id = ?"
+    )
+    .bind(username)
+    .bind(relay_host_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.is_some())
+}
+
+pub async fn list_relay_hosts(pool: &SqlitePool) -> Result<Vec<RelayHost>> {
+    let rows = sqlx::query_as::<_, RelayHost>("SELECT id, name, ip, port FROM relay_hosts ORDER BY name")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| RelayHost { id: row.id, name: row.name, ip: row.ip, port: row.port })
+        .collect())
+}
+
+pub async fn fetch_relay_access_usernames(pool: &SqlitePool, relay_host_id: i64) -> Result<Vec<String>> {
+    let rows = sqlx::query(
+        "SELECT username FROM relay_host_acl WHERE relay_host_id = ? ORDER BY username",
+    )
+    .bind(relay_host_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.get::<String, _>("username")).collect())
+}
+
+pub async fn fetch_user_id_by_name(pool: &SqlitePool, username: &str) -> Result<Option<i64>> {
+    let row = sqlx::query("SELECT id FROM users WHERE username = ?")
+        .bind(username)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|r| r.get::<i64, _>("id")))
+}
+
+pub async fn fetch_user_password_hash(pool: &SqlitePool, username: &str) -> Result<Option<String>> {
+    let row = sqlx::query("SELECT password_hash FROM users WHERE username = ?")
+        .bind(username)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|r| r.get::<String, _>("password_hash")))
+}
+
+pub async fn count_users(pool: &SqlitePool) -> Result<i64> {
+    let row = sqlx::query("SELECT COUNT(*) as cnt FROM users")
+        .fetch_one(pool)
+        .await?;
+    Ok(row.get::<i64, _>("cnt"))
+}
+
+pub async fn list_usernames(pool: &SqlitePool) -> Result<Vec<String>> {
+    let rows = sqlx::query("SELECT username FROM users ORDER BY username")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| r.get::<String, _>("username")).collect())
 }
 
 /// Establish a pooled SQLite connection for client-side state (host keys, etc.).

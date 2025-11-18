@@ -11,18 +11,22 @@ use tokio::{sync::watch, task::JoinHandle, time};
 use tracing::{info, warn};
 
 use crate::{
-    remote_backend::ServerTerminal, tui::{EchoTui, HELLO_BANNER, INSTRUCTIONS, desired_rect, status_tick_sequence}
+    auth::{self, AuthDecision, LoginTarget, parse_login_target},
+    remote_backend::ServerTerminal,
+    tui::{EchoTui, HELLO_BANNER, INSTRUCTIONS, desired_rect, status_tick_sequence},
 };
 
 /// Tracks the lifecycle of a single SSH session, including authentication, PTY events, and TUI I/O.
-pub(super) struct ServerHandler {
-    pub(super) peer_addr: Option<SocketAddr>,
-    username: Option<String>,
-    channel: Option<ChannelId>,
-    closed: bool,
-    connected_at: Instant,
-    tui: Option<EchoTui>,
-    terminal: Option<ServerTerminal>,
+    pub(super) struct ServerHandler {
+        pub(super) peer_addr: Option<SocketAddr>,
+        username: Option<String>,
+        relay_target: Option<String>,
+        relay_handle: Option<crate::relay::RelayHandle>,
+        channel: Option<ChannelId>,
+        closed: bool,
+        connected_at: Instant,
+        tui: Option<EchoTui>,
+        terminal: Option<ServerTerminal>,
     last_was_cr: bool,
     pty_size: Option<(u16, u16)>,
     alt_screen: bool,
@@ -38,6 +42,8 @@ impl ServerHandler {
         Self {
             peer_addr,
             username: None,
+            relay_target: None,
+            relay_handle: None,
             channel: None,
             closed: false,
             connected_at: Instant::now(),
@@ -293,21 +299,29 @@ impl ssh_server::Handler for ServerHandler {
     }
 
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
-        if user == "admin" && password == "admin" {
-            self.username = Some(user.to_string());
-            info!(
-                peer = %display_addr(self.peer_addr),
-                user,
-                "password authentication accepted"
-            );
-            Ok(Auth::Accept)
-        } else {
-            warn!(
-                peer = %display_addr(self.peer_addr),
-                user,
-                "password authentication rejected"
-            );
-            Ok(Auth::reject())
+        let login: LoginTarget = parse_login_target(user);
+        let decision = auth::authenticate_password(&login, password).await.map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+
+        match decision {
+            AuthDecision::Accept => {
+                self.username = Some(login.username.clone());
+                self.relay_target = login.relay.clone();
+                info!(
+                    peer = %display_addr(self.peer_addr),
+                    user = %login.username,
+                    relay = %login.relay.as_deref().unwrap_or("<none>"),
+                    "password authentication accepted"
+                );
+                Ok(Auth::Accept)
+            }
+            AuthDecision::Reject => {
+                warn!(
+                    peer = %display_addr(self.peer_addr),
+                    user = %login.username,
+                    "password authentication rejected"
+                );
+                Ok(Auth::reject())
+            }
         }
     }
 
@@ -323,10 +337,92 @@ impl ssh_server::Handler for ServerHandler {
     async fn shell_request(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
         session.channel_success(channel)?;
         self.channel = Some(channel);
-        self.init_shell()?;
-        self.enter_alt_screen(session, channel)?;
-        self.start_tick_task(session, channel);
-        self.render_terminal(session, channel)
+        if let Some(relay_name) = self.relay_target.clone() {
+            // Permission check and connection scaffold
+            use state_store::{server_db, fetch_relay_host_by_name, fetch_relay_host_options, user_has_relay_access};
+            let username = self.username.clone().unwrap_or_else(|| "<unknown>".into());
+            match server_db().await {
+                Ok(handle) => {
+                    let pool = handle.into_pool();
+                    match fetch_relay_host_by_name(&pool, &relay_name).await {
+                        Ok(Some(host)) => {
+                            match user_has_relay_access(&pool, &username, host.id).await {
+                                Ok(true) => {
+                                    let _ = self.send_line(session, channel, &format!("user authenticated; connecting to relay host '{}'...", relay_name));
+                                    let options = match fetch_relay_host_options(&pool, host.id).await {
+                                        Ok(map) => map,
+                                        Err(err) => {
+                                            let _ = self.send_line(session, channel, &format!("internal error loading relay options: {err}"));
+                                            return self.handle_exit(session, channel);
+                                        }
+                                    };
+                                    let server_handle = session.handle();
+                                    let size_rx = self.size_updates.subscribe();
+                                    let initial_size = self.view_size();
+                                    match crate::relay::start_bridge(
+                                        server_handle,
+                                        channel,
+                                        &host,
+                                        &username,
+                                        initial_size,
+                                        size_rx,
+                                        &options,
+                                    )
+                                    .await
+                                    {
+                                        Ok(handle) => {
+                                            self.relay_handle = Some(handle);
+                                            Ok(())
+                                        }
+                                        Err(err) => {
+                                            let _ = self.send_line(session, channel, &format!("failed to start relay: {err}"));
+                                            self.handle_exit(session, channel)
+                                        }
+                                    }
+                                }
+                                Ok(false) => {
+                                    warn!(
+                                        peer = %display_addr(self.peer_addr),
+                                        user = %username,
+                                        relay = %relay_name,
+                                        "relay access denied for user"
+                                    );
+                                    let _ = self.send_line(session, channel, &format!("access denied: user '{}' is not permitted to connect to '{}'", username, relay_name));
+                                    self.handle_exit(session, channel)
+                                }
+                                Err(err) => {
+                                    let _ = self.send_line(session, channel, &format!("internal error checking access: {err}"));
+                                    self.handle_exit(session, channel)
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            warn!(
+                                peer = %display_addr(self.peer_addr),
+                                user = %username,
+                                relay = %relay_name,
+                                "relay host not found"
+                            );
+                            let _ = self.send_line(session, channel, &format!("unknown relay host '{}'", relay_name));
+                            self.handle_exit(session, channel)
+                        }
+                        Err(err) => {
+                            let _ = self.send_line(session, channel, &format!("internal error resolving relay host: {err}"));
+                            self.handle_exit(session, channel)
+                        }
+                    }
+                }
+                Err(err) => {
+                    let _ = self.send_line(session, channel, &format!("internal error opening server database: {err}"));
+                    self.handle_exit(session, channel)
+                }
+            }
+        } else {
+            self.init_shell()?;
+            self.enter_alt_screen(session, channel)?;
+            self.start_tick_task(session, channel);
+            self.render_terminal(session, channel)
+        }
     }
 
     async fn exec_request(&mut self, channel: ChannelId, data: &[u8], session: &mut Session) -> Result<(), Self::Error> {
@@ -346,6 +442,13 @@ impl ssh_server::Handler for ServerHandler {
 
     async fn data(&mut self, channel: ChannelId, data: &[u8], session: &mut Session) -> Result<(), Self::Error> {
         if Some(channel) != self.channel {
+            return Ok(());
+        }
+
+        if let Some(relay) = self.relay_handle.as_ref() {
+            if !data.is_empty() {
+                relay.send(data.to_vec());
+            }
             return Ok(());
         }
 
@@ -415,12 +518,20 @@ impl ssh_server::Handler for ServerHandler {
     ) -> Result<(), Self::Error> {
         self.set_pty_size(col_width, row_height);
         session.channel_success(channel)?;
-        self.render_terminal(session, channel)
+        if self.relay_handle.is_some() {
+            // Relay mode: size updates are propagated asynchronously by the bridge task.
+            Ok(())
+        } else {
+            self.render_terminal(session, channel)
+        }
     }
 
     async fn channel_close(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
         if Some(channel) == self.channel {
-            self.leave_alt_screen(session, channel)?;
+            self.relay_handle = None;
+            if self.tui.is_some() {
+                self.leave_alt_screen(session, channel)?;
+            }
             self.stop_tick_task();
             self.drop_terminal();
             self.channel = None;

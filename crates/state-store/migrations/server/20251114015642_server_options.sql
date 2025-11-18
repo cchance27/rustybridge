@@ -1,4 +1,4 @@
 CREATE TABLE IF NOT EXISTS server_options (
-    key TEXT PRIMARY KEY,
+    key TEXT NOT NULL PRIMARY KEY,
     value TEXT NOT NULL
 );

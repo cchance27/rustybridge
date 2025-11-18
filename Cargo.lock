@@ -2671,6 +2671,10 @@ name = "server-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "argon2",
+ "password-hash",
+ "rand 0.8.5",
+ "rand_core 0.9.3",
  "ratatui",
  "russh",
  "sqlx",
