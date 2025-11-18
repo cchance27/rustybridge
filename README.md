@@ -53,9 +53,6 @@ All binaries source their SQLite state from `~/Library/Application Support/rusty
 - Supported: `~.` disconnect, `~R` rekey, `~V/~v` verbosity up/down, `~#` list forwards, `~~` literal `~`, `~^Z` suspend (Unix), `~&` detach stdin.
 - Reattach stdin after `~&` with `kill -USR1 <pid>` (PID is displayed when you detach).
 
-## Contributing
-See `AGENTS.md` for project structure, coding style, test guidance, and pull-request expectations. Contributions that improve safety (e.g., per-host crypto policies, audit logging) are especially welcome.
-
 ---
 
 ## Disclaimer

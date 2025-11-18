@@ -3,3 +3,6 @@ target
 .env
 *.db
 config.toml
+AGENTS.md
+BREAKSEQUENCE.md
+FORWARDING.md
