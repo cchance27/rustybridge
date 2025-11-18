@@ -1,5 +1,6 @@
 use anyhow::Result;
 use base64::Engine;
+use secrecy::ExposeSecret;
 use serial_test::serial;
 use sqlx::{Row, SqlitePool};
 
@@ -45,6 +46,6 @@ async fn rotation_with_base64_master_keys() -> Result<()> {
     .get("value");
     assert_ne!(before, after);
     let pt = server_core::secrets::decrypt_string_with(&after, &new_key).unwrap();
-    assert_eq!(pt, "val");
+    assert_eq!(&**pt.expose_secret(), "val");
     Ok(())
 }

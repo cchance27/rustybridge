@@ -14,6 +14,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 whoami.workspace = true
 server-core = { path = "../server-core" }
+secrecy.workspace = true
 
 [dev-dependencies]
 serial_test = "3"

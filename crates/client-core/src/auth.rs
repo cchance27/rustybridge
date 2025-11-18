@@ -16,6 +16,7 @@ use russh::{
     MethodSet, client::{self, AuthResult, KeyboardInteractiveAuthResponse}, keys::{self, Certificate, HashAlg, PrivateKeyWithHashAlg}
 };
 use ssh_core::session::SessionHandle;
+use secrecy::{ExposeSecret, SecretString};
 use tokio::{fs, task};
 use tracing::{debug, info, warn};
 
@@ -23,7 +24,7 @@ use crate::ClientIdentity;
 
 pub struct AuthPreferences<'a> {
     pub username: &'a str,
-    pub password: Option<&'a str>,
+    pub password: Option<&'a SecretString>,
     pub prompt_password: bool,
     pub password_prompt: Option<&'a str>,
     pub identities: &'a [ClientIdentity],
@@ -52,7 +53,7 @@ where
     }
 
     if let Some(password) = prefs.password {
-        methods.push(AuthMethod::Password(password.to_string()));
+        methods.push(AuthMethod::Password(password.clone()));
     } else if prefs.prompt_password {
         let prompt = prefs.password_prompt.unwrap_or("password: ");
         methods.push(AuthMethod::PasswordPrompt {
@@ -94,7 +95,7 @@ where
 }
 
 enum AuthMethod {
-    Password(String),
+    Password(SecretString),
     PasswordPrompt { prompt: String },
     PublicKeys(Vec<LoadedIdentity>),
     Agent { socket: PathBuf },
@@ -118,13 +119,13 @@ impl AuthMethod {
     {
         match self {
             AuthMethod::Password(password) => session
-                .authenticate_password(username.to_string(), password.clone())
+                .authenticate_password(username.to_string(), password.expose_secret().to_string())
                 .await
                 .map_err(Into::into),
             AuthMethod::PasswordPrompt { prompt } => {
                 let password = prompt_for_password(prompt).await?;
                 session
-                    .authenticate_password(username.to_string(), password)
+                    .authenticate_password(username.to_string(), password.expose_secret().to_string())
                     .await
                     .map_err(Into::into)
             }
@@ -504,9 +505,13 @@ async fn spawn_prompt(name: &str, instructions: &str, prompt: &russh::client::Pr
     .map_err(|e| crate::ClientError::Other(format!("task join error: {e}")))?
 }
 
-async fn prompt_for_password(prompt: &str) -> Result<String> {
+async fn prompt_for_password(prompt: &str) -> Result<SecretString> {
     let prompt = prompt.to_string();
-    task::spawn_blocking(move || prompt_password(prompt).map_err(Into::into))
-        .await
-        .map_err(|e| crate::ClientError::Other(format!("task join error: {e}")))?
+    task::spawn_blocking(move || {
+        prompt_password(prompt)
+            .map(|s| SecretString::new(s.into_boxed_str()))
+            .map_err(Into::into)
+    })
+    .await
+    .map_err(|e| crate::ClientError::Other(format!("task join error: {e}")))?
 }

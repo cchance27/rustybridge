@@ -1,4 +1,5 @@
 use anyhow::Result;
+use secrecy::ExposeSecret;
 use serial_test::serial;
 use sqlx::{Row, SqlitePool};
 
@@ -42,7 +43,7 @@ async fn ssh_key_credential_store_and_assign() -> Result<()> {
     .get("value");
     assert!(server_core::secrets::is_encrypted_marker(&method));
     let plain = server_core::secrets::decrypt_string_if_encrypted(&method)?;
-    assert_eq!(plain, "publickey");
+    assert_eq!(&**plain.expose_secret(), "publickey");
 
     Ok(())
 }

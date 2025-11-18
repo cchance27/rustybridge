@@ -467,6 +467,7 @@ dependencies = [
  "rpassword",
  "rsa",
  "russh",
+ "secrecy",
  "sqlx",
  "ssh-core",
  "ssh-key",
@@ -2287,6 +2288,7 @@ dependencies = [
  "clap",
  "client-core",
  "rpassword",
+ "secrecy",
  "serial_test",
  "server-core",
  "ssh-core",
@@ -2596,6 +2598,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "secrecy"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
+dependencies = [
+ "serde",
+ "zeroize",
+]
+
+[[package]]
 name = "semver"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2695,6 +2707,7 @@ dependencies = [
  "rand_core 0.9.3",
  "ratatui",
  "russh",
+ "secrecy",
  "serde",
  "serde_json",
  "serial_test",

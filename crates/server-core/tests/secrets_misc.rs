@@ -1,11 +1,12 @@
 use base64::Engine;
+use secrecy::ExposeSecret;
 use server_core::secrets;
 
 #[test]
 fn decrypt_passthrough_for_plain_value() {
     let s = "plain-value";
     let out = secrets::decrypt_string_if_encrypted(s).expect("ok");
-    assert_eq!(out, s);
+    assert_eq!(&**out.expose_secret(), s);
 }
 
 #[test]

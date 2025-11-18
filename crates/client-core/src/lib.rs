@@ -2,6 +2,7 @@ mod auth;
 pub mod error;
 mod hostkeys;
 
+use secrecy::SecretString;
 use std::{borrow::Cow, path::PathBuf, sync::Arc, time::Duration};
 
 use auth::{AuthPreferences, authenticate};
@@ -18,7 +19,7 @@ pub struct ClientConfig {
     pub host: String,
     pub port: u16,
     pub username: String,
-    pub password: Option<String>,
+    pub password: Option<SecretString>,
     pub command: Option<String>,
     pub newline_mode: NewlineMode,
     pub local_echo: bool,
@@ -139,7 +140,7 @@ pub async fn run_client(args: ClientConfig) -> ClientResult<()> {
         &mut session,
         AuthPreferences {
             username: &username,
-            password: password.as_deref(),
+            password: password.as_ref(),
             prompt_password,
             password_prompt: password_prompt.as_deref(),
             identities: &identities,

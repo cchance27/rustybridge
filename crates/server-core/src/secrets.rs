@@ -6,6 +6,10 @@ use chacha20poly1305::{
     Key, XChaCha20Poly1305, XNonce, aead::{Aead, KeyInit, OsRng}
 };
 use rand::RngCore;
+use secrecy::ExposeSecret;
+
+pub type SecretString = secrecy::SecretBox<String>;
+pub type SecretVec<T> = secrecy::SecretBox<Vec<T>>;
 
 use crate::error::{ServerError, ServerResult};
 
@@ -22,7 +26,7 @@ pub fn encrypt_secret(plaintext: &[u8]) -> ServerResult<EncryptedBlob> {
     let salt = random_bytes(16);
     let key = derive_record_key(&salt)?;
     let nonce = random_bytes(24);
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(&key));
+    let cipher = XChaCha20Poly1305::new(Key::from_slice(key.expose_secret()));
     let ct = cipher
         .encrypt(XNonce::from_slice(&nonce), plaintext)
         .map_err(|e| ServerError::secret_op("encrypt", e.to_string()))?;
@@ -33,20 +37,20 @@ pub fn encrypt_secret(plaintext: &[u8]) -> ServerResult<EncryptedBlob> {
     })
 }
 
-pub fn decrypt_secret(salt: &[u8], nonce: &[u8], ciphertext: &[u8]) -> ServerResult<Vec<u8>> {
+pub fn decrypt_secret(salt: &[u8], nonce: &[u8], ciphertext: &[u8]) -> ServerResult<SecretVec<u8>> {
     let key = derive_record_key(salt)?;
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(&key));
+    let cipher = XChaCha20Poly1305::new(Key::from_slice(key.expose_secret()));
     let pt = cipher
         .decrypt(XNonce::from_slice(nonce), ciphertext)
         .map_err(|e| ServerError::secret_op("decrypt", e.to_string()))?;
-    Ok(pt)
+    Ok(SecretVec::new(Box::new(pt)))
 }
 
 pub fn encrypt_secret_with(plaintext: &[u8], master: &[u8]) -> ServerResult<EncryptedBlob> {
     let salt = random_bytes(16);
     let key = derive_record_key_with_secret(master, &salt)?;
     let nonce = random_bytes(24);
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(&key));
+    let cipher = XChaCha20Poly1305::new(Key::from_slice(key.expose_secret()));
     let ct = cipher
         .encrypt(XNonce::from_slice(&nonce), plaintext)
         .map_err(|e| ServerError::secret_op("encrypt", e.to_string()))?;
@@ -57,16 +61,16 @@ pub fn encrypt_secret_with(plaintext: &[u8], master: &[u8]) -> ServerResult<Encr
     })
 }
 
-pub fn decrypt_secret_with(salt: &[u8], nonce: &[u8], ciphertext: &[u8], master: &[u8]) -> ServerResult<Vec<u8>> {
+pub fn decrypt_secret_with(salt: &[u8], nonce: &[u8], ciphertext: &[u8], master: &[u8]) -> ServerResult<SecretVec<u8>> {
     let key = derive_record_key_with_secret(master, salt)?;
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(&key));
+    let cipher = XChaCha20Poly1305::new(Key::from_slice(key.expose_secret()));
     let pt = cipher
         .decrypt(XNonce::from_slice(nonce), ciphertext)
         .map_err(|e| ServerError::secret_op("decrypt", e.to_string()))?;
-    Ok(pt)
+    Ok(SecretVec::new(Box::new(pt)))
 }
 
-fn derive_record_key(salt: &[u8]) -> ServerResult<[u8; 32]> {
+fn derive_record_key(salt: &[u8]) -> ServerResult<SecretVec<u8>> {
     if let Ok(key_b64) = std::env::var(MASTER_KEY_ENV) {
         // Derive per-record key from master key via Argon2 using per-record salt.
         let master = base64::engine::general_purpose::STANDARD
@@ -85,11 +89,11 @@ fn derive_record_key(salt: &[u8]) -> ServerResult<[u8; 32]> {
     ))
 }
 
-pub fn derive_record_key_with_secret(master_secret: &[u8], salt: &[u8]) -> ServerResult<[u8; 32]> {
+pub fn derive_record_key_with_secret(master_secret: &[u8], salt: &[u8]) -> ServerResult<SecretVec<u8>> {
     kdf_argon2(master_secret, salt)
 }
 
-fn kdf_argon2(secret: &[u8], salt: &[u8]) -> ServerResult<[u8; 32]> {
+fn kdf_argon2(secret: &[u8], salt: &[u8]) -> ServerResult<SecretVec<u8>> {
     // Use Argon2id default with OS RNG salt already provided per record.
     // We map to PasswordHasher API by constructing a SaltString from raw salt.
     let salt_string = SaltString::encode_b64(salt).map_err(|e| ServerError::Crypto(format!("invalid salt: {e}")))?;
@@ -100,13 +104,11 @@ fn kdf_argon2(secret: &[u8], salt: &[u8]) -> ServerResult<[u8; 32]> {
     let raw = hash
         .hash
         .ok_or_else(|| ServerError::Crypto("argon2 produced no hash".to_string()))?;
-    let mut out = [0u8; 32];
     let bytes = raw.as_bytes();
     if bytes.len() < 32 {
         return Err(ServerError::Crypto("argon2 output too short".to_string()));
     }
-    out.copy_from_slice(&bytes[..32]);
-    Ok(out)
+    Ok(SecretVec::new(Box::new(bytes[..32].to_vec())))
 }
 
 fn random_bytes(n: usize) -> Vec<u8> {
@@ -117,8 +119,8 @@ fn random_bytes(n: usize) -> Vec<u8> {
 
 const ENC_PREFIX: &str = "enc:v1:";
 
-pub fn encrypt_string(value: &str) -> ServerResult<String> {
-    let blob = encrypt_secret(value.as_bytes())?;
+pub fn encrypt_string(value: SecretString) -> ServerResult<String> {
+    let blob = encrypt_secret(value.expose_secret().as_bytes())?;
     let mut raw = Vec::with_capacity(16 + 24 + blob.ciphertext.len());
     raw.extend_from_slice(&blob.salt);
     raw.extend_from_slice(&blob.nonce);
@@ -127,7 +129,7 @@ pub fn encrypt_string(value: &str) -> ServerResult<String> {
     Ok(format!("{ENC_PREFIX}{b64}"))
 }
 
-pub fn decrypt_string_if_encrypted(value: &str) -> ServerResult<String> {
+pub fn decrypt_string_if_encrypted(value: &str) -> ServerResult<SecretString> {
     if let Some(rest) = value.strip_prefix(ENC_PREFIX) {
         let raw = base64::engine::general_purpose::STANDARD_NO_PAD
             .decode(rest)
@@ -138,17 +140,19 @@ pub fn decrypt_string_if_encrypted(value: &str) -> ServerResult<String> {
         let (salt, rest) = raw.split_at(16);
         let (nonce, ct) = rest.split_at(24);
         let pt = decrypt_secret(salt, nonce, ct)?;
-        return String::from_utf8(pt).map_err(|_| ServerError::Crypto("decrypted value is not valid UTF-8".to_string()));
+        return String::from_utf8(pt.expose_secret().clone())
+            .map(|s| SecretString::new(Box::new(s)))
+            .map_err(|_| ServerError::Crypto("decrypted value is not valid UTF-8".to_string()));
     }
-    Ok(value.to_string())
+    Ok(SecretString::new(Box::new(value.to_string())))
 }
 
 pub fn is_encrypted_marker(value: &str) -> bool {
     value.starts_with(ENC_PREFIX)
 }
 
-pub fn encrypt_string_with(value: &str, master: &[u8]) -> ServerResult<String> {
-    let blob = encrypt_secret_with(value.as_bytes(), master)?;
+pub fn encrypt_string_with(value: SecretString, master: &[u8]) -> ServerResult<String> {
+    let blob = encrypt_secret_with(value.expose_secret().as_bytes(), master)?;
     let mut raw = Vec::with_capacity(16 + 24 + blob.ciphertext.len());
     raw.extend_from_slice(&blob.salt);
     raw.extend_from_slice(&blob.nonce);
@@ -157,7 +161,7 @@ pub fn encrypt_string_with(value: &str, master: &[u8]) -> ServerResult<String> {
     Ok(format!("{ENC_PREFIX}{b64}"))
 }
 
-pub fn decrypt_string_with(value: &str, master: &[u8]) -> ServerResult<String> {
+pub fn decrypt_string_with(value: &str, master: &[u8]) -> ServerResult<SecretString> {
     let rest = value
         .strip_prefix(ENC_PREFIX)
         .ok_or_else(|| ServerError::Crypto("value is not encrypted".to_string()))?;
@@ -170,7 +174,9 @@ pub fn decrypt_string_with(value: &str, master: &[u8]) -> ServerResult<String> {
     let (salt, rest) = raw.split_at(16);
     let (nonce, ct) = rest.split_at(24);
     let pt = decrypt_secret_with(salt, nonce, ct, master)?;
-    String::from_utf8(pt).map_err(|_| ServerError::Crypto("decrypted value is not valid UTF-8".to_string()))
+    String::from_utf8(pt.expose_secret().clone())
+        .map(|s| SecretString::new(Box::new(s)))
+        .map_err(|_| ServerError::Crypto("decrypted value is not valid UTF-8".to_string()))
 }
 
 pub fn normalize_master_input(input: &str) -> Vec<u8> {

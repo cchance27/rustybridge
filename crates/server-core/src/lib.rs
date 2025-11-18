@@ -12,6 +12,7 @@ pub mod secrets;
 mod server_manager;
 mod tui;
 
+use secrecy::ExposeSecret;
 use std::{sync::Arc, time::Duration};
 
 use russh::{
@@ -130,7 +131,7 @@ pub async fn set_relay_option(name: &str, key: &str, value: &str) -> ServerResul
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
         .ok_or_else(|| ServerError::not_found("relay host", name))?;
-    let stored = crate::secrets::encrypt_string(value)?;
+    let stored = crate::secrets::encrypt_string(crate::secrets::SecretString::new(Box::new(value.to_string())))?;
     sqlx::query(
         "INSERT INTO relay_host_options (relay_host_id, key, value) VALUES (?, ?, ?) \
          ON CONFLICT(relay_host_id, key) DO UPDATE SET value = excluded.value",
@@ -231,7 +232,7 @@ async fn fetch_and_optionally_store_hostkey(pool: &sqlx::SqlitePool, name: &str,
         let host = state_store::fetch_relay_host_by_name(pool, name)
             .await?
             .ok_or_else(|| ServerError::Other("relay host disappeared during hostkey store".to_string()))?;
-        let stored = crate::secrets::encrypt_string(&pem)?;
+        let stored = crate::secrets::encrypt_string(crate::secrets::SecretString::new(Box::new(pem)))?;
         sqlx::query(
             "INSERT INTO relay_host_options (relay_host_id, key, value) VALUES (?, ?, ?) \
              ON CONFLICT(relay_host_id, key) DO UPDATE SET value = excluded.value",
@@ -444,9 +445,9 @@ pub async fn delete_credential(name: &str) -> ServerResult<()> {
                 Err(_) => continue,
             }
         } else {
-            value
+            crate::secrets::SecretString::new(Box::new(value))
         };
-        if resolved == target_id_str {
+        if resolved.expose_secret() == &target_id_str {
             return Err(ServerError::not_permitted(
                 format!("delete credential '{name}'"),
                 "credential is assigned to at least one host; unassign it first (--unassign-credential --hostname <HOST>)",
@@ -485,7 +486,7 @@ pub async fn rotate_secrets_key(old_input: &str, new_input: &str) -> ServerResul
             let nonce: Vec<u8> = row.get("nonce");
             let secret: Vec<u8> = row.get("secret");
             let pt = crate::secrets::decrypt_secret_with(&salt, &nonce, &secret, &old_master)?;
-            let blob = crate::secrets::encrypt_secret_with(&pt, &new_master)?;
+            let blob = crate::secrets::encrypt_secret_with(pt.expose_secret(), &new_master)?;
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -514,9 +515,9 @@ pub async fn rotate_secrets_key(old_input: &str, new_input: &str) -> ServerResul
             let plaintext = if crate::secrets::is_encrypted_marker(&value) {
                 crate::secrets::decrypt_string_with(&value, &old_master)?
             } else {
-                value
+                crate::secrets::SecretString::new(Box::new(value))
             };
-            let reenc = crate::secrets::encrypt_string_with(&plaintext, &new_master)?;
+            let reenc = crate::secrets::encrypt_string_with(plaintext, &new_master)?;
             sqlx::query("UPDATE relay_host_options SET value = ? WHERE relay_host_id = ? AND key = ?")
                 .bind(reenc)
                 .bind(host_id)
@@ -541,14 +542,14 @@ pub async fn assign_credential(hostname: &str, cred_name: &str) -> ServerResult<
         .await?
         .ok_or_else(|| ServerError::not_found("relay host", hostname))?;
     // Write auth.source and auth.id; also record normalized method inferred from credential kind for convenience
-    let enc_source = crate::secrets::encrypt_string("credential")?;
-    let enc_id = crate::secrets::encrypt_string(&cred.id.to_string())?;
+    let enc_source = crate::secrets::encrypt_string(crate::secrets::SecretString::new(Box::new("credential".to_string())))?;
+    let enc_id = crate::secrets::encrypt_string(crate::secrets::SecretString::new(Box::new(cred.id.to_string())))?;
     // Normalize: map ssh_key-like kinds to publickey for relay auth.method
     let method_plain: &str = match cred.kind.as_str() {
         "ssh_key" | "ssh_cert_key" => "publickey",
         other => other,
     };
-    let enc_method = crate::secrets::encrypt_string(method_plain)?;
+    let enc_method = crate::secrets::encrypt_string(crate::secrets::SecretString::new(Box::new(method_plain.to_string())))?;
     sqlx::query(
         "INSERT INTO relay_host_options (relay_host_id, key, value) VALUES (?, 'auth.source', ?) \
          ON CONFLICT(relay_host_id, key) DO UPDATE SET value = excluded.value",

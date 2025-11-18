@@ -2,7 +2,9 @@ use std::{path::PathBuf, sync::Arc};
 
 // Internal Result type alias
 type Result<T> = crate::ServerResult<T>;
-use russh::{ChannelMsg, CryptoVec, client, keys, keys::HashAlg};
+use russh::{ChannelMsg, CryptoVec, client, keys};
+use russh::keys::HashAlg;
+use secrecy::ExposeSecret;
 use serde_json::Value as JsonValue;
 use ssh_core::crypto::default_preferred;
 use state_store::RelayHost;
@@ -33,7 +35,7 @@ pub async fn start_bridge(
     base_username: &str,
     initial_size: (u16, u16),
     mut pty_size_rx: watch::Receiver<(u16, u16)>,
-    options: &std::collections::HashMap<String, String>,
+    options: &std::collections::HashMap<String, crate::secrets::SecretString>,
 ) -> Result<RelayHandle> {
     // Build client config with secure defaults.
     let mut cfg = client::Config {
@@ -43,12 +45,12 @@ pub async fn start_bridge(
         keepalive_max: 3,
         ..Default::default()
     };
-    let insecure = options.get("insecure").map(|v| v == "true").unwrap_or(false);
+    let insecure = options.get("insecure").map(|v| v.expose_secret() == "true").unwrap_or(false);
     if insecure {
         // Fallback to legacy crypto suite if requested; this is a placeholder and can be extended later.
         cfg.preferred = ssh_core::crypto::legacy_preferred();
     }
-    let prefer_compression = options.get("compression").map(|v| v == "true").unwrap_or(false);
+    let prefer_compression = options.get("compression").map(|v| v.expose_secret() == "true").unwrap_or(false);
     cfg.preferred.compression = if prefer_compression {
         std::borrow::Cow::Owned(vec![
             russh::compression::ZLIB,
@@ -110,7 +112,7 @@ pub async fn start_bridge(
     let target = format!("{}:{}", relay.ip, relay.port);
     info!(relay = %relay.name, target, "connecting to relay host");
     let handler = RelayClientHandler {
-        expected_key: options.get("hostkey.openssh").cloned(),
+        expected_key: options.get("hostkey.openssh").map(|v| v.expose_secret().clone()),
         server_handle: server_handle.clone(),
         client_channel,
         relay_name: relay.name.clone(),
@@ -119,9 +121,9 @@ pub async fn start_bridge(
         .await?;
 
     // Authenticate according to options.
-    let method = options.get("auth.method").map(|s| s.as_str()).unwrap_or("password");
+    let method = options.get("auth.method").map(|s| s.expose_secret().as_str()).unwrap_or("password");
     let username = resolve_auth_username(options, base_username).await;
-    let cred_id = options.get("auth.id").and_then(|s| s.parse::<i64>().ok());
+    let cred_id = options.get("auth.id").and_then(|s| s.expose_secret().parse::<i64>().ok());
     match method {
         "password" => {
             let password = if let Some(id) = cred_id {
@@ -135,18 +137,18 @@ pub async fn start_bridge(
                     return Err(crate::ServerError::Other("credential is not of kind password".to_string()));
                 }
                 let pt = crate::secrets::decrypt_secret(&cred.salt, &cred.nonce, &cred.secret)?;
-                String::from_utf8(pt).map_err(|_| crate::ServerError::Crypto("credential secret is not valid UTF-8".to_string()))?
+                String::from_utf8(pt.expose_secret().clone()).map_err(|_| crate::ServerError::Crypto("credential secret is not valid UTF-8".to_string()))?
             } else {
                 options
                     .get("auth.password")
                     .ok_or_else(|| crate::ServerError::Other("relay host requires 'auth.password' for password auth".to_string()))?
+                    .expose_secret()
                     .to_string()
             };
             let res = remote.authenticate_password(username.to_string(), password).await?;
             ensure_success(res, "password")?;
         }
         "publickey" | "ssh_key" => {
-            use russh::keys::HashAlg;
             // Prefer credential if provided; else require auth.identity path
             if let Some(id) = cred_id {
                 let db = state_store::server_db().await?;
@@ -160,7 +162,7 @@ pub async fn start_bridge(
                 }
                 // Decrypt secret JSON and parse key + optional certificate
                 let pt = crate::secrets::decrypt_secret(&cred.salt, &cred.nonce, &cred.secret)?;
-                let json: serde_json::Value = serde_json::from_slice(&pt).map_err(crate::ServerError::Json)?;
+                let json: serde_json::Value = serde_json::from_slice(pt.expose_secret()).map_err(crate::ServerError::Json)?;
                 let pk_str = json
                     .get("private_key")
                     .and_then(|v| v.as_str())
@@ -192,7 +194,7 @@ pub async fn start_bridge(
                 };
                 ensure_success(auth_res, "publickey")?;
             } else {
-                let key_path = options.get("auth.identity").ok_or_else(|| {
+                let key_path = options.get("auth.identity").map(|s| s.expose_secret()).ok_or_else(|| {
                     crate::ServerError::Other("relay host requires 'auth.identity' or 'auth.id' for publickey/ssh_key auth".to_string())
                 })?;
                 let r#priv = load_private_key(PathBuf::from(key_path)).await?;
@@ -210,7 +212,7 @@ pub async fn start_bridge(
                 // Resolve agent socket path
                 let socket = options
                     .get("auth.agent_socket")
-                    .cloned()
+                    .map(|s| s.expose_secret().clone())
                     .or_else(|| std::env::var("RB_SERVER_SSH_AUTH_SOCK").ok())
                     .or_else(|| std::env::var("SSH_AUTH_SOCK").ok())
                     .ok_or_else(|| crate::ServerError::Other("agent auth requested but no agent socket configured (set auth.agent_socket or RB_SERVER_SSH_AUTH_SOCK/SSH_AUTH_SOCK)".to_string()))?;
@@ -227,7 +229,7 @@ pub async fn start_bridge(
                     let pool = db.into_pool();
                     if let Some(cred) = state_store::get_relay_credential_by_id(&pool, id).await? && cred.kind == "agent" {
                         let pt = crate::secrets::decrypt_secret(&cred.salt, &cred.nonce, &cred.secret)?;
-                        let json: serde_json::Value = serde_json::from_slice(&pt)?;
+                        let json: serde_json::Value = serde_json::from_slice(pt.expose_secret())?;
                         let target_fp = json.get("fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string());
                         let target_pk = json.get("public_key").and_then(|v| v.as_str()).map(|s| s.to_string());
                         let mut filtered = Vec::new();
@@ -364,11 +366,11 @@ pub async fn start_bridge(
     Ok(RelayHandle { input_tx: tx })
 }
 
-async fn resolve_auth_username(options: &std::collections::HashMap<String, String>, fallback: &str) -> String {
+async fn resolve_auth_username(options: &std::collections::HashMap<String, crate::secrets::SecretString>, fallback: &str) -> String {
     if let Some(u) = options.get("auth.username") {
-        return u.clone();
+        return u.expose_secret().clone();
     }
-    if let Some(id_str) = options.get("auth.id") && let Ok(id) = id_str.parse::<i64>() {
+    if let Some(id_str) = options.get("auth.id") && let Ok(id) = id_str.expose_secret().parse::<i64>() {
         let db = match state_store::server_db().await {
             Ok(h) => h,
             Err(_) => return fallback.to_string(),

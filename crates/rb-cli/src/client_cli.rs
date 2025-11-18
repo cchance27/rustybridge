@@ -1,3 +1,4 @@
+use secrecy::SecretString;
 use std::{collections::HashMap, env, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -322,15 +323,15 @@ fn fallback_username() -> Option<String> {
     if current.is_empty() { None } else { Some(current) }
 }
 
-fn resolve_password_source(provided: Option<&str>, no_password: bool) -> Result<(Option<String>, bool)> {
+fn resolve_password_source(provided: Option<&str>, no_password: bool) -> Result<(Option<SecretString>, bool)> {
     if no_password {
         return Ok((None, false));
     }
     if let Some(value) = provided {
-        return Ok((Some(value.to_string()), false));
+        return Ok((Some(SecretString::new(value.to_string().into_boxed_str())), false));
     }
     if let Ok(value) = env::var("RB_PASSWORD") {
-        return Ok((Some(value), false));
+        return Ok((Some(SecretString::new(value.into_boxed_str())), false));
     }
     Ok((None, true))
 }

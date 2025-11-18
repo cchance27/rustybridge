@@ -1,4 +1,5 @@
 use anyhow::Result;
+use secrecy::ExposeSecret;
 use serial_test::serial;
 use sqlx::{Row, SqlitePool};
 
@@ -50,7 +51,7 @@ async fn rotation_reencrypts_credentials_and_options() -> Result<()> {
     .get("value");
     assert_ne!(before_opt, after_opt);
     let pt_opt = server_core::secrets::decrypt_string_with(&after_opt, b"new-secret");
-    assert_eq!(pt_opt.unwrap(), "abc123");
+    assert_eq!(&**pt_opt.unwrap().expose_secret(), "abc123");
 
     let after_cred: (Vec<u8>, Vec<u8>, Vec<u8>) = {
         let row = sqlx::query("SELECT salt, nonce, secret FROM relay_credentials WHERE name='credR'")
@@ -60,7 +61,7 @@ async fn rotation_reencrypts_credentials_and_options() -> Result<()> {
     };
     assert_ne!(before_cred.2, after_cred.2);
     let dec = server_core::secrets::decrypt_secret_with(&after_cred.0, &after_cred.1, &after_cred.2, b"new-secret").unwrap();
-    assert_eq!(String::from_utf8(dec).unwrap(), "pw-xyz");
+    assert_eq!(String::from_utf8(dec.expose_secret().clone()).unwrap(), "pw-xyz");
 
     Ok(())
 }
