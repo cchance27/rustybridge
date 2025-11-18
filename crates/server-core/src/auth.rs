@@ -29,16 +29,46 @@ pub enum AuthDecision {
 }
 
 pub async fn authenticate_password(login: &LoginTarget, password: &str) -> Result<AuthDecision> {
-    let handle = state_store::server_db().await.map_err(|e| anyhow!(e)).unwrap();
-    state_store::migrate_server(&handle).await.map_err(|e| anyhow!(e)).unwrap();
-    let pool = handle.into_pool();
-    let Some(stored) = state_store::fetch_user_password_hash(&pool, &login.username).await? else {
+    let handle = match state_store::server_db().await {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to open server database during authentication");
+            return Ok(AuthDecision::Reject);
+        }
+    };
+    if let Err(e) = state_store::migrate_server(&handle).await {
+        tracing::error!(error = %e, "failed to run server migrations during authentication");
         return Ok(AuthDecision::Reject);
+    }
+    let pool = handle.into_pool();
+    let stored = match state_store::fetch_user_password_hash(&pool, &login.username).await {
+        Ok(opt) => match opt {
+            Some(s) => s,
+            None => return Ok(AuthDecision::Reject),
+        },
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                user = %login.username,
+                "failed to fetch user password hash"
+            );
+            return Ok(AuthDecision::Reject);
+        }
     };
     if stored.is_empty() {
         return Ok(AuthDecision::Reject);
     }
-    let parsed = PasswordHash::new(&stored).map_err(|e| anyhow!("invalid stored password hash: {e}"))?;
+    let parsed = match PasswordHash::new(&stored) {
+        Ok(ph) => ph,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                user = %login.username,
+                "invalid stored password hash"
+            );
+            return Ok(AuthDecision::Reject);
+        }
+    };
     match Argon2::default().verify_password(password.as_bytes(), &parsed) {
         Ok(_) => Ok(AuthDecision::Accept),
         Err(_) => Ok(AuthDecision::Reject),

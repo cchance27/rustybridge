@@ -1,5 +1,5 @@
 use std::{
-    env, fs::{self, File}, path::{Path, PathBuf}
+    env, fs::{self, OpenOptions}, path::{Path, PathBuf}
 };
 
 use anyhow::{Context, Result, anyhow};
@@ -279,7 +279,25 @@ fn build_location_from_path(path: PathBuf) -> Result<DbLocation> {
         fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
     }
     if !existed {
-        File::create(&path).with_context(|| format!("failed to create {}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .mode(0o600)
+                .open(&path)
+                .with_context(|| format!("failed to create {}", path.display()))?;
+        }
+        #[cfg(not(unix))]
+        {
+            // Best-effort fallback on non-Unix platforms.
+            OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&path)
+                .with_context(|| format!("failed to create {}", path.display()))?;
+        }
     }
     let url = sqlite_url_from_path(&path)?;
     Ok(DbLocation {
