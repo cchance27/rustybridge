@@ -1,5 +1,8 @@
 # rustybridge
 
+> [!WARNING]
+> **EXPERIMENTAL REPO** - This code is experimental and has not been extensively tested for security. It might be insecure generally, and is definitely insecure when using `--insecure` to make connections due to insecure KEX and other legacy cryptographic methods. Use at your own risk.
+
 A legacy-friendly SSH toolkit that keeps forgotten hardware reachable while still giving modern operators control. rustybridge ships both a relaxed SSH client (`rb`) and an embeddable jump host (`rb-server`). By default we stick to modern crypto, but you can explicitly opt into older ciphers, hashes, or KEX so you can nurse decades-old routers, kiosks, or lab gear through one more upgrade cycle.
 
 ## Highlights
@@ -52,3 +55,11 @@ All binaries source their SQLite state from `~/Library/Application Support/rusty
 
 ## Contributing
 See `AGENTS.md` for project structure, coding style, test guidance, and pull-request expectations. Contributions that improve safety (e.g., per-host crypto policies, audit logging) are especially welcome.
+
+---
+
+## Disclaimer
+
+This software is provided "as is" and without any warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, and noninfringement. In no event shall the authors or copyright holders be liable for any claim, damages, or other liability, whether in an action of contract, tort, or otherwise, arising from, out of, or in connection with the software or the use or other dealings in the software.
+
+Use this software at your own risk. The authors are not responsible for any loss of data, security breaches, or other incidents that may result from the use of this software.
