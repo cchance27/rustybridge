@@ -3,6 +3,9 @@ name = "client-core"
 version.workspace = true
 edition.workspace = true
 
+[features]
+forwarding-tests = []
+
 [dependencies]
 anyhow.workspace = true
 russh.workspace = true
@@ -19,3 +22,6 @@ cbc.workspace = true
 md5.workspace = true
 hex.workspace = true
 base64.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true

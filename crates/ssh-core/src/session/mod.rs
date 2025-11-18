@@ -1,7 +1,8 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use russh::{
-    ChannelMsg, Disconnect,
-    client::{self, Handle},
+    ChannelMsg, Disconnect, client::{self, Handle}
 };
 use tokio::io::AsyncWriteExt;
 
@@ -9,9 +10,17 @@ mod shell;
 
 pub use shell::{ShellOptions, run_shell};
 
-pub type SessionHandle<H> = Handle<H>;
+use crate::forwarding::ForwardingManager;
 
-pub async fn run_command<H>(session: &mut SessionHandle<H>, command: &str, forward_agent: bool) -> Result<()>
+pub type SessionHandle<H> = Handle<H>;
+pub type SharedSessionHandle<H> = Arc<Handle<H>>;
+
+pub async fn run_command<H>(
+    session: &SharedSessionHandle<H>,
+    command: &str,
+    forward_agent: bool,
+    forwarding: &ForwardingManager,
+) -> Result<()>
 where
     H: client::Handler + Send,
 {
@@ -19,6 +28,7 @@ where
     if forward_agent {
         channel.agent_forward(false).await?;
     }
+    forwarding.prepare_channel(&channel).await?;
     channel.exec(true, command.as_bytes()).await?;
 
     let mut stdout = tokio::io::stdout();
@@ -50,7 +60,7 @@ where
     Ok(())
 }
 
-pub async fn disconnect<H>(session: &mut SessionHandle<H>)
+pub async fn disconnect<H>(session: &SharedSessionHandle<H>)
 where
     H: client::Handler + Send,
 {

@@ -22,6 +22,7 @@ crossterm = "0.29.0"
 signal-hook = "0.3"
 rustix = { version = "1.1.2", default-features = false, features = ["termios"] }
 russh = { version = "0.54.6", default-features = false, features = ["aws-lc-rs", "rsa", "dsa", "des", "flate2"] }
+async-trait = "0.1"
 clap = { version = "4.5.52", features = ["derive"] }
 rpassword = "7"
 whoami = "1"

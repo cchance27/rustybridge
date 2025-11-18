@@ -8,9 +8,7 @@ use auth::{AuthPreferences, authenticate};
 use hostkeys::{ClientHandler, HostKeyPolicy, HostKeyVerifier};
 use russh::client;
 use ssh_core::{
-    crypto::{default_preferred, legacy_preferred},
-    session::{self, ShellOptions, run_command, run_shell},
-    terminal::NewlineMode,
+    crypto::{default_preferred, legacy_preferred}, forwarding::{ForwardingConfig, ForwardingManager}, session::{self, ShellOptions, run_command, run_shell}, terminal::NewlineMode
 };
 use tracing::{info, warn};
 
@@ -39,6 +37,7 @@ pub struct ClientConfig {
     pub ssh_agent_socket: Option<PathBuf>,
     pub prompt_password: bool,
     pub password_prompt: Option<String>,
+    pub forwarding: ForwardingConfig,
 }
 
 #[derive(Clone)]
@@ -72,6 +71,7 @@ pub async fn run_client(args: ClientConfig) -> Result<()> {
         ssh_agent_socket,
         prompt_password,
         password_prompt,
+        forwarding,
     } = args;
     if forward_agent && ssh_agent_socket.is_none() {
         return Err(anyhow!("--forward-agent requires SSH_AUTH_SOCK to be set"));
@@ -123,7 +123,12 @@ pub async fn run_client(args: ClientConfig) -> Result<()> {
     if replace_hostkey {
         verifier.clear().await?;
     }
-    let handler = ClientHandler::new(verifier, ssh_agent_socket.clone(), forward_agent);
+    let forwarding = ForwardingManager::new(forwarding);
+    let handler = ClientHandler::new(verifier, ssh_agent_socket.clone(), forward_agent, forwarding.clone());
+    if forwarding.has_requests() {
+        let summary = forwarding.descriptors();
+        info!(targets = %summary.join(", "), "forwarding directives requested");
+    }
     let config = Arc::new(config);
     let target = format!("{host}:{port}");
     info!("connecting to {target}");
@@ -144,20 +149,34 @@ pub async fn run_client(args: ClientConfig) -> Result<()> {
     )
     .await?;
 
+    forwarding.start_remote_tcp_forwarders(&mut session).await?;
+    forwarding.start_remote_unix_forwarders(&mut session).await?;
+    let session = Arc::new(session);
+    forwarding.start_local_tcp_forwarders(session.clone()).await?;
+    forwarding.start_local_unix_forwarders(session.clone()).await?;
+    forwarding.start_dynamic_socks(session.clone()).await?;
+
     let outcome = if let Some(command) = &command {
-        run_command(&mut session, command, forward_agent).await
+        run_command(&session, command, forward_agent, &forwarding).await
     } else {
         let shell_opts = ShellOptions {
             newline_mode,
             local_echo,
             forward_agent,
+            forwarding: forwarding.clone(),
         };
-        run_shell(&mut session, shell_opts).await
+        run_shell(&session, shell_opts).await
     };
 
-    session::disconnect(&mut session).await;
-    if let Err(err) = session.await {
-        warn!(?err, "SSH session shutdown error");
+    forwarding.shutdown(Some(session.clone())).await?;
+    session::disconnect(&session).await;
+    match Arc::try_unwrap(session) {
+        Ok(handle) => {
+            if let Err(err) = handle.await {
+                warn!(?err, "SSH session shutdown error");
+            }
+        }
+        Err(_) => warn!("SSH session handle still in use; skipping shutdown wait"),
     }
     outcome
 }

@@ -12,12 +12,9 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
 use russh::{
-    MethodKind, MethodSet,
-    keys::{
-        Algorithm, PrivateKey,
-        ssh_key::{LineEnding, rand_core::OsRng},
-    },
-    server::{self as ssh_server, Server as _},
+    MethodKind, MethodSet, keys::{
+        Algorithm, PrivateKey, ssh_key::{LineEnding, rand_core::OsRng}
+    }, server::{self as ssh_server, Server as _}
 };
 use server_manager::ServerManager;
 use sqlx::SqlitePool;

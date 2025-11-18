@@ -1,9 +1,11 @@
 use std::{collections::HashMap, env, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::{ArgAction, Parser};
+use clap::{ArgAction, Parser, ValueEnum};
 use client_core::{ClientConfig, ClientIdentity};
-use ssh_core::terminal::{NewlineMode, newline_mode_from_env};
+use ssh_core::{
+    forwarding::{self, ForwardingConfig, LocaleMode}, terminal::{NewlineMode, newline_mode_from_env}
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "rb", about = "Legacy-friendly SSH client with relaxed crypto options")]
@@ -74,6 +76,44 @@ pub struct ClientArgs {
     /// Suppress password prompts (useful for key-only auth)
     #[arg(long = "no-password", action = ArgAction::SetTrue, help_heading = "Auth Options")]
     no_password: bool,
+    /// Forward a local TCP port; format [bind_address:]port:host:hostport
+    #[arg(short = 'L', long = "local-forward", value_name = "SPEC", action = ArgAction::Append, help_heading = "Forwarding Options")]
+    local_forward: Vec<String>,
+    /// Forward a remote TCP port back to the client; format [bind_address:]port:host:hostport
+    #[arg(short = 'R', long = "remote-forward", value_name = "SPEC", action = ArgAction::Append, help_heading = "Forwarding Options")]
+    remote_forward: Vec<String>,
+    /// Start a local SOCKS proxy; format [bind_address:]port
+    #[arg(short = 'D', long = "dynamic-forward", value_name = "SPEC", action = ArgAction::Append, help_heading = "Forwarding Options")]
+    dynamic_forward: Vec<String>,
+    /// Forward a local Unix socket path to a remote path (format local=remote)
+    #[cfg(unix)]
+    #[arg(long = "local-unix-forward", value_name = "LOCAL=REMOTE", action = ArgAction::Append, help_heading = "Forwarding Options")]
+    local_unix_forward: Vec<String>,
+    /// Forward a remote Unix socket back to a local path (format remote=local)
+    #[cfg(unix)]
+    #[arg(long = "remote-unix-forward", value_name = "REMOTE=LOCAL", action = ArgAction::Append, help_heading = "Forwarding Options")]
+    remote_unix_forward: Vec<String>,
+    /// [unimplemented] Request X11 forwarding (optionally override display via --x11-display)
+    #[arg(short = 'X', long = "forward-x11", action = ArgAction::SetTrue, help_heading = "Forwarding Options")]
+    forward_x11: bool,
+    /// [unimplemented] Override the forwarded DISPLAY value
+    #[arg(long = "x11-display", value_name = "DISPLAY", help_heading = "Forwarding Options")]
+    x11_display: Option<String>,
+    /// [unimplemented] Request trusted X11 cookies (similar to -Y)
+    #[arg(long = "x11-trusted", action = ArgAction::SetTrue, help_heading = "Forwarding Options")]
+    x11_trusted: bool,
+    /// [unimplemented] Allow only a single forwarded X11 connection
+    #[arg(long = "x11-single-connection", action = ArgAction::SetTrue, help_heading = "Forwarding Options")]
+    x11_single_connection: bool,
+    /// Request additional subsystems (e.g. sftp)
+    #[arg(long = "subsystem", value_name = "NAME", action = ArgAction::Append, help_heading = "Forwarding Options")]
+    subsystems: Vec<String>,
+    /// Send environment variables to the remote session
+    #[arg(long = "send-env", value_name = "NAME[=VALUE]", action = ArgAction::Append, help_heading = "Forwarding Options")]
+    send_env: Vec<String>,
+    /// Propagate locale variables (none, lang, all)
+    #[arg(long = "forward-locale", value_enum, default_value_t = LocaleModeArg::None, help_heading = "Forwarding Options")]
+    forward_locale: LocaleModeArg,
 }
 
 impl ClientArgs {
@@ -110,6 +150,20 @@ impl TryFrom<ClientArgs> for ClientConfig {
             forward_agent,
             no_keyboard_interactive,
             no_password,
+            local_forward,
+            remote_forward,
+            dynamic_forward,
+            #[cfg(unix)]
+            local_unix_forward,
+            #[cfg(unix)]
+            remote_unix_forward,
+            forward_x11,
+            x11_display,
+            x11_trusted,
+            x11_single_connection,
+            subsystems,
+            send_env,
+            forward_locale,
         } = args;
 
         let target = parse_target(&target)?;
@@ -152,6 +206,37 @@ impl TryFrom<ClientArgs> for ClientConfig {
             None
         };
 
+        if forward_x11 || x11_display.is_some() || x11_trusted || x11_single_connection {
+            bail!("X11 forwarding flags are unimplemented; see FORWARDING.md for status");
+        }
+
+        let mut forwarding_config = ForwardingConfig::default();
+        for spec in local_forward {
+            forwarding_config.local_tcp.push(forwarding::parse_local_tcp(&spec)?);
+        }
+        for spec in remote_forward {
+            forwarding_config.remote_tcp.push(forwarding::parse_remote_tcp(&spec)?);
+        }
+        for spec in dynamic_forward {
+            forwarding_config.dynamic_socks.push(forwarding::parse_dynamic_socks(&spec)?);
+        }
+        #[cfg(unix)]
+        {
+            for spec in local_unix_forward {
+                forwarding_config.local_unix.push(forwarding::parse_local_unix(&spec)?);
+            }
+            for spec in remote_unix_forward {
+                forwarding_config.remote_unix.push(forwarding::parse_remote_unix(&spec)?);
+            }
+        }
+        for subsystem in subsystems {
+            forwarding_config.subsystems.push(forwarding::parse_subsystem(&subsystem)?);
+        }
+        for entry in send_env {
+            forwarding_config.env.entries.push(forwarding::parse_env_entry(&entry)?);
+        }
+        forwarding_config.env.locale_mode = forward_locale.into();
+
         Ok(ClientConfig {
             host: target.host,
             port,
@@ -176,6 +261,7 @@ impl TryFrom<ClientArgs> for ClientConfig {
             ssh_agent_socket: agent_socket,
             prompt_password,
             password_prompt,
+            forwarding: forwarding_config,
         })
     }
 }
@@ -243,6 +329,24 @@ fn resolve_password_source(provided: Option<&str>, no_password: bool) -> Result<
         return Ok((Some(value), false));
     }
     Ok((None, true))
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum, Default)]
+enum LocaleModeArg {
+    #[default]
+    None,
+    Lang,
+    All,
+}
+
+impl From<LocaleModeArg> for LocaleMode {
+    fn from(value: LocaleModeArg) -> Self {
+        match value {
+            LocaleModeArg::None => LocaleMode::None,
+            LocaleModeArg::Lang => LocaleMode::Lang,
+            LocaleModeArg::All => LocaleMode::All,
+        }
+    }
 }
 
 fn validate_rekey_bytes(value: u64) -> Result<usize> {

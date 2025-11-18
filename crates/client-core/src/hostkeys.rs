@@ -1,16 +1,13 @@
 use std::{
-    io::{self, Write},
-    path::{Path, PathBuf},
-    sync::Arc,
+    io::{self, Write}, path::{Path, PathBuf}, sync::Arc
 };
 
 use anyhow::{Context, Result, bail};
 use russh::{
-    Channel,
-    client::{Msg, Session},
-    keys::{self, HashAlg, PublicKey},
+    Channel, client::{Msg, Session}, keys::{self, HashAlg, PublicKey}
 };
 use sqlx::{Row, SqlitePool};
+use ssh_core::forwarding::ForwardingManager;
 use state_store::{client_db, migrate_client};
 #[cfg(unix)]
 use tokio::io::{AsyncWriteExt, copy_bidirectional};
@@ -118,14 +115,16 @@ pub struct ClientHandler {
     verifier: Arc<HostKeyVerifier>,
     agent_socket: Option<Arc<PathBuf>>,
     forward_agent: bool,
+    forwarding: ForwardingManager,
 }
 
 impl ClientHandler {
-    pub fn new(verifier: HostKeyVerifier, agent_socket: Option<PathBuf>, forward_agent: bool) -> Self {
+    pub fn new(verifier: HostKeyVerifier, agent_socket: Option<PathBuf>, forward_agent: bool, forwarding: ForwardingManager) -> Self {
         Self {
             verifier: Arc::new(verifier),
             agent_socket: agent_socket.map(Arc::new),
             forward_agent,
+            forwarding,
         }
     }
 }
@@ -163,6 +162,42 @@ impl russh::client::Handler for ClientHandler {
             #[cfg(not(unix))]
             {
                 warn!("agent forwarding is not supported on this platform");
+            }
+            Ok(())
+        }
+    }
+
+    fn server_channel_open_direct_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        host_to_connect: &str,
+        port_to_connect: u32,
+        originator_address: &str,
+        originator_port: u32,
+        _session: &mut Session,
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        let forwarding = self.forwarding.clone();
+        async move {
+            if let Err(err) = forwarding
+                .handle_remote_forward_channel(channel, host_to_connect, port_to_connect, originator_address, originator_port)
+                .await
+            {
+                warn!(?err, "remote forwarded connection failed");
+            }
+            Ok(())
+        }
+    }
+
+    fn server_channel_open_direct_streamlocal(
+        &mut self,
+        channel: Channel<Msg>,
+        socket_path: &str,
+        _session: &mut Session,
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        let forwarding = self.forwarding.clone();
+        async move {
+            if let Err(err) = forwarding.handle_remote_streamlocal_channel(channel, socket_path).await {
+                warn!(?err, socket = socket_path, "remote unix forwarded connection failed");
             }
             Ok(())
         }

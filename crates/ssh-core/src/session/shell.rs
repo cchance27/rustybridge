@@ -1,8 +1,5 @@
 use std::{
-    env,
-    io::{self, Cursor, Read, Write},
-    thread,
-    time::Duration,
+    env, io::{self, Cursor, Read, Write}, thread, time::Duration
 };
 
 use anyhow::Result;
@@ -10,21 +7,23 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size as term_size};
 use russh::Sig;
 use signal_hook::iterator::Signals;
 use tokio::{
-    io::AsyncWriteExt,
-    sync::mpsc::{UnboundedSender, unbounded_channel},
+    io::AsyncWriteExt, sync::mpsc::{UnboundedSender, unbounded_channel}
 };
 
-use super::SessionHandle;
-use crate::terminal::{NewlineMode, current_pty_modes, map_input};
+use super::SharedSessionHandle;
+use crate::{
+    forwarding::ForwardingManager, terminal::{NewlineMode, current_pty_modes, map_input}
+};
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct ShellOptions {
     pub newline_mode: NewlineMode,
     pub local_echo: bool,
     pub forward_agent: bool,
+    pub forwarding: ForwardingManager,
 }
 
-pub async fn run_shell<H>(session: &mut SessionHandle<H>, options: ShellOptions) -> Result<()>
+pub async fn run_shell<H>(session: &SharedSessionHandle<H>, options: ShellOptions) -> Result<()>
 where
     H: russh::client::Handler + Send,
 {
@@ -32,6 +31,7 @@ where
     if options.forward_agent {
         channel.agent_forward(false).await?;
     }
+    options.forwarding.prepare_channel(&channel).await?;
     let (cols, rows) = term_size().unwrap_or((80, 24));
     let pty_modes = current_pty_modes();
     channel

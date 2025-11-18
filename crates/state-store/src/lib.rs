@@ -1,7 +1,5 @@
 use std::{
-    env,
-    fs::{self, File},
-    path::{Path, PathBuf},
+    env, fs::{self, File}, path::{Path, PathBuf}
 };
 
 use anyhow::{Context, Result, anyhow};

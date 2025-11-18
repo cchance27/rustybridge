@@ -1,14 +1,11 @@
 use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    sync::Arc,
+    collections::HashMap, path::{Path, PathBuf}, sync::Arc
 };
 
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use cbc::{
-    Decryptor,
-    cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7},
+    Decryptor, cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7}
 };
 use des::TdesEde3;
 use hex::FromHex;
@@ -16,9 +13,7 @@ use md5;
 use rpassword::{prompt_password, read_password};
 use rsa::{RsaPrivateKey, pkcs1::DecodeRsaPrivateKey, pkcs8::EncodePrivateKey};
 use russh::{
-    MethodSet,
-    client::{self, AuthResult, KeyboardInteractiveAuthResponse},
-    keys::{self, Certificate, HashAlg, PrivateKeyWithHashAlg},
+    MethodSet, client::{self, AuthResult, KeyboardInteractiveAuthResponse}, keys::{self, Certificate, HashAlg, PrivateKeyWithHashAlg}
 };
 use ssh_core::session::SessionHandle;
 use tokio::{fs, task};

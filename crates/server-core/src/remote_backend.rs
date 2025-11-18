@@ -1,14 +1,11 @@
 //! Ratatui backend plumbing that knows how to emit escape sequences over russh channels.
 
 use std::{
-    io::{self, Write},
-    sync::{Arc, Mutex},
+    io::{self, Write}, sync::{Arc, Mutex}
 };
 
 use ratatui::{
-    Frame, Terminal,
-    backend::{Backend, ClearType, CrosstermBackend, WindowSize},
-    layout::{Position, Rect, Size},
+    Frame, Terminal, backend::{Backend, ClearType, CrosstermBackend, WindowSize}, layout::{Position, Rect, Size}
 };
 
 /// Owns a [`Terminal`] configured with the custom backend that writes into an in-memory buffer.

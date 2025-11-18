@@ -1,7 +1,6 @@
 use anyhow::Result;
 use rb_cli::{
-    init_tracing,
-    server_cli::{ServerArgs, ServerCommand},
+    init_tracing, server_cli::{ServerArgs, ServerCommand}
 };
 use server_core::{add_relay_host, run_server};
 
