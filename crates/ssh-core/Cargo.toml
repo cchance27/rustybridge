@@ -16,3 +16,6 @@ signal-hook.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 async-trait.workspace = true
+tracing-subscriber.workspace = true
+once_cell.workspace = true
+libc.workspace = true

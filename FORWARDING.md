@@ -13,11 +13,11 @@ This document tracks the status of SSH forwarding-related features so we can kee
 - Remote TCP forwards: `-R` requests are registered with the server, and incoming `forwarded-tcpip` channels are proxied back to the desired local host/port, matching OpenSSH’s behavior.
 - Dynamic SOCKS: `-D` spins up a SOCKS5 listener that accepts unauthenticated CONNECT requests and feeds them through new SSH channels, giving us parity with OpenSSH’s dynamic forwarding.
 - Unix socket forwards: both `--local-unix-forward` and `--remote-unix-forward` now work on Unix platforms, binding local sockets, issuing `direct-streamlocal` requests, and proxying inbound channels back to the requested local paths.
+- Escape sequences: the interactive shell recognizes Enter + `~` and displays a local control menu (with a colored `[rustybridge]` tag). Supported: `~.` disconnect, `~R` rekey, `~V/~v` change verbosity live, `~#` list forwards, `~~` literal `~`, `~^Z` suspend (Unix), and `~&` detach stdin (reattach via `SIGUSR1`).
 
 ## Pending Work
 
 - **X11 forwarding:** handle DISPLAY detection, MIT-MAGIC-COOKIE generation, and respond to server `x11` channels based on the new CLI flags.
-- **User feedback + lifecycle:** integrate forwarding status with the upcoming escape sequence UI so users can list active forwards, tear them down, or see errors.
 - **X11 CLI guard:** flags are marked `[unimplemented]` in the CLI and currently error out to prevent accidental use; remove this guard when support lands.
 
 As each feature lands, update the “Current Capabilities” list with short references to the relevant modules to keep this document a quick map for parity tracking.

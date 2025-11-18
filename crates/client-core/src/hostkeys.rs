@@ -218,7 +218,7 @@ async fn prompt_for_hostkey(authority: &str, algo: &str, fingerprint: &str) -> R
         println!("The authenticity of host '{authority}' can't be established.");
         println!("Key type: {algo}");
         println!("Fingerprint (SHA256): {fingerprint}");
-        print!("Accept host key? [y]es/[s]tore/[n]o: ");
+        print!("Accept host key? [y]es/[s]tore/[N]o: ");
         io::stdout().flush().ok();
         let mut input = String::new();
         io::stdin().read_line(&mut input).context("failed to read host-key confirmation")?;

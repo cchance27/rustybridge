@@ -6,6 +6,8 @@
 - Pluggable auth pipeline (password, identities, OpenSSH certs, SSH agent, keyboard-interactive).
 - Host-key verification backed by SQLx migrations to keep fingerprints consistent across runs.
 - Optional agent forwarding support for both shell and exec channels.
+- Forwarding manager for `-L/-R/-D`, Unix sockets (Unix), environment + locale propagation, and subsystem channels.
+- Interactive escape menu (Enter + `~`) for disconnect, rekey, verbosity, listing forwards, suspend, and detaching stdin.
 
 ## Example
 ```rust
