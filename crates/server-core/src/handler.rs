@@ -9,10 +9,13 @@ use russh::{
 };
 use tokio::{sync::watch, task::JoinHandle, time};
 use tracing::{info, warn};
-
-use crate::{
-    auth::{self, AuthDecision, LoginTarget, parse_login_target}, remote_backend::ServerTerminal, tui::{EchoTui, HELLO_BANNER, INSTRUCTIONS, desired_rect, status_tick_sequence}
+use tui_core::{
+    AppSession,
+    apps::echo::{EchoApp, desired_rect, status_tick_sequence},
+    backend::RemoteBackend,
 };
+
+use crate::auth::{self, AuthDecision, LoginTarget, parse_login_target};
 
 /// Tracks the lifecycle of a single SSH session, including authentication, PTY events, and TUI I/O.
 pub(super) struct ServerHandler {
@@ -23,8 +26,7 @@ pub(super) struct ServerHandler {
     channel: Option<ChannelId>,
     closed: bool,
     connected_at: Instant,
-    tui: Option<EchoTui>,
-    terminal: Option<ServerTerminal>,
+    app_session: Option<AppSession<RemoteBackend>>,
     last_was_cr: bool,
     pty_size: Option<(u16, u16)>,
     alt_screen: bool,
@@ -45,8 +47,7 @@ impl ServerHandler {
             channel: None,
             closed: false,
             connected_at: Instant::now(),
-            tui: None,
-            terminal: None,
+            app_session: None,
             last_was_cr: false,
             pty_size: None,
             alt_screen: false,
@@ -102,47 +103,30 @@ impl ServerHandler {
 
     /// Initialise the echo shell, including a fresh TUI instance and remote terminal.
     fn init_shell(&mut self) -> Result<(), russh::Error> {
-        self.tui = Some(EchoTui::with_default_messages());
+        let app = Box::new(EchoApp::new());
+        let rect = desired_rect(self.view_size());
+        let backend = RemoteBackend::new(rect);
+        let session = AppSession::new(app, backend).map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+        self.app_session = Some(session);
         self.last_was_cr = false;
-        self.ensure_terminal()?;
-        Ok(())
-    }
-
-    /// Lazily create the ratatui terminal when a session first needs it.
-    fn ensure_terminal(&mut self) -> Result<(), russh::Error> {
-        if self.terminal.is_none() {
-            let rect = desired_rect(self.view_size());
-            let terminal = ServerTerminal::new(rect).map_err(russh::Error::IO)?;
-            self.terminal = Some(terminal);
-        }
         Ok(())
     }
 
     /// Render the TUI and forward any emitted bytes to the SSH client.
     fn render_terminal(&mut self, session: &mut Session, channel: ChannelId) -> Result<(), russh::Error> {
-        if self.tui.is_none() {
-            return Ok(());
-        }
-        self.ensure_terminal()?;
         let rect = desired_rect(self.view_size());
-        {
-            let term = match self.terminal.as_mut() {
-                Some(term) => term,
-                None => return Ok(()),
-            };
-            term.ensure_size(rect).map_err(russh::Error::IO)?;
-            if let Some(tui) = self.tui.as_ref() {
-                let connected_for = self.connected_at.elapsed();
-                term.draw(|frame| tui.render(frame, connected_for)).map_err(russh::Error::IO)?;
-            }
+        if let Some(app_session) = self.app_session.as_mut() {
+            app_session.resize(rect).map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+            app_session.render().map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+            self.flush_terminal(session, channel)?;
         }
-        self.flush_terminal(session, channel)
+        Ok(())
     }
 
     /// Push accumulated escape sequences toward the remote SSH channel.
     fn flush_terminal(&mut self, session: &mut Session, channel: ChannelId) -> Result<(), russh::Error> {
-        if let Some(term) = self.terminal.as_ref() {
-            let bytes = term.drain_bytes();
+        if let Some(app_session) = self.app_session.as_ref() {
+            let bytes = app_session.backend().drain_bytes();
             if !bytes.is_empty() {
                 self.send_bytes(session, channel, &bytes)?;
             }
@@ -151,7 +135,7 @@ impl ServerHandler {
     }
 
     fn drop_terminal(&mut self) {
-        self.terminal = None;
+        self.app_session = None;
     }
 
     /// Switch the remote PTY into the alternate screen buffer once per session.
@@ -228,54 +212,6 @@ impl ServerHandler {
         if let Some(handle) = self.tick_task.take() {
             handle.abort();
         }
-    }
-
-    /// Remove the most recent character from the TUI input buffer and refresh the view.
-    fn handle_backspace(&mut self, session: &mut Session, channel: ChannelId) -> Result<(), russh::Error> {
-        if let Some(tui) = self.tui.as_mut()
-            && tui.pop_char()
-        {
-            self.render_terminal(session, channel)?;
-        }
-        Ok(())
-    }
-
-    /// Append a printable character to the input buffer and trigger a redraw.
-    fn handle_printable(&mut self, ch: char, session: &mut Session, channel: ChannelId) -> Result<(), russh::Error> {
-        if let Some(tui) = self.tui.as_mut()
-            && tui.push_char(ch)
-        {
-            self.render_terminal(session, channel)?;
-        }
-        Ok(())
-    }
-
-    /// Process a full line (exit, echo, etc.) once the user presses Enter.
-    fn complete_line(&mut self, session: &mut Session, channel: ChannelId) -> Result<LineAction, russh::Error> {
-        let Some(tui) = self.tui.as_mut() else {
-            return Ok(LineAction::Continue);
-        };
-        let line = tui.take_input();
-        let trimmed = line.trim().to_string();
-
-        if trimmed.is_empty() {
-            self.render_terminal(session, channel)?;
-            return Ok(LineAction::Continue);
-        }
-
-        tui.push_line(format!("> {trimmed}"));
-
-        if trimmed.eq_ignore_ascii_case("exit") || trimmed.eq_ignore_ascii_case("quit") {
-            tui.push_line("Bye!");
-            self.render_terminal(session, channel)?;
-            self.handle_exit(session, channel)?;
-            return Ok(LineAction::Closed);
-        }
-
-        let response = format!("echoed: {trimmed}");
-        tui.push_line(response);
-        self.render_terminal(session, channel)?;
-        Ok(LineAction::Continue)
     }
 }
 
@@ -456,6 +392,11 @@ impl ssh_server::Handler for ServerHandler {
     async fn exec_request(&mut self, channel: ChannelId, data: &[u8], session: &mut Session) -> Result<(), Self::Error> {
         session.channel_success(channel)?;
         self.channel = Some(channel);
+        // For exec, we don't use the TUI app, just simple echo
+        // Or we could use EchoApp in non-interactive mode?
+        // The original implementation just echoed the command.
+        // Let's keep it simple as before.
+        use tui_core::apps::echo::{HELLO_BANNER, INSTRUCTIONS};
         self.send_line(session, channel, HELLO_BANNER)?;
         self.send_line(session, channel, INSTRUCTIONS)?;
         if !data.is_empty() {
@@ -480,39 +421,19 @@ impl ssh_server::Handler for ServerHandler {
             return Ok(());
         }
 
-        for &byte in data {
-            match byte {
-                b'\r' => {
-                    if matches!(self.complete_line(session, channel)?, LineAction::Closed) {
-                        break;
-                    }
-                    self.last_was_cr = true;
-                }
-                b'\n' => {
-                    if self.last_was_cr {
-                        self.last_was_cr = false;
-                        continue;
-                    }
-                    if matches!(self.complete_line(session, channel)?, LineAction::Closed) {
-                        break;
-                    }
-                }
-                0x7f | 0x08 => {
-                    self.last_was_cr = false;
-                    self.handle_backspace(session, channel)?;
-                }
-                b'\t' => {
-                    self.last_was_cr = false;
-                    self.handle_printable(' ', session, channel)?;
-                }
-                byte if byte.is_ascii() => {
-                    self.last_was_cr = false;
-                    let ch = byte as char;
-                    if !ch.is_control() {
-                        self.handle_printable(ch, session, channel)?;
-                    }
-                }
-                _ => {}
+        let should_render = if let Some(app_session) = self.app_session.as_mut() {
+            app_session.handle_input(data).map_err(|e| russh::Error::IO(std::io::Error::other(e)))?
+        } else {
+            false
+        };
+
+        if should_render {
+            self.render_terminal(session, channel)?;
+        }
+
+        if let Some(app_session) = self.app_session.as_ref() {
+            if app_session.should_exit() {
+                self.handle_exit(session, channel)?;
             }
         }
 
@@ -557,7 +478,7 @@ impl ssh_server::Handler for ServerHandler {
     async fn channel_close(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
         if Some(channel) == self.channel {
             self.relay_handle = None;
-            if self.tui.is_some() {
+            if self.app_session.is_some() {
                 self.leave_alt_screen(session, channel)?;
             }
             self.stop_tick_task();
@@ -572,11 +493,4 @@ impl ssh_server::Handler for ServerHandler {
 /// Display helper used for tracing; keeps logging concise when the socket address is unavailable.
 pub(super) fn display_addr(addr: Option<SocketAddr>) -> String {
     addr.map(|a| a.to_string()).unwrap_or_else(|| "<unknown>".into())
-}
-
-/// Signal used inside `data` to determine whether the SSH channel should remain open.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LineAction {
-    Continue,
-    Closed,
 }

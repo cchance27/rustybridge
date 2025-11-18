@@ -1,30 +1,34 @@
 //! Ratatui backend plumbing that knows how to emit escape sequences over russh channels.
+//!
+//! This is migrated from server-core/src/remote_backend.rs
 
 use std::{
-    io::{self, Write}, sync::{Arc, Mutex}
+    io::{self, Write},
+    sync::{Arc, Mutex},
 };
 
 use ratatui::{
-    Frame, Terminal, backend::{Backend, ClearType, CrosstermBackend, WindowSize}, layout::{Position, Rect, Size}
+    backend::{Backend, ClearType, CrosstermBackend, WindowSize},
+    layout::{Position, Rect, Size},
 };
 
 /// Owns a [`Terminal`] configured with the custom backend that writes into an in-memory buffer.
 ///
 /// The handler renders into this terminal and later drains the bytes to forward over SSH.
-pub(super) struct ServerTerminal {
-    terminal: Terminal<RemoteBackend>,
+pub struct ServerTerminal {
+    terminal: ratatui::Terminal<RemoteBackend>,
 }
 
 impl ServerTerminal {
     /// Create a new terminal tied to a fixed area. The backend can be resized later.
-    pub(super) fn new(area: Rect) -> io::Result<Self> {
+    pub fn new(area: Rect) -> io::Result<Self> {
         let backend = RemoteBackend::new(area);
-        let terminal = Terminal::new(backend)?;
+        let terminal = ratatui::Terminal::new(backend)?;
         Ok(Self { terminal })
     }
 
     /// Ensure the terminal's viewport matches the remote PTY dimensions.
-    pub(super) fn ensure_size(&mut self, area: Rect) -> io::Result<()> {
+    pub fn ensure_size(&mut self, area: Rect) -> io::Result<()> {
         if self.terminal.backend().area() != area {
             self.terminal.backend_mut().set_size(area);
             self.terminal.resize(area)?;
@@ -33,23 +37,23 @@ impl ServerTerminal {
     }
 
     /// Render a frame using ratatui's differential draw API.
-    pub(super) fn draw<F>(&mut self, f: F) -> io::Result<()>
+    pub fn draw<F>(&mut self, f: F) -> io::Result<()>
     where
-        F: FnOnce(&mut Frame),
+        F: FnOnce(&mut ratatui::Frame),
     {
         self.terminal.draw(f)?;
         Ok(())
     }
 
     /// Consume any pending escape sequences produced by the backend.
-    pub(super) fn drain_bytes(&self) -> Vec<u8> {
+    pub fn drain_bytes(&self) -> Vec<u8> {
         self.terminal.backend().drain_bytes()
     }
 }
 
 /// Ratatui backend that mirrors `CrosstermBackend` but writes into a shared buffer.
 #[derive(Clone)]
-pub(super) struct RemoteBackend {
+pub struct RemoteBackend {
     inner: CrosstermBackend<SessionWriter>,
     size: Rect,
     writer_handle: SessionWriter,
@@ -57,7 +61,7 @@ pub(super) struct RemoteBackend {
 
 impl RemoteBackend {
     /// Instantiate the backend for the provided viewport.
-    pub(super) fn new(area: Rect) -> Self {
+    pub fn new(area: Rect) -> Self {
         let writer = SessionWriter::default();
         Self {
             inner: CrosstermBackend::new(writer.clone()),
@@ -67,16 +71,16 @@ impl RemoteBackend {
     }
 
     /// Update the cached area without resizing the underlying terminal yet.
-    pub(super) fn set_size(&mut self, area: Rect) {
+    pub fn set_size(&mut self, area: Rect) {
         self.size = area;
     }
 
-    pub(super) fn area(&self) -> Rect {
+    pub fn area(&self) -> Rect {
         self.size
     }
 
     /// Drain the collected escape sequences so the handler can forward them over SSH.
-    pub(super) fn drain_bytes(&self) -> Vec<u8> {
+    pub fn drain_bytes(&self) -> Vec<u8> {
         self.writer_handle.take()
     }
 }

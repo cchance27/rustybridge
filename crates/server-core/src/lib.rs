@@ -7,10 +7,8 @@ mod auth;
 pub mod error;
 mod handler;
 mod relay;
-mod remote_backend;
 pub mod secrets;
 mod server_manager;
-mod tui;
 
 use secrecy::ExposeSecret;
 use std::{sync::Arc, time::Duration};
