@@ -1,22 +1,15 @@
 #![cfg(feature = "forwarding-tests")]
 
 use std::{
-    net::TcpListener,
-    sync::{Arc, Mutex},
-    time::Duration,
+    net::TcpListener, sync::{Arc, Mutex}, time::Duration
 };
 
 use anyhow::Result;
 use russh::{
-    Channel, ChannelId, CryptoVec,
-    client::{self, Handler},
-    keys::{Algorithm, PrivateKey, ssh_key::rand_core::OsRng, PublicKey},
-    server::{self, Auth, MethodKind, MethodSet, Session, Server as _},
+    Channel, ChannelId, CryptoVec, client::{self, Handler}, keys::{Algorithm, PrivateKey, PublicKey, ssh_key::rand_core::OsRng}, server::{self, Auth, MethodKind, MethodSet, Server as _, Session}
 };
 use ssh_core::{
-    crypto::legacy_preferred,
-    forwarding::{ForwardingConfig, ForwardingManager},
-    session::run_subsystem_with_io,
+    crypto::legacy_preferred, forwarding::{ForwardingConfig, ForwardingManager}, session::run_subsystem_with_io
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 
@@ -51,10 +44,7 @@ async fn subsystem_round_trip_streams_data() -> Result<()> {
     client_config.keepalive_interval = Some(Duration::from_secs(5));
     let handler = TestClientHandler;
     let mut session = client::connect(Arc::new(client_config), ("127.0.0.1", port), handler).await?;
-    session
-        .authenticate_password("tester", "secret")
-        .await
-        .expect("password auth");
+    session.authenticate_password("tester", "secret").await.expect("password auth");
     let session = Arc::new(session);
 
     let forwarding = ForwardingManager::new(ForwardingConfig::default());
@@ -119,11 +109,7 @@ struct EchoHandler {
 impl server::Handler for EchoHandler {
     type Error = anyhow::Error;
 
-    fn auth_password(
-        &mut self,
-        _user: &str,
-        _password: &str,
-    ) -> impl std::future::Future<Output = Result<Auth, Self::Error>> + Send {
+    fn auth_password(&mut self, _user: &str, _password: &str) -> impl std::future::Future<Output = Result<Auth, Self::Error>> + Send {
         async { Ok(Auth::Accept) }
     }
 
@@ -183,10 +169,7 @@ struct TestClientHandler;
 impl Handler for TestClientHandler {
     type Error = anyhow::Error;
 
-    fn check_server_key(
-        &mut self,
-        _server_public_key: &PublicKey,
-    ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
+    fn check_server_key(&mut self, _server_public_key: &PublicKey) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
         async { Ok(true) }
     }
 }

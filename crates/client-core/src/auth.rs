@@ -9,7 +9,6 @@ use cbc::{
 };
 use des::TdesEde3;
 use hex::FromHex;
-use md5;
 use rpassword::{prompt_password, read_password};
 use rsa::{RsaPrivateKey, pkcs1::DecodeRsaPrivateKey, pkcs8::EncodePrivateKey};
 use russh::{

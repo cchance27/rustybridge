@@ -520,10 +520,10 @@ impl ForwardingManager {
     async fn cleanup_local_unix_sockets(&self) {
         let mut paths = self.state.local_unix_paths.lock().await;
         for path in paths.drain(..) {
-            if let Err(err) = std::fs::remove_file(&path) {
-                if err.kind() != std::io::ErrorKind::NotFound {
-                    warn!(?err, socket = %path.display(), "failed to remove unix socket");
-                }
+            if let Err(err) = std::fs::remove_file(&path)
+                && err.kind() != std::io::ErrorKind::NotFound
+            {
+                warn!(?err, socket = %path.display(), "failed to remove unix socket");
             }
         }
     }
@@ -687,10 +687,10 @@ impl ForwardingManager {
     }
 
     async fn send_locale_var(&self, key: &str, sent: &mut HashSet<String>, channel: &Channel<client::Msg>) -> Result<()> {
-        if let Ok(value) = env::var(key) {
-            if sent.insert(key.to_string()) {
-                channel.set_env(false, key, value).await?;
-            }
+        if let Ok(value) = env::var(key)
+            && sent.insert(key.to_string())
+        {
+            channel.set_env(false, key, value).await?;
         }
         Ok(())
     }
@@ -717,10 +717,10 @@ impl ForwardingManager {
         S: ForwardSession,
     {
         let path = spec.local_socket.clone();
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
         }
         if path.exists() {
             let _ = fs::remove_file(&path);
@@ -1028,6 +1028,20 @@ where
     }
 }
 
+#[async_trait]
+impl RemoteForwardChannel for Channel<client::Msg> {
+    type Stream = ChannelStream<client::Msg>;
+
+    fn into_stream(self) -> Self::Stream {
+        Channel::into_stream(self)
+    }
+
+    async fn close(self) -> Result<()> {
+        Channel::close(&self).await?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1096,19 +1110,5 @@ mod tests {
         assert!(descriptors.iter().any(|d| d == "subsystem sftp"));
         assert!(descriptors.iter().any(|d| d == "env"));
         assert!(descriptors.iter().any(|d| d == "locale:all"));
-    }
-}
-
-#[async_trait]
-impl RemoteForwardChannel for Channel<client::Msg> {
-    type Stream = ChannelStream<client::Msg>;
-
-    fn into_stream(self) -> Self::Stream {
-        Channel::into_stream(self)
-    }
-
-    async fn close(self) -> Result<()> {
-        Channel::close(&self).await?;
-        Ok(())
     }
 }

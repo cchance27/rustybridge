@@ -11,9 +11,8 @@ use tokio::{
 };
 
 use super::SharedSessionHandle;
-use crate::logging;
 use crate::{
-    forwarding::ForwardingManager, terminal::{NewlineMode, current_pty_modes, map_input}
+    forwarding::ForwardingManager, logging, terminal::{NewlineMode, current_pty_modes, map_input}
 };
 
 #[derive(Clone)]
@@ -312,7 +311,7 @@ struct EscapeParser {
     escape: u8,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 enum EscapeAction {
     Disconnect,
     Break,
@@ -322,17 +321,18 @@ enum EscapeAction {
     Suspend,
     Background,
     ListForwards,
+    #[default]
     LiteralTilde,
     ShowMenu,
 }
 
-impl Default for EscapeAction {
-    fn default() -> Self { EscapeAction::LiteralTilde }
-}
-
 impl EscapeParser {
     fn default() -> Self {
-        Self { at_line_start: true, in_escape: false, escape: b'~' }
+        Self {
+            at_line_start: true,
+            in_escape: false,
+            escape: b'~',
+        }
     }
 
     fn process(&mut self, data: &[u8]) -> (Vec<EscapeAction>, Vec<u8>) {
@@ -414,7 +414,9 @@ fn signal_for_os(code: i32) -> Option<Sig> {
     }
 }
 
-fn tag() -> &'static str { "\x1b[97;41m [rustybridge] \x1b[0m" }
+fn tag() -> &'static str {
+    "\x1b[97;41m [rustybridge] \x1b[0m"
+}
 
 fn escape_help_text() -> String {
     let mut lines: Vec<String> = Vec::new();

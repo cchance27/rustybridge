@@ -156,7 +156,12 @@ pub async fn run_client(args: ClientConfig) -> Result<()> {
     forwarding.start_local_unix_forwarders(session.clone()).await?;
     forwarding.start_dynamic_socks(session.clone()).await?;
 
-    let subsystem_names = forwarding.config().subsystems.iter().map(|sub| sub.name.clone()).collect::<Vec<_>>();
+    let subsystem_names = forwarding
+        .config()
+        .subsystems
+        .iter()
+        .map(|sub| sub.name.clone())
+        .collect::<Vec<_>>();
 
     let outcome = if !subsystem_names.is_empty() {
         for name in subsystem_names {

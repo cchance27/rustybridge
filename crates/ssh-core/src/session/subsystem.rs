@@ -3,13 +3,11 @@ use std::io::Cursor;
 use anyhow::{Result, anyhow};
 use russh::{ChannelMsg, client};
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    sync::mpsc::{UnboundedSender, unbounded_channel},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt}, sync::mpsc::{UnboundedSender, unbounded_channel}
 };
 
-use crate::forwarding::ForwardingManager;
-
 use super::SharedSessionHandle;
+use crate::forwarding::ForwardingManager;
 
 /// Run an SSH subsystem using the process STDIN/STDOUT streams.
 pub async fn run_subsystem<H>(
