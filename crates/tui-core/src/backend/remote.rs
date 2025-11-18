@@ -57,6 +57,7 @@ pub struct RemoteBackend {
     inner: CrosstermBackend<SessionWriter>,
     size: Rect,
     writer_handle: SessionWriter,
+    cursor: (u16, u16),
 }
 
 impl RemoteBackend {
@@ -67,6 +68,7 @@ impl RemoteBackend {
             inner: CrosstermBackend::new(writer.clone()),
             size: area,
             writer_handle: writer,
+            cursor: (0, 0),
         }
     }
 
@@ -102,11 +104,11 @@ impl Backend for RemoteBackend {
     }
 
     fn get_cursor(&mut self) -> io::Result<(u16, u16)> {
-        let position = self.inner.get_cursor_position()?;
-        Ok((position.x, position.y))
+        Ok(self.cursor)
     }
 
     fn set_cursor(&mut self, x: u16, y: u16) -> io::Result<()> {
+        self.cursor = (x, y);
         self.inner.set_cursor_position(Position { x, y })
     }
 

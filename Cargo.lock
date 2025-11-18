@@ -2287,6 +2287,8 @@ dependencies = [
  "anyhow",
  "clap",
  "client-core",
+ "crossterm 0.29.0",
+ "ratatui",
  "rpassword",
  "secrecy",
  "serial_test",
@@ -2295,6 +2297,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "tui-core",
  "whoami",
 ]
 

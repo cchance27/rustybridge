@@ -37,12 +37,13 @@ impl StatusBar {
         let center_padding = remaining.saturating_sub(center_len) / 2;
         
         // Build line
-        let mut line = Vec::new();
-        line.push(Span::raw(&self.left));
-        line.push(Span::raw(" ".repeat(center_padding)));
-        line.push(Span::raw(&self.center));
-        line.push(Span::raw(" ".repeat(center_padding)));
-        line.push(Span::raw(&self.right));
+        let line = vec![
+            Span::raw(&self.left),
+            Span::raw(" ".repeat(center_padding)),
+            Span::raw(&self.center),
+            Span::raw(" ".repeat(center_padding)),
+            Span::raw(&self.right)
+        ];
         
         let paragraph = Paragraph::new(Line::from(line))
             .style(Style::default().bg(Color::DarkGray).fg(Color::White));

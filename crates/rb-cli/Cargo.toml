@@ -15,6 +15,9 @@ tracing-subscriber.workspace = true
 whoami.workspace = true
 server-core = { path = "../server-core" }
 secrecy.workspace = true
+tui-core.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
 
 [dev-dependencies]
 serial_test = "3"

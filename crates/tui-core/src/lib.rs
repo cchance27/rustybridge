@@ -8,10 +8,13 @@ mod error;
 
 pub mod apps;
 pub mod backend;
+pub mod registry;
 pub mod session;
+pub mod utils;
 pub mod widgets;
 
 // Re-export core types
 pub use app::{TuiApp, AppAction, CONTINUE, RE_RENDER};
 pub use error::{TuiError, TuiResult};
+pub use registry::{AppFactory, AppRegistry};
 pub use session::AppSession;

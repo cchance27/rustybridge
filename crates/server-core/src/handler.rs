@@ -10,9 +10,9 @@ use russh::{
 use tokio::{sync::watch, task::JoinHandle, time};
 use tracing::{info, warn};
 use tui_core::{
-    AppSession,
-    apps::echo::{EchoApp, desired_rect, status_tick_sequence},
+    AppSession, AppAction,
     backend::RemoteBackend,
+    utils::{desired_rect, status_tick_sequence},
 };
 
 use crate::auth::{self, AuthDecision, LoginTarget, parse_login_target};
@@ -103,7 +103,22 @@ impl ServerHandler {
 
     /// Initialise the echo shell, including a fresh TUI instance and remote terminal.
     fn init_shell(&mut self) -> Result<(), russh::Error> {
-        let app = Box::new(EchoApp::new());
+        let (app, app_name): (Box<dyn tui_core::TuiApp>, &str) = if self.username.as_deref() == Some("admin") {
+            (Box::new(tui_core::apps::ManagementApp::new()), "ManagementApp")
+        } else {
+            use tui_core::apps::relay_selector::RelayItem;
+            // TODO: Fetch real relays from state_store
+            let relays = vec![
+                 RelayItem { name: "us-east-1".into(), description: "Primary US Relay".into(), id: 1 },
+                 RelayItem { name: "eu-central-1".into(), description: "Frankfurt Relay".into(), id: 2 },
+            ];
+            (Box::new(tui_core::apps::RelaySelectorApp::new(relays)), "RelaySelectorApp")
+        };
+
+        let username = self.username.as_deref().unwrap_or("unknown");
+        let peer_addr = if let  Some(peer_addr) = self.peer_addr { format!("{:?}", peer_addr) } else { "unknown".to_string() };     
+        info!("tui launched app={} user={} peer={}", app_name, username, peer_addr); 
+
         let rect = desired_rect(self.view_size());
         let backend = RemoteBackend::new(rect);
         let session = AppSession::new(app, backend).map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
@@ -116,10 +131,43 @@ impl ServerHandler {
     fn render_terminal(&mut self, session: &mut Session, channel: ChannelId) -> Result<(), russh::Error> {
         let rect = desired_rect(self.view_size());
         if let Some(app_session) = self.app_session.as_mut() {
-            app_session.resize(rect).map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+            if app_session.backend().area() != rect {
+                app_session.backend_mut().set_size(rect);
+                app_session.resize(rect).map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+            }
             app_session.render().map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
             self.flush_terminal(session, channel)?;
         }
+        Ok(())
+    }
+
+    async fn switch_app(&mut self, app_name: &str, session: &mut Session, channel: ChannelId) -> Result<(), russh::Error> {
+        let username = self.username.as_deref().unwrap_or("unknown");
+        let peer_addr = if let  Some(peer_addr) = self.peer_addr { format!("{:?}", peer_addr) } else { "unknown".to_string() };     
+        info!("tui switched app={} user={} peer={}", app_name, username, peer_addr); 
+        let app: Box<dyn tui_core::TuiApp> = match app_name {
+            "Management" => Box::new(tui_core::apps::ManagementApp::new()),
+            _ => {
+                 use tui_core::apps::relay_selector::RelayItem;
+                // TODO: Fetch real relays from state_store
+
+                 let relays = vec![
+                     RelayItem { name: "us-east-1".into(), description: "Primary US Relay".into(), id: 1 },
+                     RelayItem { name: "eu-central-1".into(), description: "Frankfurt Relay".into(), id: 2 },
+                 ];
+                 Box::new(tui_core::apps::RelaySelectorApp::new(relays))
+            }
+        };
+        
+        let rect = desired_rect(self.view_size());
+        let backend = RemoteBackend::new(rect);
+        let mut new_session = AppSession::new(app, backend).map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+        
+        new_session.clear().map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+        new_session.render().map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+        
+        self.app_session = Some(new_session);
+        self.flush_terminal(session, channel)?;
         Ok(())
     }
 
@@ -396,9 +444,9 @@ impl ssh_server::Handler for ServerHandler {
         // Or we could use EchoApp in non-interactive mode?
         // The original implementation just echoed the command.
         // Let's keep it simple as before.
-        use tui_core::apps::echo::{HELLO_BANNER, INSTRUCTIONS};
-        self.send_line(session, channel, HELLO_BANNER)?;
-        self.send_line(session, channel, INSTRUCTIONS)?;
+        // use tui_core::apps::echo::{HELLO_BANNER, INSTRUCTIONS};
+        // self.send_line(session, channel, HELLO_BANNER)?;
+        // self.send_line(session, channel, INSTRUCTIONS)?;
         if !data.is_empty() {
             let cmd = String::from_utf8_lossy(data).trim().to_string();
             if !cmd.is_empty() {
@@ -421,22 +469,21 @@ impl ssh_server::Handler for ServerHandler {
             return Ok(());
         }
 
-        let should_render = if let Some(app_session) = self.app_session.as_mut() {
-            app_session.handle_input(data).map_err(|e| russh::Error::IO(std::io::Error::other(e)))?
-        } else {
-            false
-        };
-
-        if should_render {
-            self.render_terminal(session, channel)?;
+        if let Some(app_session) = self.app_session.as_mut() {
+             let action = app_session.handle_input(data).map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+             match action {
+                 AppAction::Exit => {
+                     self.handle_exit(session, channel)?;
+                 }
+                 AppAction::Render => {
+                     self.render_terminal(session, channel)?;
+                 }
+                 AppAction::SwitchTo(app_name) => {
+                     self.switch_app(&app_name, session, channel).await?;
+                 }
+                 AppAction::Continue => {}
+             }
         }
-
-        if let Some(app_session) = self.app_session.as_ref() {
-            if app_session.should_exit() {
-                self.handle_exit(session, channel)?;
-            }
-        }
-
         Ok(())
     }
 

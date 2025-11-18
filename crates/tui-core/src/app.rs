@@ -8,26 +8,26 @@ use crate::TuiResult;
 /// that can run both over SSH (remote) and standalone (local terminal).
 pub trait TuiApp: Send {
     /// Handle raw input bytes from the user.
-    /// 
-    /// Returns `true` if the input was handled and should trigger a re-render,
-    /// `false` if the input was ignored.
-    fn handle_input(&mut self, input: &[u8]) -> TuiResult<bool>;
+    fn handle_input(&mut self, input: &[u8]) -> TuiResult<AppAction>;
     
     /// Render the app's current state to the provided frame.
     /// 
     /// This is called during the render cycle and should use ratatui's
     /// widget API to draw the UI.
-    fn render(&self, frame: &mut Frame);
+    /// 
+    /// `uptime` is the duration since the session started.
+    fn render(&mut self, frame: &mut Frame, uptime: std::time::Duration);
     
     /// Optional periodic tick handler for time-based updates.
-    /// 
-    /// Returns `true` if the tick resulted in a state change that requires re-render.
-    fn tick(&mut self) -> TuiResult<bool> {
-        Ok(false)
+    fn tick(&mut self) -> TuiResult<AppAction> {
+        Ok(AppAction::Continue)
     }
     
     /// Check if the app has requested to exit.
-    fn should_exit(&self) -> bool;
+    /// Deprecated: Use AppAction::Exit return value instead.
+    fn should_exit(&self) -> bool {
+        false
+    }
     
     /// Get a human-readable name for this app (for logging/debugging).
     fn name(&self) -> &str {
@@ -35,8 +35,19 @@ pub trait TuiApp: Send {
     }
 }
 
-/// Result of an app operation indicating whether re-render is needed
-pub type AppAction = bool;
+/// Result of an app operation indicating the next step
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppAction {
+    /// Do nothing, wait for next event
+    Continue,
+    /// Trigger a re-render
+    Render,
+    /// Exit the application
+    Exit,
+    /// Switch to another application by name
+    SwitchTo(String),
+}
 
-pub const CONTINUE: AppAction = false;
-pub const RE_RENDER: AppAction = true;
+// Backward compatibility constants (deprecated)
+pub const CONTINUE: AppAction = AppAction::Continue;
+pub const RE_RENDER: AppAction = AppAction::Render;

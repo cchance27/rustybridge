@@ -141,6 +141,116 @@ async fn main() -> Result<()> {
                 "Secrets rotation complete. Set RB_SERVER_SECRETS_KEY (base64 32B) or RB_SERVER_SECRETS_PASSPHRASE to the NEW value and restart rb-server."
             );
         }
+        Some(ServerSubcommand::Tui { cmd }) => {
+            use rb_cli::server_cli::TuiCmd;
+            let app: Box<dyn tui_core::TuiApp> = match cmd {
+                TuiCmd::RelaySelector => {
+                    use tui_core::apps::relay_selector::RelayItem;
+                    let relays = vec![
+                        RelayItem { name: "us-east-1".into(), description: "Primary US Relay".into(), id: 1 },
+                        RelayItem { name: "eu-central-1".into(), description: "Frankfurt Relay".into(), id: 2 },
+                    ];
+                    Box::new(tui_core::apps::RelaySelectorApp::new(relays))
+                }
+                TuiCmd::Management => Box::new(tui_core::apps::ManagementApp::new()),
+            };
+            
+            run_tui(app).await?;
+        }
     }
+    Ok(())
+}
+
+async fn run_tui(mut app: Box<dyn tui_core::TuiApp>) -> Result<()> {
+    use crossterm::{
+        event::{self, Event, KeyCode, KeyEventKind},
+        execute,
+        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    };
+    use ratatui::prelude::*;
+    use std::io::stdout;
+    use tui_core::{AppSession, AppAction};
+
+    enable_raw_mode()?;
+    let mut stdout = stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    
+    loop {
+        let backend = CrosstermBackend::new(std::io::stdout());
+        let mut session = AppSession::new(app, backend).map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
+        let mut next_app_name: Option<String> = None;
+        
+        loop {
+            session.render().map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
+            
+            if event::poll(std::time::Duration::from_millis(100))? 
+                && let Event::Key(key) = event::read()? 
+                && key.kind == KeyEventKind::Press {
+                let mut bytes = Vec::new();
+                match key.code {
+                    KeyCode::Char(c) => bytes.push(c as u8),
+                    KeyCode::Enter => bytes.push(b'\n'),
+                    KeyCode::Backspace => bytes.push(0x7f),
+                    KeyCode::Esc => bytes.push(0x1b),
+                    KeyCode::Up => bytes.extend_from_slice(b"\x1b[A"),
+                    KeyCode::Down => bytes.extend_from_slice(b"\x1b[B"),
+                    KeyCode::Right => bytes.extend_from_slice(b"\x1b[C"),
+                    KeyCode::Left => bytes.extend_from_slice(b"\x1b[D"),
+                    KeyCode::Tab => bytes.push(b'\t'),
+                    _ => {}
+                }
+                
+                if !bytes.is_empty() {
+                    let action = session.handle_input(&bytes).map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
+                    match action {
+                        AppAction::Exit => break,
+                        AppAction::SwitchTo(name) => {
+                            next_app_name = Some(name);
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            
+            let action = session.tick().map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
+            match action {
+                AppAction::Exit => break,
+                AppAction::SwitchTo(name) => {
+                    next_app_name = Some(name);
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(name) = next_app_name {
+            use tui_core::apps::{ManagementApp, RelaySelectorApp, RelayItem};
+            app = match name.as_str() {
+                "RelaySelector" => {
+                    let relays = vec![
+                        RelayItem { name: "us-east-1".into(), description: "Primary US Relay".into(), id: 1 },
+                        RelayItem { name: "eu-central-1".into(), description: "Frankfurt Relay".into(), id: 2 },
+                    ];
+                    Box::new(RelaySelectorApp::new(relays))
+                }
+                "Management" => Box::new(ManagementApp::new()),
+                _ => {
+                    let relays = vec![
+                        RelayItem { name: "us-east-1".into(), description: "Primary US Relay".into(), id: 1 },
+                        RelayItem { name: "eu-central-1".into(), description: "Frankfurt Relay".into(), id: 2 },
+                    ];
+                    Box::new(RelaySelectorApp::new(relays))
+                }
+            };
+            // Clear screen for next app
+            execute!(stdout, crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?;
+        } else {
+            break;
+        }
+    }
+
+    disable_raw_mode()?;
+    execute!(std::io::stdout(), LeaveAlternateScreen)?;
     Ok(())
 }

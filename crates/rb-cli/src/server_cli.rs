@@ -54,6 +54,19 @@ pub enum ServerSubcommand {
         #[command(subcommand)]
         cmd: SecretsCmd,
     },
+    /// Launch a TUI application locally
+    Tui {
+        #[command(subcommand)]
+        cmd: TuiCmd,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TuiCmd {
+    /// Launch the Relay Selector app
+    RelaySelector,
+    /// Launch the Management app
+    Management,
 }
 
 #[derive(Debug, Subcommand)]

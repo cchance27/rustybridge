@@ -1,6 +1,8 @@
 // App implementations
 
-pub mod echo;
+pub mod management;
+pub mod relay_selector;
 
 // Re-exports
-pub use echo::EchoApp;
+pub use management::ManagementApp;
+pub use relay_selector::{RelayItem, RelaySelectorApp};

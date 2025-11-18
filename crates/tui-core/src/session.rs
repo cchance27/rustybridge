@@ -31,21 +31,28 @@ impl<B: Backend> AppSession<B> {
     }
     
     /// Handle user input
-    pub fn handle_input(&mut self, data: &[u8]) -> TuiResult<bool> {
+    pub fn handle_input(&mut self, data: &[u8]) -> TuiResult<crate::AppAction> {
         self.app.handle_input(data)
     }
     
     /// Handle periodic tick
-    pub fn tick(&mut self) -> TuiResult<bool> {
+    pub fn tick(&mut self) -> TuiResult<crate::AppAction> {
         self.app.tick()
     }
     
     /// Render the app
     pub fn render(&mut self) -> TuiResult<()> {
+        let uptime = self.connected_at.elapsed();
         self.terminal.draw(|frame| {
-            self.app.render(frame);
+            self.app.render(frame, uptime);
         })?;
         self.last_render = Instant::now();
+        Ok(())
+    }
+
+    /// Clear the terminal screen
+    pub fn clear(&mut self) -> TuiResult<()> {
+        self.terminal.clear()?;
         Ok(())
     }
     
