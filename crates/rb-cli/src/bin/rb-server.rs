@@ -1,61 +1,145 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
+use clap::Parser;
 use rb_cli::{
-    init_tracing, server_cli::{ServerArgs, ServerCommand}
+    init_tracing, server_cli::{
+        CredsCmd, CredsCreateCmd, HostsAccessCmd, HostsCmd, HostsCredsCmd, HostsOptionsCmd, SecretsCmd, ServerArgs, ServerSubcommand, UsersCmd
+    }
 };
 use server_core::{
-    add_relay_host,
-    grant_relay_access,
-    list_access,
-    list_hosts,
-    list_options,
-    list_users,
-    add_user,
-    remove_user,
-    refresh_target_hostkey,
-    revoke_relay_access,
-    run_server,
-    set_relay_option,
-    unset_relay_option,
+    add_relay_host, add_user, assign_credential, create_agent_credential, create_password_credential, delete_credential, grant_relay_access, list_access, list_credentials, list_hosts, list_options, list_users, refresh_target_hostkey, remove_user, revoke_relay_access, rotate_secrets_key, run_server, set_relay_option, unassign_credential, unset_relay_option
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
-    match ServerArgs::parse_command()? {
-        ServerCommand::Run(cfg) => run_server(cfg).await?,
-        ServerCommand::AddRelayHost { endpoint, name } => add_relay_host(&endpoint, &name).await?,
-        ServerCommand::GrantAccess { name, user } => grant_relay_access(&name, &user).await?,
-        ServerCommand::SetOption { name, key, value } => set_relay_option(&name, &key, &value).await?,
-        ServerCommand::UnsetOption { name, key } => unset_relay_option(&name, &key).await?,
-        ServerCommand::RevokeAccess { name, user } => revoke_relay_access(&name, &user).await?,
-        ServerCommand::ListHosts => {
-            let items = list_hosts().await?;
-            for h in items {
-                println!("{} {}:{}", h.name, h.ip, h.port);
+    let args = ServerArgs::parse();
+    match args.cmd {
+        None => run_server(args.to_run_config()).await?,
+        Some(ServerSubcommand::Hosts { cmd }) => match cmd {
+            HostsCmd::Add { name, endpoint } => add_relay_host(&endpoint, &name).await?,
+            HostsCmd::List => {
+                for h in list_hosts().await? {
+                    println!("{} {}:{}", h.name, h.ip, h.port);
+                }
             }
-        }
-        ServerCommand::ListOptions { name } => {
-            let items = list_options(&name).await?;
-            for (k, v) in items {
-                println!("{}={}", k, v);
+            HostsCmd::Delete { name } => {
+                server_core::delete_relay_host(&name).await?;
             }
-        }
-        ServerCommand::ListAccess { name } => {
-            let users = list_access(&name).await?;
-            for u in users { println!("{}", u); }
-        }
-        ServerCommand::AddUser { user, password } => {
-            let pass = if let Some(p) = password { p } else { rpassword::prompt_password(format!("Enter password for {user}: "))? };
-            add_user(&user, &pass).await?;
-        }
-        ServerCommand::RemoveUser { user } => {
-            remove_user(&user).await?;
-        }
-        ServerCommand::ListUsers => {
-            for u in list_users().await? { println!("{}", u); }
-        }
-        ServerCommand::RefreshTargetHostkey { name } => {
-            refresh_target_hostkey(&name).await?;
+            HostsCmd::Options(sub) => match sub {
+                HostsOptionsCmd::List { name } => {
+                    for (k, v) in list_options(&name).await? {
+                        println!("{}={}", k, v);
+                    }
+                }
+                HostsOptionsCmd::Set { name, key, value } => set_relay_option(&name, &key, &value).await?,
+                HostsOptionsCmd::Unset { name, key } => unset_relay_option(&name, &key).await?,
+            },
+            HostsCmd::Access(sub) => match sub {
+                HostsAccessCmd::Grant { name, user } => grant_relay_access(&name, &user).await?,
+                HostsAccessCmd::Revoke { name, user } => revoke_relay_access(&name, &user).await?,
+                HostsAccessCmd::List { name } => {
+                    for u in list_access(&name).await? {
+                        println!("{}", u);
+                    }
+                }
+            },
+            HostsCmd::RefreshHostkey { name } => refresh_target_hostkey(&name).await?,
+            HostsCmd::Creds(sub) => match sub {
+                HostsCredsCmd::Assign { name, cred_name } => assign_credential(&name, &cred_name).await?,
+                HostsCredsCmd::Unassign { name } => unassign_credential(&name).await?,
+            },
+        },
+        Some(ServerSubcommand::Users { cmd }) => match cmd {
+            UsersCmd::Add { user, password } => {
+                let pass = if let Some(p) = password {
+                    p
+                } else {
+                    rpassword::prompt_password(format!("Enter password for {user}: "))?
+                };
+                add_user(&user, &pass).await?;
+            }
+            UsersCmd::Remove { user } => remove_user(&user).await?,
+            UsersCmd::List => {
+                for u in list_users().await? {
+                    println!("{}", u);
+                }
+            }
+        },
+        Some(ServerSubcommand::Creds { cmd }) => match cmd {
+            CredsCmd::Create(kind) => match kind {
+                CredsCreateCmd::Password { name, username, value } => {
+                    let pass = if let Some(v) = value {
+                        v
+                    } else {
+                        rpassword::prompt_password(format!("Enter credential password for {name}: "))?
+                    };
+                    let _ = create_password_credential(&name, Some(&username), &pass).await?;
+                }
+                CredsCreateCmd::SshKey {
+                    name,
+                    username,
+                    key_file,
+                    value,
+                    cert_file,
+                    passphrase,
+                } => {
+                    let key_data = if let Some(v) = value {
+                        v
+                    } else if let Some(path) = key_file {
+                        std::fs::read_to_string(&path)?
+                    } else {
+                        return Err(anyhow!("--key-file or --value is required for ssh-key credentials"));
+                    };
+                    let cert_data = if let Some(cp) = cert_file {
+                        Some(std::fs::read_to_string(&cp)?)
+                    } else {
+                        None
+                    };
+                    let _ = server_core::create_ssh_key_credential(
+                        &name,
+                        Some(&username),
+                        &key_data,
+                        cert_data.as_deref(),
+                        passphrase.as_deref(),
+                    )
+                    .await?;
+                }
+                CredsCreateCmd::Agent {
+                    name,
+                    username,
+                    pubkey_file,
+                    value,
+                } => {
+                    let pubkey = if let Some(v) = value {
+                        v
+                    } else if let Some(path) = pubkey_file {
+                        std::fs::read_to_string(&path)?
+                    } else {
+                        return Err(anyhow!("--pubkey-file or --value is required for agent credentials"));
+                    };
+                    let _ = create_agent_credential(&name, Some(&username), &pubkey).await?;
+                }
+            },
+            CredsCmd::Delete { name, force: _ } => {
+                // force not yet used; guard already enforced in server-core
+                delete_credential(&name).await?;
+            }
+            CredsCmd::List => {
+                for (_id, name, kind) in list_credentials().await? {
+                    println!("{} {}", name, kind);
+                }
+            }
+        },
+        Some(ServerSubcommand::Secrets {
+            cmd: SecretsCmd::RotateKey,
+        }) => {
+            println!("Rotate server secrets will re-encrypt all credentials and relay options.");
+            let old = rpassword::prompt_password("Enter CURRENT secrets key or passphrase: ")?;
+            let new = rpassword::prompt_password("Enter NEW secrets key or passphrase: ")?;
+            rotate_secrets_key(&old, &new).await?;
+            println!(
+                "Secrets rotation complete. Set RB_SERVER_SECRETS_KEY (base64 32B) or RB_SERVER_SECRETS_PASSPHRASE to the NEW value and restart rb-server."
+            );
         }
     }
     Ok(())

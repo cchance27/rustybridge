@@ -1,5 +1,6 @@
-use anyhow::{Result, anyhow};
-use clap::{ArgAction, Parser};
+use std::path::PathBuf;
+
+use clap::{Parser, Subcommand};
 use server_core::ServerConfig;
 
 const DEFAULT_SERVER_PORT: u16 = 2222;
@@ -7,193 +8,170 @@ const DEFAULT_SERVER_PORT: u16 = 2222;
 #[derive(Debug, Parser)]
 #[command(name = "rb-server", about = "Embedded jump host / relay manager")]
 pub struct ServerArgs {
-    /// Address to bind the embedded server to (defaults to 0.0.0.0)
+    /// Address to bind the embedded server to (defaults to 127.0.0.1)
     #[arg(long, value_name = "ADDR")]
     pub bind: Option<String>,
     /// Override the listening port (defaults to 2222)
     #[arg(short = 'P', long, value_name = "PORT")]
     pub port: Option<u16>,
     /// Force regeneration of the stored server host key on startup
-    #[arg(long, action = ArgAction::SetTrue)]
+    #[arg(long, action = clap::ArgAction::SetTrue)]
     pub roll_hostkey: bool,
-    /// Add or update a relay host entry (ip:port)
-    #[arg(long = "add-host", value_name = "IP:PORT")]
-    pub add_host: Option<String>,
-    /// Hostname used across admin operations (add-host, grant/revoke, set/unset, list)
-    #[arg(long = "hostname", value_name = "NAME")]
-    pub hostname: Option<String>,
 
-    /// Grant a user access to a relay host
-    #[arg(long = "grant-access", action = ArgAction::SetTrue, requires = "hostname", conflicts_with_all = ["set_option_key", "unset_option_key", "revoke_access", "list_hosts", "list_options", "list_access"])]
-    pub grant_access: bool,
-    /// Username for --grant-access/--revoke-access
-    #[arg(long = "user", value_name = "USER")]
-    pub user: Option<String>,
-
-    /// Set an option key/value for a relay host
-    #[arg(long = "set-option", value_name = "KEY", requires = "hostname", conflicts_with_all = ["grant_access", "revoke_access", "unset_option_key", "list_hosts", "list_options", "list_access"])]
-    pub set_option_key: Option<String>,
-    /// Value for --set-option
-    #[arg(long = "value", value_name = "VALUE", requires = "set_option_key")]
-    pub set_option_value: Option<String>,
-
-    /// Unset (remove) an option for a relay host
-    #[arg(long = "unset-option", value_name = "KEY", requires = "hostname", conflicts_with_all = ["grant_access", "revoke_access", "set_option_key", "list_hosts", "list_options", "list_access"])]
-    pub unset_option_key: Option<String>,
-
-    /// Revoke a user's access to a relay host
-    #[arg(long = "revoke-access", action = ArgAction::SetTrue, requires = "hostname", conflicts_with_all = ["grant_access", "set_option_key", "unset_option_key", "list_hosts", "list_options", "list_access"])]
-    pub revoke_access: bool,
-
-    /// List all relay hosts
-    #[arg(long = "list-hosts", action = ArgAction::SetTrue, conflicts_with_all = ["grant_access", "revoke_access", "set_option_key", "unset_option_key", "hostname", "list_options", "list_access"])]
-    pub list_hosts: bool,
-
-    /// List all options for the target hostname
-    #[arg(long = "list-options", action = ArgAction::SetTrue, requires = "hostname", conflicts_with_all = ["grant_access", "revoke_access", "set_option_key", "unset_option_key", "list_hosts", "list_access"])]
-    pub list_options: bool,
-
-    /// List all users with access to the target hostname
-    #[arg(long = "list-access", action = ArgAction::SetTrue, requires = "hostname", conflicts_with_all = ["grant_access", "revoke_access", "set_option_key", "unset_option_key", "list_hosts", "list_options"])]
-    pub list_access: bool,
-
-    /// Add a new user (prompts for password if not provided)
-    #[arg(long = "add-user", action = ArgAction::SetTrue, conflicts_with_all = ["list_hosts", "list_options", "list_access", "grant_access", "revoke_access", "set_option_key", "unset_option_key", "add_host", "hostname"])]
-    pub add_user: bool,
-    /// Remove a user and revoke all of their access
-    #[arg(long = "remove-user", action = ArgAction::SetTrue, conflicts_with_all = ["list_hosts", "list_options", "list_access", "grant_access", "revoke_access", "set_option_key", "unset_option_key", "add_host", "hostname"])]
-    pub remove_user: bool,
-    /// Password for --add-user; omit to be prompted securely
-    #[arg(long = "password", value_name = "PASSWORD")]
-    pub password: Option<String>,
-
-    /// List all users (prints one username per line)
-    #[arg(long = "list-user", action = ArgAction::SetTrue, visible_alias = "list-users", conflicts_with_all = ["list_hosts", "list_options", "list_access", "grant_access", "revoke_access", "set_option_key", "unset_option_key", "add_host", "hostname", "add_user", "remove_user", "user", "password"])]
-    pub list_user: bool,
-
-    /// Refresh target's stored host key by refetching it (prompts to store)
-    #[arg(long = "refresh-target-hostkey", action = ArgAction::SetTrue, requires = "hostname", conflicts_with_all = ["list_hosts", "list_options", "list_access", "grant_access", "revoke_access", "set_option_key", "unset_option_key", "add_host", "add_user", "remove_user", "user", "password", "list_user"])]
-    pub refresh_target_hostkey: bool,
-}
-
-#[derive(Clone)]
-pub enum ServerCommand {
-    Run(ServerConfig),
-    AddRelayHost { endpoint: String, name: String },
-    GrantAccess { name: String, user: String },
-    SetOption { name: String, key: String, value: String },
-    UnsetOption { name: String, key: String },
-    RevokeAccess { name: String, user: String },
-    ListHosts,
-    ListOptions { name: String },
-    ListAccess { name: String },
-    AddUser { user: String, password: Option<String> },
-    RemoveUser { user: String },
-    ListUsers,
-    RefreshTargetHostkey { name: String },
+    #[command(subcommand)]
+    pub cmd: Option<ServerSubcommand>,
 }
 
 impl ServerArgs {
-    pub fn parse_command() -> Result<ServerCommand> {
-        let args = ServerArgs::parse();
-        ServerCommand::try_from(args)
+    pub fn to_run_config(&self) -> ServerConfig {
+        ServerConfig {
+            bind: self.bind.clone().unwrap_or_else(|| "127.0.0.1".to_string()),
+            port: self.port.unwrap_or(DEFAULT_SERVER_PORT),
+            roll_hostkey: self.roll_hostkey,
+        }
     }
 }
 
-impl TryFrom<ServerArgs> for ServerCommand {
-    type Error = anyhow::Error;
+#[derive(Debug, Subcommand)]
+pub enum ServerSubcommand {
+    /// Manage relay hosts
+    Hosts {
+        #[command(subcommand)]
+        cmd: HostsCmd,
+    },
+    /// Manage server users
+    Users {
+        #[command(subcommand)]
+        cmd: UsersCmd,
+    },
+    /// Manage generic relay credentials
+    Creds {
+        #[command(subcommand)]
+        cmd: CredsCmd,
+    },
+    /// Manage server secrets
+    Secrets {
+        #[command(subcommand)]
+        cmd: SecretsCmd,
+    },
+}
 
-    fn try_from(args: ServerArgs) -> Result<Self> {
-        if let Some(endpoint) = args.add_host {
-            let name = args
-                .hostname
-                .ok_or_else(|| anyhow!("--hostname is required when using --add-host"))?;
-            return Ok(ServerCommand::AddRelayHost { endpoint, name });
-        }
+#[derive(Debug, Subcommand)]
+pub enum HostsCmd {
+    /// Add or update a relay host (ip:port)
+    Add { name: String, endpoint: String },
+    /// List configured relay hosts
+    List,
+    /// Delete a relay host (cascades options and ACLs)
+    Delete { name: String },
+    /// Relay host options
+    #[command(subcommand)]
+    Options(HostsOptionsCmd),
+    /// Access control (ACLs) for a host
+    #[command(subcommand)]
+    Access(HostsAccessCmd),
+    /// Refetch and store the host key for a host
+    RefreshHostkey { name: String },
+    /// Assign/unassign credentials to a host
+    #[command(subcommand)]
+    Creds(HostsCredsCmd),
+}
 
-        if args.grant_access {
-            let name = args
-                .hostname
-                .ok_or_else(|| anyhow!("--hostname is required when using --grant-access"))?;
-            let user = args
-                .user
-                .ok_or_else(|| anyhow!("--user is required when using --grant-access"))?;
-            return Ok(ServerCommand::GrantAccess { name, user });
-        }
+#[derive(Debug, Subcommand)]
+pub enum HostsOptionsCmd {
+    /// List all options for a host
+    List { name: String },
+    /// Set a key to a value (stored encrypted at rest)
+    Set { name: String, key: String, value: String },
+    /// Remove an option
+    Unset { name: String, key: String },
+}
 
-        if let Some(key) = args.set_option_key {
-            let name = args
-                .hostname
-                .ok_or_else(|| anyhow!("--hostname is required when using --set-option"))?;
-            let value = args
-                .set_option_value
-                .ok_or_else(|| anyhow!("--value is required when using --set-option"))?;
-            return Ok(ServerCommand::SetOption { name, key, value });
-        }
+#[derive(Debug, Subcommand)]
+pub enum HostsAccessCmd {
+    /// Grant a user access to a host
+    Grant { name: String, user: String },
+    /// Revoke a user's access from a host
+    Revoke { name: String, user: String },
+    /// List users with access to a host
+    List { name: String },
+}
 
-        if let Some(key) = args.unset_option_key {
-            let name = args
-                .hostname
-                .ok_or_else(|| anyhow!("--hostname is required when using --unset-option"))?;
-            return Ok(ServerCommand::UnsetOption { name, key });
-        }
+#[derive(Debug, Subcommand)]
+pub enum HostsCredsCmd {
+    /// Assign a credential to a host
+    Assign { name: String, cred_name: String },
+    /// Unassign any credential from a host
+    Unassign { name: String },
+}
 
-        if args.revoke_access {
-            let name = args
-                .hostname
-                .ok_or_else(|| anyhow!("--hostname is required when using --revoke-access"))?;
-            let user = args
-                .user
-                .ok_or_else(|| anyhow!("--user is required when using --revoke-access"))?;
-            return Ok(ServerCommand::RevokeAccess { name, user });
-        }
+#[derive(Debug, Subcommand)]
+pub enum UsersCmd {
+    /// Add a user (prompts for password if omitted)
+    Add {
+        user: String,
+        #[arg(long)]
+        password: Option<String>,
+    },
+    /// Remove a user (revokes all access)
+    Remove { user: String },
+    /// List users
+    List,
+}
 
-        if args.list_hosts {
-            return Ok(ServerCommand::ListHosts);
-        }
+#[derive(Debug, Subcommand)]
+pub enum CredsCmd {
+    /// Create a credential
+    #[command(subcommand)]
+    Create(CredsCreateCmd),
+    /// Delete a credential
+    Delete {
+        name: String,
+        #[arg(long)]
+        force: bool,
+    },
+    /// List credentials
+    List,
+}
 
-        if args.list_options {
-            let name = args
-                .hostname
-                .ok_or_else(|| anyhow!("--hostname is required when using --list-options"))?;
-            return Ok(ServerCommand::ListOptions { name });
-        }
+#[derive(Debug, Subcommand)]
+pub enum CredsCreateCmd {
+    /// Create a password credential
+    Password {
+        name: String,
+        #[arg(long)]
+        username: String,
+        #[arg(long)]
+        value: Option<String>,
+    },
+    /// Create an SSH key credential
+    SshKey {
+        name: String,
+        #[arg(long)]
+        username: String,
+        #[arg(long)]
+        key_file: Option<PathBuf>,
+        #[arg(long)]
+        value: Option<String>,
+        #[arg(long)]
+        cert_file: Option<PathBuf>,
+        #[arg(long)]
+        passphrase: Option<String>,
+    },
+    /// Create an agent credential (restrict agent auth to this public key)
+    Agent {
+        name: String,
+        #[arg(long)]
+        username: String,
+        #[arg(long)]
+        pubkey_file: Option<PathBuf>,
+        #[arg(long)]
+        value: Option<String>,
+    },
+}
 
-        if args.list_access {
-            let name = args
-                .hostname
-                .ok_or_else(|| anyhow!("--hostname is required when using --list-access"))?;
-            return Ok(ServerCommand::ListAccess { name });
-        }
-
-        if args.add_user {
-            let user = args.user.ok_or_else(|| anyhow!("--user is required with --add-user"))?;
-            return Ok(ServerCommand::AddUser { user, password: args.password });
-        }
-
-        if args.remove_user {
-            let user = args.user.ok_or_else(|| anyhow!("--user is required with --remove-user"))?;
-            return Ok(ServerCommand::RemoveUser { user });
-        }
-
-        if args.list_user {
-            return Ok(ServerCommand::ListUsers);
-        }
-
-        if args.refresh_target_hostkey {
-            let name = args
-                .hostname
-                .ok_or_else(|| anyhow!("--hostname is required when using --refresh-target-hostkey"))?;
-            return Ok(ServerCommand::RefreshTargetHostkey { name });
-        }
-
-        let bind = args.bind.unwrap_or_else(|| "0.0.0.0".to_string());
-        let port = args.port.unwrap_or(DEFAULT_SERVER_PORT);
-
-        Ok(ServerCommand::Run(ServerConfig {
-            bind,
-            port,
-            roll_hostkey: args.roll_hostkey,
-        }))
-    }
+#[derive(Debug, Subcommand)]
+pub enum SecretsCmd {
+    /// Rotate the server secrets key (re-encrypt credentials and options)
+    RotateKey,
 }

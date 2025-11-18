@@ -1,0 +1,40 @@
+use anyhow::Result;
+use serial_test::serial;
+use sqlx::{Row, SqlitePool};
+
+#[tokio::test]
+#[serial]
+async fn option_encryption_and_masked_listing() -> Result<()> {
+    unsafe {
+        std::env::set_var("RB_SERVER_DB_URL", "sqlite:file:option_test?mode=memory&cache=shared");
+    }
+    unsafe {
+        std::env::set_var("RB_SERVER_SECRETS_PASSPHRASE", "pass-old");
+    }
+    let handle = state_store::server_db().await?;
+    state_store::migrate_server(&handle).await?;
+    let pool: SqlitePool = handle.into_pool();
+
+    // Insert host
+    sqlx::query("INSERT INTO relay_hosts (name, ip, port) VALUES ('h2', '127.0.0.1', 22)")
+        .execute(&pool)
+        .await?;
+
+    // Set an option
+    server_core::set_relay_option("h2", "api.secret", "supersecret").await?;
+
+    // Verify it's encrypted at rest
+    let row = sqlx::query(
+        "SELECT value FROM relay_host_options WHERE relay_host_id = (SELECT id FROM relay_hosts WHERE name='h2') AND key='api.secret'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    let stored: String = row.get("value");
+    assert!(server_core::secrets::is_encrypted_marker(&stored));
+
+    // List via helper: should be masked
+    let items = server_core::list_options("h2").await?;
+    let (_, v) = items.into_iter().find(|(k, _)| k == "api.secret").expect("entry");
+    assert_eq!(v, "<encrypted>");
+    Ok(())
+}

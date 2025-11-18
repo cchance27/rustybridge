@@ -39,12 +39,11 @@ pub struct RelayHost {
 }
 
 pub async fn fetch_relay_host_by_name(pool: &SqlitePool, name: &str) -> Result<Option<RelayHost>> {
-    if let Some(row) = sqlx::query_as::<_, RelayHost>(
-        "SELECT id, name, ip, port FROM relay_hosts WHERE name = ?",
-    )
-    .bind(name)
-    .fetch_optional(pool)
-    .await? {
+    if let Some(row) = sqlx::query_as::<_, RelayHost>("SELECT id, name, ip, port FROM relay_hosts WHERE name = ?")
+        .bind(name)
+        .fetch_optional(pool)
+        .await?
+    {
         Ok(Some(RelayHost {
             id: row.id,
             name: row.name,
@@ -58,12 +57,10 @@ pub async fn fetch_relay_host_by_name(pool: &SqlitePool, name: &str) -> Result<O
 
 pub async fn fetch_relay_host_options(pool: &SqlitePool, relay_host_id: i64) -> Result<std::collections::HashMap<String, String>> {
     let mut map = std::collections::HashMap::new();
-    let rows = sqlx::query_as::<_, (String, String)>(
-        "SELECT key, value FROM relay_host_options WHERE relay_host_id = ?"
-    )
-    .bind(relay_host_id)
-    .fetch_all(pool)
-    .await?;
+    let rows = sqlx::query_as::<_, (String, String)>("SELECT key, value FROM relay_host_options WHERE relay_host_id = ?")
+        .bind(relay_host_id)
+        .fetch_all(pool)
+        .await?;
     for row in rows {
         map.insert(row.0, row.1);
     }
@@ -71,13 +68,11 @@ pub async fn fetch_relay_host_options(pool: &SqlitePool, relay_host_id: i64) -> 
 }
 
 pub async fn user_has_relay_access(pool: &SqlitePool, username: &str, relay_host_id: i64) -> Result<bool> {
-    let row = sqlx::query(
-        "SELECT id FROM relay_host_acl WHERE username = ? AND relay_host_id = ?"
-    )
-    .bind(username)
-    .bind(relay_host_id)
-    .fetch_optional(pool)
-    .await?;
+    let row = sqlx::query("SELECT id FROM relay_host_acl WHERE username = ? AND relay_host_id = ?")
+        .bind(username)
+        .bind(relay_host_id)
+        .fetch_optional(pool)
+        .await?;
     Ok(row.is_some())
 }
 
@@ -87,17 +82,20 @@ pub async fn list_relay_hosts(pool: &SqlitePool) -> Result<Vec<RelayHost>> {
         .await?;
     Ok(rows
         .into_iter()
-        .map(|row| RelayHost { id: row.id, name: row.name, ip: row.ip, port: row.port })
+        .map(|row| RelayHost {
+            id: row.id,
+            name: row.name,
+            ip: row.ip,
+            port: row.port,
+        })
         .collect())
 }
 
 pub async fn fetch_relay_access_usernames(pool: &SqlitePool, relay_host_id: i64) -> Result<Vec<String>> {
-    let rows = sqlx::query(
-        "SELECT username FROM relay_host_acl WHERE relay_host_id = ? ORDER BY username",
-    )
-    .bind(relay_host_id)
-    .fetch_all(pool)
-    .await?;
+    let rows = sqlx::query("SELECT username FROM relay_host_acl WHERE relay_host_id = ? ORDER BY username")
+        .bind(relay_host_id)
+        .fetch_all(pool)
+        .await?;
     Ok(rows.into_iter().map(|r| r.get::<String, _>("username")).collect())
 }
 
@@ -118,17 +116,103 @@ pub async fn fetch_user_password_hash(pool: &SqlitePool, username: &str) -> Resu
 }
 
 pub async fn count_users(pool: &SqlitePool) -> Result<i64> {
-    let row = sqlx::query("SELECT COUNT(*) as cnt FROM users")
-        .fetch_one(pool)
-        .await?;
+    let row = sqlx::query("SELECT COUNT(*) as cnt FROM users").fetch_one(pool).await?;
     Ok(row.get::<i64, _>("cnt"))
 }
 
 pub async fn list_usernames(pool: &SqlitePool) -> Result<Vec<String>> {
-    let rows = sqlx::query("SELECT username FROM users ORDER BY username")
+    let rows = sqlx::query("SELECT username FROM users ORDER BY username").fetch_all(pool).await?;
+    Ok(rows.into_iter().map(|r| r.get::<String, _>("username")).collect())
+}
+
+#[derive(Debug, Clone)]
+pub struct RelayCredentialRow {
+    pub id: i64,
+    pub name: String,
+    pub kind: String,
+    pub salt: Vec<u8>,
+    pub nonce: Vec<u8>,
+    pub secret: Vec<u8>,
+    pub meta: Option<String>,
+}
+
+pub async fn insert_relay_credential(
+    pool: &SqlitePool,
+    name: &str,
+    kind: &str,
+    salt: &[u8],
+    nonce: &[u8],
+    secret: &[u8],
+    meta: Option<&str>,
+) -> Result<i64> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    sqlx::query(
+        "INSERT INTO relay_credentials (name, kind, salt, nonce, secret, meta, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(name)
+    .bind(kind)
+    .bind(salt)
+    .bind(nonce)
+    .bind(secret)
+    .bind(meta)
+    .bind(now)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    let row = sqlx::query("SELECT id FROM relay_credentials WHERE name = ?")
+        .bind(name)
+        .fetch_one(pool)
+        .await?;
+    Ok(row.get::<i64, _>("id"))
+}
+
+pub async fn delete_relay_credential_by_name(pool: &SqlitePool, name: &str) -> Result<()> {
+    sqlx::query("DELETE FROM relay_credentials WHERE name = ?")
+        .bind(name)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn get_relay_credential_by_name(pool: &SqlitePool, name: &str) -> Result<Option<RelayCredentialRow>> {
+    let row = sqlx::query("SELECT id, name, kind, salt, nonce, secret, meta FROM relay_credentials WHERE name = ?")
+        .bind(name)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(map_cred_row))
+}
+
+pub async fn get_relay_credential_by_id(pool: &SqlitePool, id: i64) -> Result<Option<RelayCredentialRow>> {
+    let row = sqlx::query("SELECT id, name, kind, salt, nonce, secret, meta FROM relay_credentials WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(map_cred_row))
+}
+
+pub async fn list_relay_credentials(pool: &SqlitePool) -> Result<Vec<(i64, String, String)>> {
+    let rows = sqlx::query("SELECT id, name, kind FROM relay_credentials ORDER BY name")
         .fetch_all(pool)
         .await?;
-    Ok(rows.into_iter().map(|r| r.get::<String, _>("username")).collect())
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.get::<i64, _>("id"), r.get::<String, _>("name"), r.get::<String, _>("kind")))
+        .collect())
+}
+
+fn map_cred_row(r: sqlx::sqlite::SqliteRow) -> RelayCredentialRow {
+    RelayCredentialRow {
+        id: r.get("id"),
+        name: r.get("name"),
+        kind: r.get("kind"),
+        salt: r.get("salt"),
+        nonce: r.get("nonce"),
+        secret: r.get("secret"),
+        meta: r.get("meta"),
+    }
 }
 
 /// Establish a pooled SQLite connection for client-side state (host keys, etc.).

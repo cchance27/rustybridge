@@ -1,13 +1,12 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, anyhow};
-use russh::{ChannelMsg, CryptoVec, client, keys};
-use tokio::sync::{mpsc, watch};
-use tracing::{info, warn};
-use russh::keys::HashAlg;
-
+use russh::{ChannelMsg, CryptoVec, client, keys, keys::HashAlg};
+use serde_json::Value as JsonValue;
 use ssh_core::crypto::default_preferred;
 use state_store::RelayHost;
+use tokio::sync::{mpsc, watch};
+use tracing::{info, warn};
 
 #[derive(Clone)]
 pub struct RelayHandle {
@@ -50,9 +49,17 @@ pub async fn start_bridge(
     }
     let prefer_compression = options.get("compression").map(|v| v == "true").unwrap_or(false);
     cfg.preferred.compression = if prefer_compression {
-        std::borrow::Cow::Owned(vec![russh::compression::ZLIB, russh::compression::ZLIB_LEGACY, russh::compression::NONE])
+        std::borrow::Cow::Owned(vec![
+            russh::compression::ZLIB,
+            russh::compression::ZLIB_LEGACY,
+            russh::compression::NONE,
+        ])
     } else {
-        std::borrow::Cow::Owned(vec![russh::compression::NONE, russh::compression::ZLIB, russh::compression::ZLIB_LEGACY])
+        std::borrow::Cow::Owned(vec![
+            russh::compression::NONE,
+            russh::compression::ZLIB,
+            russh::compression::ZLIB_LEGACY,
+        ])
     };
 
     let cfg = Arc::new(cfg);
@@ -109,35 +116,173 @@ pub async fn start_bridge(
         .with_context(|| format!("failed to connect to relay host {}", target))?;
 
     // Authenticate according to options.
-    let username = options
-        .get("auth.username")
-        .map(|s| s.as_str())
-        .unwrap_or(base_username);
     let method = options.get("auth.method").map(|s| s.as_str()).unwrap_or("password");
+    let username = resolve_auth_username(options, base_username).await;
+    let cred_id = options.get("auth.id").and_then(|s| s.parse::<i64>().ok());
     match method {
         "password" => {
-            let password = options
-                .get("auth.password")
-                .ok_or_else(|| anyhow!("relay host requires 'auth.password' for password auth"))?;
-            let res = remote
-                .authenticate_password(username.to_string(), password.clone())
-                .await?;
+            let password = if let Some(id) = cred_id {
+                let db = state_store::server_db().await?;
+                state_store::migrate_server(&db).await?;
+                let pool = db.into_pool();
+                let cred = state_store::get_relay_credential_by_id(&pool, id)
+                    .await?
+                    .ok_or_else(|| anyhow!("unknown credential id: {id}"))?;
+                if cred.kind != "password" {
+                    return Err(anyhow!("credential is not of kind password"));
+                }
+                let pt = crate::secrets::decrypt_secret(&cred.salt, &cred.nonce, &cred.secret)?;
+                String::from_utf8(pt).map_err(|_| anyhow!("credential secret is not valid UTF-8"))?
+            } else {
+                options
+                    .get("auth.password")
+                    .ok_or_else(|| anyhow!("relay host requires 'auth.password' for password auth"))?
+                    .to_string()
+            };
+            let res = remote.authenticate_password(username.to_string(), password).await?;
             ensure_success(res, "password")?;
         }
-        "publickey" => {
-            let key_path = options
-                .get("auth.identity")
-                .ok_or_else(|| anyhow!("relay host requires 'auth.identity' for publickey auth"))?;
+        "publickey" | "ssh_key" => {
             use russh::keys::HashAlg;
-            let key = load_private_key(PathBuf::from(key_path))
-                .await
-                .with_context(|| format!("failed to load identity from {}", key_path))?;
-            let key = Arc::new(key);
-            let key = keys::PrivateKeyWithHashAlg::new(key, None::<HashAlg>);
-            let res = remote
-                .authenticate_publickey(username.to_string(), key)
-                .await?;
-            ensure_success(res, "publickey")?;
+            // Prefer credential if provided; else require auth.identity path
+            if let Some(id) = cred_id {
+                let db = state_store::server_db().await?;
+                state_store::migrate_server(&db).await?;
+                let pool = db.into_pool();
+                let cred = state_store::get_relay_credential_by_id(&pool, id)
+                    .await?
+                    .ok_or_else(|| anyhow!("unknown credential id: {id}"))?;
+                if cred.kind != "ssh_key" {
+                    return Err(anyhow!("credential is not of kind ssh_key"));
+                }
+                // Decrypt secret JSON and parse key + optional certificate
+                let pt = crate::secrets::decrypt_secret(&cred.salt, &cred.nonce, &cred.secret)?;
+                let json: serde_json::Value = serde_json::from_slice(&pt).map_err(|e| anyhow!("invalid ssh_key secret payload: {e}"))?;
+                let pk_str = json
+                    .get("private_key")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow!("ssh_key payload missing private_key"))?;
+                let passphrase = json.get("passphrase").and_then(|v| v.as_str());
+                let priv_key = match keys::PrivateKey::from_openssh(pk_str) {
+                    Ok(k) => k,
+                    Err(_) => {
+                        if let Some(pw) = passphrase {
+                            keys::decode_secret_key(pk_str, Some(pw)).map_err(|e| anyhow!("failed to decode encrypted private key: {e}"))?
+                        } else {
+                            return Err(anyhow!("encrypted private key requires a passphrase in credential"));
+                        }
+                    }
+                };
+                let cert = json.get("certificate").and_then(|v| v.as_str());
+                let auth_res = if let Some(cert_str) = cert {
+                    let cert = keys::Certificate::from_openssh(cert_str)?;
+                    remote
+                        .authenticate_openssh_cert(username.to_string(), Arc::new(priv_key), cert)
+                        .await?
+                } else {
+                    let key = Arc::new(priv_key);
+                    let key = keys::PrivateKeyWithHashAlg::new(key, None::<HashAlg>);
+                    remote.authenticate_publickey(username.to_string(), key).await?
+                };
+                ensure_success(auth_res, "publickey")?;
+            } else {
+                let key_path = options
+                    .get("auth.identity")
+                    .ok_or_else(|| anyhow!("relay host requires 'auth.identity' or 'auth.id' for publickey/ssh_key auth"))?;
+                let r#priv = load_private_key(PathBuf::from(key_path))
+                    .await
+                    .with_context(|| format!("failed to load identity from {}", key_path))?;
+                let key = Arc::new(r#priv);
+                let key = keys::PrivateKeyWithHashAlg::new(key, None::<HashAlg>);
+                let res = remote.authenticate_publickey(username.to_string(), key).await?;
+                ensure_success(res, "publickey")?;
+            }
+        }
+        "agent" => {
+            #[cfg(unix)]
+            {
+                use russh::keys::agent::client::AgentClient;
+                use tokio::net::UnixStream;
+                // Resolve agent socket path
+                let socket = options
+                    .get("auth.agent_socket")
+                    .cloned()
+                    .or_else(|| std::env::var("RB_SERVER_SSH_AUTH_SOCK").ok())
+                    .or_else(|| std::env::var("SSH_AUTH_SOCK").ok())
+                    .ok_or_else(|| anyhow!("agent auth requested but no agent socket configured (set auth.agent_socket or RB_SERVER_SSH_AUTH_SOCK/SSH_AUTH_SOCK)"))?;
+                let stream = UnixStream::connect(&socket)
+                    .await
+                    .with_context(|| format!("failed to connect to SSH agent at {}", socket))?;
+                let mut agent = AgentClient::connect(stream);
+                let mut identities = agent
+                    .request_identities()
+                    .await
+                    .context("failed to list identities from SSH agent")?;
+                // If a specific agent credential is assigned, filter identities to match
+                if let Some(id) = cred_id {
+                    let db = state_store::server_db().await?;
+                    state_store::migrate_server(&db).await?;
+                    let pool = db.into_pool();
+                    if let Some(cred) = state_store::get_relay_credential_by_id(&pool, id).await? {
+                        if cred.kind == "agent" {
+                            let pt = crate::secrets::decrypt_secret(&cred.salt, &cred.nonce, &cred.secret)?;
+                            let json: serde_json::Value = serde_json::from_slice(&pt)?;
+                            let target_fp = json.get("fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string());
+                            let target_pk = json.get("public_key").and_then(|v| v.as_str()).map(|s| s.to_string());
+                            let mut filtered = Vec::new();
+                            for k in identities.into_iter() {
+                                let fp = k.fingerprint(russh::keys::HashAlg::Sha256).to_string();
+                                let matches_fp = target_fp.as_ref().map(|t| t == &fp).unwrap_or(false);
+                                let matches_pk = if let Some(ref pk) = target_pk {
+                                    k.to_openssh().ok().map(|s| s.to_string()) == Some(pk.clone())
+                                } else {
+                                    false
+                                };
+                                if matches_fp || matches_pk {
+                                    filtered.push(k);
+                                }
+                            }
+                            identities = filtered;
+                            if identities.is_empty() {
+                                return Err(anyhow!("SSH agent does not hold the required key for this host"));
+                            }
+                        }
+                    }
+                }
+                if identities.is_empty() {
+                    return Err(anyhow!("SSH agent has no loaded keys"));
+                }
+                // RSA hash hint
+                let rsa_hint = remote.best_supported_rsa_hash().await.unwrap_or(None).flatten();
+                let mut last = None;
+                for key in identities.drain(..) {
+                    let hash_alg = match key.algorithm() {
+                        keys::Algorithm::Rsa { .. } => rsa_hint,
+                        _ => None,
+                    };
+                    match remote
+                        .authenticate_publickey_with(username.to_string(), key.clone(), hash_alg, &mut agent)
+                        .await
+                    {
+                        Ok(result) if result.success() => {
+                            last = Some(result);
+                            break;
+                        }
+                        Ok(result) => {
+                            last = Some(result);
+                        }
+                        Err(err) => {
+                            warn!(?err, "agent authentication attempt failed");
+                        }
+                    }
+                }
+                let res = last.ok_or_else(|| anyhow!("agent authentication failed for all identities"))?;
+                ensure_success(res, "agent")?;
+            }
+            #[cfg(not(unix))]
+            {
+                return Err(anyhow!("agent authentication is not supported on this platform"));
+            }
         }
         other => return Err(anyhow!("unsupported relay auth.method: {other}")),
     }
@@ -145,9 +290,7 @@ pub async fn start_bridge(
     // Open channel + PTY + shell
     let rchan = remote.channel_open_session().await?;
     let (cols, rows) = initial_size;
-    rchan
-        .request_pty(true, "xterm", cols as u32, rows as u32, 0, 0, &[])
-        .await?;
+    rchan.request_pty(true, "xterm", cols as u32, rows as u32, 0, 0, &[]).await?;
     rchan.request_shell(true).await?;
 
     // Set up input channel for client->relay traffic.
@@ -217,23 +360,43 @@ pub async fn start_bridge(
     Ok(RelayHandle { input_tx: tx })
 }
 
+async fn resolve_auth_username(options: &std::collections::HashMap<String, String>, fallback: &str) -> String {
+    if let Some(u) = options.get("auth.username") {
+        return u.clone();
+    }
+    if let Some(id_str) = options.get("auth.id") {
+        if let Ok(id) = id_str.parse::<i64>() {
+            let db = match state_store::server_db().await {
+                Ok(h) => h,
+                Err(_) => return fallback.to_string(),
+            };
+            if state_store::migrate_server(&db).await.is_err() {
+                return fallback.to_string();
+            }
+            let pool = db.into_pool();
+            if let Ok(Some(row)) = state_store::get_relay_credential_by_id(&pool, id).await {
+                if let Some(meta) = row.meta {
+                    if let Ok(json) = serde_json::from_str::<JsonValue>(&meta) {
+                        if let Some(u) = json.get("username").and_then(|v| v.as_str()) {
+                            return u.to_string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    fallback.to_string()
+}
+
 async fn load_private_key(path: PathBuf) -> Result<keys::PrivateKey> {
     let data = tokio::fs::read_to_string(&path).await?;
     match keys::PrivateKey::from_openssh(&data) {
         Ok(key) => Ok(key),
-        Err(openssh_err) => {
-            match keys::decode_secret_key(&data, None) {
-                Ok(key) => Ok(key),
-                Err(keys::Error::KeyIsEncrypted) => Err(anyhow!(
-                    "encrypted private keys are not supported for server-side relay yet"
-                )),
-                Err(err) => Err(anyhow!(
-                    "{} is not a valid OpenSSH or PEM private key ({openssh_err})",
-                    path.display()
-                )
-                .context(err)),
-            }
-        }
+        Err(openssh_err) => match keys::decode_secret_key(&data, None) {
+            Ok(key) => Ok(key),
+            Err(keys::Error::KeyIsEncrypted) => Err(anyhow!("encrypted private keys are not supported for server-side relay yet")),
+            Err(err) => Err(anyhow!("{} is not a valid OpenSSH or PEM private key ({openssh_err})", path.display()).context(err)),
+        },
     }
 }
 

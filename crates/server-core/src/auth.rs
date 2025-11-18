@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
+use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
 use password_hash::{PasswordHash, PasswordVerifier};
-use argon2::{Argon2, password_hash::SaltString, PasswordHasher};
 use rand::rngs::OsRng;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

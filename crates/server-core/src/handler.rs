@@ -11,22 +11,20 @@ use tokio::{sync::watch, task::JoinHandle, time};
 use tracing::{info, warn};
 
 use crate::{
-    auth::{self, AuthDecision, LoginTarget, parse_login_target},
-    remote_backend::ServerTerminal,
-    tui::{EchoTui, HELLO_BANNER, INSTRUCTIONS, desired_rect, status_tick_sequence},
+    auth::{self, AuthDecision, LoginTarget, parse_login_target}, remote_backend::ServerTerminal, tui::{EchoTui, HELLO_BANNER, INSTRUCTIONS, desired_rect, status_tick_sequence}
 };
 
 /// Tracks the lifecycle of a single SSH session, including authentication, PTY events, and TUI I/O.
-    pub(super) struct ServerHandler {
-        pub(super) peer_addr: Option<SocketAddr>,
-        username: Option<String>,
-        relay_target: Option<String>,
-        relay_handle: Option<crate::relay::RelayHandle>,
-        channel: Option<ChannelId>,
-        closed: bool,
-        connected_at: Instant,
-        tui: Option<EchoTui>,
-        terminal: Option<ServerTerminal>,
+pub(super) struct ServerHandler {
+    pub(super) peer_addr: Option<SocketAddr>,
+    username: Option<String>,
+    relay_target: Option<String>,
+    relay_handle: Option<crate::relay::RelayHandle>,
+    channel: Option<ChannelId>,
+    closed: bool,
+    connected_at: Instant,
+    tui: Option<EchoTui>,
+    terminal: Option<ServerTerminal>,
     last_was_cr: bool,
     pty_size: Option<(u16, u16)>,
     alt_screen: bool,
@@ -300,7 +298,9 @@ impl ssh_server::Handler for ServerHandler {
 
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
         let login: LoginTarget = parse_login_target(user);
-        let decision = auth::authenticate_password(&login, password).await.map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+        let decision = auth::authenticate_password(&login, password)
+            .await
+            .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
 
         match decision {
             AuthDecision::Accept => {
@@ -339,7 +339,7 @@ impl ssh_server::Handler for ServerHandler {
         self.channel = Some(channel);
         if let Some(relay_name) = self.relay_target.clone() {
             // Permission check and connection scaffold
-            use state_store::{server_db, fetch_relay_host_by_name, fetch_relay_host_options, user_has_relay_access};
+            use state_store::{fetch_relay_host_by_name, fetch_relay_host_options, server_db, user_has_relay_access};
             let username = self.username.clone().unwrap_or_else(|| "<unknown>".into());
             match server_db().await {
                 Ok(handle) => {
@@ -348,11 +348,35 @@ impl ssh_server::Handler for ServerHandler {
                         Ok(Some(host)) => {
                             match user_has_relay_access(&pool, &username, host.id).await {
                                 Ok(true) => {
-                                    let _ = self.send_line(session, channel, &format!("user authenticated; connecting to relay host '{}'...", relay_name));
+                                    let _ = self.send_line(
+                                        session,
+                                        channel,
+                                        &format!("user authenticated; connecting to relay host '{}'...", relay_name),
+                                    );
                                     let options = match fetch_relay_host_options(&pool, host.id).await {
-                                        Ok(map) => map,
+                                        Ok(raw) => {
+                                            // Decrypt any encrypted option values.
+                                            let mut out = std::collections::HashMap::with_capacity(raw.len());
+                                            for (k, v) in raw.into_iter() {
+                                                match crate::secrets::decrypt_string_if_encrypted(&v) {
+                                                    Ok(val) => {
+                                                        out.insert(k, val);
+                                                    }
+                                                    Err(err) => {
+                                                        let _ = self.send_line(
+                                                            session,
+                                                            channel,
+                                                            &format!("internal error decrypting option '{k}': {err}"),
+                                                        );
+                                                        return self.handle_exit(session, channel);
+                                                    }
+                                                }
+                                            }
+                                            out
+                                        }
                                         Err(err) => {
-                                            let _ = self.send_line(session, channel, &format!("internal error loading relay options: {err}"));
+                                            let _ =
+                                                self.send_line(session, channel, &format!("internal error loading relay options: {err}"));
                                             return self.handle_exit(session, channel);
                                         }
                                     };
@@ -387,7 +411,11 @@ impl ssh_server::Handler for ServerHandler {
                                         relay = %relay_name,
                                         "relay access denied for user"
                                     );
-                                    let _ = self.send_line(session, channel, &format!("access denied: user '{}' is not permitted to connect to '{}'", username, relay_name));
+                                    let _ = self.send_line(
+                                        session,
+                                        channel,
+                                        &format!("access denied: user '{}' is not permitted to connect to '{}'", username, relay_name),
+                                    );
                                     self.handle_exit(session, channel)
                                 }
                                 Err(err) => {
