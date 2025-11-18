@@ -185,6 +185,10 @@ impl TryFrom<ClientArgs> for ClientConfig {
 
         let command = if command.is_empty() { None } else { Some(command.join(" ")) };
 
+        if !subsystems.is_empty() && command.is_some() {
+            bail!("--subsystem cannot be combined with remote commands");
+        }
+
         let rekey_interval = rekey_interval.map(Duration::from_secs);
         let rekey_bytes = rekey_bytes.map(validate_rekey_bytes).transpose()?;
         let keepalive_interval = keepalive_interval.map(Duration::from_secs);

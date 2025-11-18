@@ -174,6 +174,18 @@ fn send_env_and_subsystem_parsing() {
 
 #[test]
 #[serial]
+fn subsystem_rejects_remote_command() {
+    match parse_config(&["--subsystem", "sftp", "demo", "ls"]) {
+        Err(err) => assert!(
+            err.to_string().contains("--subsystem cannot be combined"),
+            "unexpected error: {err:?}"
+        ),
+        Ok(_) => panic!("subsystem flag should reject remote commands"),
+    }
+}
+
+#[test]
+#[serial]
 fn x11_flags_are_rejected() {
     match parse_config(&["--forward-x11", "demo"]) {
         Err(err) => assert!(

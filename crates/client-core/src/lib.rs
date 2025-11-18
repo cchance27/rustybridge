@@ -8,7 +8,7 @@ use auth::{AuthPreferences, authenticate};
 use hostkeys::{ClientHandler, HostKeyPolicy, HostKeyVerifier};
 use russh::client;
 use ssh_core::{
-    crypto::{default_preferred, legacy_preferred}, forwarding::{ForwardingConfig, ForwardingManager}, session::{self, ShellOptions, run_command, run_shell}, terminal::NewlineMode
+    crypto::{default_preferred, legacy_preferred}, forwarding::{ForwardingConfig, ForwardingManager}, session::{self, ShellOptions, run_command, run_shell, run_subsystem}, terminal::NewlineMode
 };
 use tracing::{info, warn};
 
@@ -156,7 +156,15 @@ pub async fn run_client(args: ClientConfig) -> Result<()> {
     forwarding.start_local_unix_forwarders(session.clone()).await?;
     forwarding.start_dynamic_socks(session.clone()).await?;
 
-    let outcome = if let Some(command) = &command {
+    let subsystem_names = forwarding.config().subsystems.iter().map(|sub| sub.name.clone()).collect::<Vec<_>>();
+
+    let outcome = if !subsystem_names.is_empty() {
+        for name in subsystem_names {
+            info!(subsystem = %name, "requesting subsystem");
+            run_subsystem(&session, &name, forward_agent, &forwarding).await?;
+        }
+        Ok(())
+    } else if let Some(command) = command.as_deref() {
         run_command(&session, command, forward_agent, &forwarding).await
     } else {
         let shell_opts = ShellOptions {

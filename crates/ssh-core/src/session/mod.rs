@@ -7,8 +7,10 @@ use russh::{
 use tokio::io::AsyncWriteExt;
 
 mod shell;
+mod subsystem;
 
 pub use shell::{ShellOptions, run_shell};
+pub use subsystem::{run_subsystem, run_subsystem_with_io};
 
 use crate::forwarding::ForwardingManager;
 
