@@ -184,14 +184,13 @@ async fn main() -> Result<()> {
 async fn run_tui(mut app: Box<dyn tui_core::TuiApp>) -> Result<()> {
     use std::io::stdout;
 
-use crossterm::{
+    use crossterm::{
         event::{self, Event, KeyEventKind}, execute, terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode}
     };
     use ratatui::prelude::*;
-    use tui_core::{AppAction, AppSession};
-    
     // Shared key mapping for local TUI
     use rb_cli::tui_input;
+    use tui_core::{AppAction, AppSession};
 
     // Disable logging to prevent interference with TUI
     ssh_core::logging::disable_logging();
@@ -240,7 +239,7 @@ use crossterm::{
                         use std::io::Write as _;
                         println!("Connecting via proxy to {}...", name);
                         std::io::stdout().flush().ok();
-                        
+
                         // Best effort: print endpoint once available (does not block the initial feedback)
                         if let Ok(handle) = state_store::server_db().await {
                             let _ = state_store::migrate_server(&handle).await;

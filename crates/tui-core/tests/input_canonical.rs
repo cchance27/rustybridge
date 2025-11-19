@@ -58,4 +58,3 @@ fn page_up_down_passthrough() {
     let out = input::canonicalize(input::PAGE_DOWN);
     assert_eq!(out, input::PAGE_DOWN);
 }
-

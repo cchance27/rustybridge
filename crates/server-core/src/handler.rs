@@ -451,6 +451,12 @@ impl ssh_server::Handler for ServerHandler {
                     let cloned = action.clone();
                     if let Err(e) = crate::handle_management_action(cloned).await {
                         warn!("failed to apply management action: {}", e);
+                        // The modal has already been closed by the app; force a redraw
+                        // so the overlay disappears even on failure.
+                        self.render_terminal(session, channel)?;
+                    } else {
+                        // Reload Management app with fresh data and redraw.
+                        self.switch_app("Management", session, channel).await?;
                     }
                 }
                 AppAction::Continue => {}

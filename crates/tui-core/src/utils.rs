@@ -1,4 +1,5 @@
 use std::time::Duration;
+
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 pub fn format_duration(d: Duration) -> String {

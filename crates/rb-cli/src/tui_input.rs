@@ -5,11 +5,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 /// Returns None for keys we don't handle.
 pub fn map_key_to_bytes(key: &KeyEvent) -> Option<Vec<u8>> {
     // Ctrl+C
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        if let KeyCode::Char('c' | 'C') = key.code {
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && let KeyCode::Char('c' | 'C') = key.code {
             return Some(vec![0x03]);
         }
-    }
 
     let bytes: Option<Vec<u8>> = match key.code {
         KeyCode::Char(c) => {

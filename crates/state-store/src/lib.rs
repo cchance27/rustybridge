@@ -157,10 +157,7 @@ pub async fn update_relay_host(pool: &SqlitePool, id: i64, name: &str, ip: &str,
 }
 
 pub async fn delete_relay_host_by_id(pool: &SqlitePool, id: i64) -> DbResult<()> {
-    sqlx::query("DELETE FROM relay_hosts WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await?;
+    sqlx::query("DELETE FROM relay_hosts WHERE id = ?").bind(id).execute(pool).await?;
     Ok(())
 }
 

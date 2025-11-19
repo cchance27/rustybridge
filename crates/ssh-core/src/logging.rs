@@ -67,10 +67,8 @@ pub fn disable_logging() {
     }
 }
 
-
 pub fn enable_logging(level: LevelFilter) {
     if let Some(handle) = RELOAD.get() {
         let _ = handle.reload(EnvFilter::new(level_to_str(level)));
     }
 }
-
