@@ -11,9 +11,7 @@ pub use relay::connect_to_relay_local;
 pub mod secrets;
 mod server_manager;
 
-use std::{
-    sync::{Arc, Mutex, OnceLock}, time::Duration
-};
+use std::{sync::Arc, time::Duration};
 
 use russh::{
     MethodKind, MethodSet, keys::{
@@ -27,20 +25,47 @@ use ssh_core::crypto::default_preferred;
 use state_store::{migrate_server, server_db};
 use tracing::info;
 
-// One-shot flash message for Management app reloads (local + SSH paths)
-static FLASH_MSG: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-
-fn set_flash_message(msg: String) {
-    let m = FLASH_MSG.get_or_init(|| Mutex::new(None));
-    *m.lock().unwrap() = Some(msg);
-}
-
-fn take_flash_message() -> Option<String> {
-    let m = FLASH_MSG.get_or_init(|| Mutex::new(None));
-    m.lock().unwrap().take()
-}
-
 use crate::error::{ServerError, ServerResult};
+
+const FETCH_HOSTKEY_TIMEOUT_ENV: &str = "RB_FETCH_TIMEOUT";
+const DEFAULT_FETCH_HOSTKEY_TIMEOUT_SECS: f64 = 2.0;
+const MAX_FETCH_HOSTKEY_TIMEOUT_SECS: f64 = 5.0;
+
+fn hostkey_fetch_timeout() -> ServerResult<Duration> {
+    match std::env::var(FETCH_HOSTKEY_TIMEOUT_ENV) {
+        Ok(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Ok(Duration::from_secs_f64(DEFAULT_FETCH_HOSTKEY_TIMEOUT_SECS));
+            }
+            let secs = trimmed.parse::<f64>().map_err(|e| {
+                ServerError::InvalidConfig(format!(
+                    "{FETCH_HOSTKEY_TIMEOUT_ENV} must be a positive number of seconds (e.g. \"1.5\"): {e}"
+                ))
+            })?;
+            if secs <= 0.0 {
+                return Err(ServerError::InvalidConfig(format!(
+                    "{FETCH_HOSTKEY_TIMEOUT_ENV} must be greater than zero (got {secs})"
+                )));
+            }
+            let normalized = secs.min(MAX_FETCH_HOSTKEY_TIMEOUT_SECS);
+            if (normalized - secs).abs() > f64::EPSILON {
+                tracing::warn!(
+                    env = FETCH_HOSTKEY_TIMEOUT_ENV,
+                    requested = secs,
+                    used = normalized,
+                    max = MAX_FETCH_HOSTKEY_TIMEOUT_SECS,
+                    "RB_FETCH_TIMEOUT exceeded maximum and was clamped"
+                );
+            }
+            Ok(Duration::from_secs_f64(normalized))
+        }
+        Err(std::env::VarError::NotPresent) => Ok(Duration::from_secs_f64(DEFAULT_FETCH_HOSTKEY_TIMEOUT_SECS)),
+        Err(std::env::VarError::NotUnicode(_)) => Err(ServerError::InvalidConfig(format!(
+            "{FETCH_HOSTKEY_TIMEOUT_ENV} contains invalid UTF-8"
+        ))),
+    }
+}
 
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -674,11 +699,17 @@ fn parse_endpoint(endpoint: &str) -> ServerResult<(String, i64)> {
 }
 
 /// Create a ManagementApp with all relay hosts loaded from the database (admin view)
-pub async fn create_management_app() -> ServerResult<tui_core::apps::ManagementApp> {
-    create_management_app_with_tab(0).await
+pub async fn create_management_app(
+    review: Option<tui_core::apps::management::HostkeyReview>,
+) -> ServerResult<tui_core::apps::ManagementApp> {
+    create_management_app_with_tab(0, review).await
 }
 
-pub async fn create_management_app_with_tab(selected_tab: usize) -> ServerResult<tui_core::apps::ManagementApp> {
+/// Create a ManagementApp with a specific tab selected
+pub async fn create_management_app_with_tab(
+    selected_tab: usize,
+    review: Option<tui_core::apps::management::HostkeyReview>,
+) -> ServerResult<tui_core::apps::ManagementApp> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
@@ -783,13 +814,60 @@ pub async fn create_management_app_with_tab(selected_tab: usize) -> ServerResult
         host_creds.insert(*hid, label);
     }
 
-    let flash = take_flash_message();
-    Ok(tui_core::apps::ManagementApp::new(relay_items, host_creds, credentials, flash).with_selected_tab(selected_tab))
+    // Hostkey presence mapping
+    let mut hostkeys: std::collections::HashMap<i64, bool> = std::collections::HashMap::new();
+    let hk_rows = sqlx::query("SELECT relay_host_id FROM relay_host_options WHERE key = 'hostkey.openssh'")
+        .fetch_all(&pool)
+        .await?;
+    for row in hk_rows {
+        let hid: i64 = row.get("relay_host_id");
+        hostkeys.insert(hid, true);
+    }
+    // Ensure entries exist for all hosts
+    for item in &relay_items {
+        hostkeys.entry(item.id).or_insert(false);
+    }
+
+    // Pending hostkey review (if any)
+    let review_opt = review;
+    let review_host = review_opt.as_ref().map(|r| r.host.clone());
+
+    let mut app = tui_core::apps::ManagementApp::new(relay_items, host_creds, hostkeys, credentials, None, review_opt)
+        .with_selected_tab(selected_tab);
+
+    // If a hostkey review is being shown, ensure the background table selects that host
+    if let Some(name) = review_host.as_deref() {
+        app = app.with_selected_host_name(name);
+    }
+
+    Ok(app)
+}
+
+/// Build a TUI app by name for the given user context.
+///
+/// - name: "Management" or any other value (treated as relay selector)
+/// - tab: optional tab index for Management
+/// - user: optional username; when None or Some("admin"), full admin relay list is shown
+pub async fn create_app_by_name(user: Option<&str>, name: &str, tab: Option<usize>) -> ServerResult<Box<dyn tui_core::TuiApp>> {
+    match name {
+        "Management" => {
+            let app = if let Some(t) = tab {
+                create_management_app_with_tab(t, None).await?
+            } else {
+                create_management_app(None).await?
+            };
+            Ok(Box::new(app))
+        }
+        _ => {
+            let app = create_relay_selector_app(user).await?;
+            Ok(Box::new(app))
+        }
+    }
 }
 
 /// Apply side effects for management-related AppActions (add/update/delete relay hosts).
 /// Centralizing this logic avoids divergence between local and SSH TUI paths.
-pub async fn handle_management_action(action: tui_core::AppAction) -> ServerResult<()> {
+pub async fn handle_management_action(action: tui_core::AppAction) -> ServerResult<Option<tui_core::AppAction>> {
     match action {
         tui_core::AppAction::AddRelay(item) => {
             let (ip, port) = parse_endpoint(&item.description)?;
@@ -850,52 +928,144 @@ pub async fn handle_management_action(action: tui_core::AppAction) -> ServerResu
                 }
             }
         }
-        tui_core::AppAction::DeleteCredential(name) => {
-            if let Err(e) = crate::delete_credential(&name).await {
-                // Set concise flash message for the next Management load
-                let msg = match &e {
-                    ServerError::NotPermitted { reason, .. } => format!("Cannot delete credential '{}': {}", name, reason),
-                    _ => format!("Cannot delete credential '{}': {}", name, e),
+        tui_core::AppAction::DeleteCredential(name) => crate::delete_credential(&name).await?,
+        tui_core::AppAction::UnassignCredential(hostname) => crate::unassign_credential(&hostname).await?,
+        tui_core::AppAction::AssignCredential { host, cred_name } => crate::assign_credential(&host, &cred_name).await?,
+        tui_core::AppAction::FetchHostkey { id, name } => {
+            info!(relay = %name, relay_id = id, "refreshing relay host key");
+            // Fetch and stage hostkey for review
+            let db = server_db().await?;
+            migrate_server(&db).await?;
+            let pool = db.into_pool();
+
+            // Resolve host by id first to avoid stale name collisions
+            let host = state_store::fetch_relay_host_by_id(&pool, id)
+                .await?
+                .ok_or_else(|| ServerError::not_found("relay host", id.to_string()))?;
+            if host.name != name {
+                tracing::warn!(
+                    requested_name = %name,
+                    actual_name = %host.name,
+                    relay_id = id,
+                    "relay name changed during hostkey fetch; using id match"
+                );
+            }
+
+            use std::sync::{Arc, Mutex};
+
+            use russh::{
+                client, keys::{HashAlg, PublicKey}
+            };
+
+            struct CaptureHandler {
+                key: Arc<Mutex<Option<PublicKey>>>,
+            }
+            impl russh::client::Handler for CaptureHandler {
+                type Error = crate::ServerError;
+                fn check_server_key(&mut self, key: &PublicKey) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
+                    let captured = self.key.clone();
+                    let key = key.clone();
+                    async move {
+                        *captured.lock().unwrap() = Some(key);
+                        Ok(true)
+                    }
+                }
+            }
+
+            let captured = Arc::new(Mutex::new(None));
+            let handler = CaptureHandler { key: captured.clone() };
+            let cfg = std::sync::Arc::new(russh::client::Config {
+                preferred: ssh_core::crypto::default_preferred(),
+                ..Default::default()
+            });
+            let connect_timeout = hostkey_fetch_timeout()?;
+            let session = tokio::time::timeout(connect_timeout, client::connect(cfg, (host.ip.as_str(), host.port as u16), handler))
+                .await
+                .map_err(|_| {
+                    ServerError::Other(format!(
+                        "timed out fetching host key from {}:{} after {:?}",
+                        host.ip, host.port, connect_timeout
+                    ))
+                })??;
+            let _ = session.disconnect(russh::Disconnect::ByApplication, "", "").await;
+            let Some(new_key) = captured.lock().unwrap().clone() else {
+                return Ok(None);
+            };
+            let new_fp = new_key.fingerprint(HashAlg::Sha256).to_string();
+            let new_pem = new_key.to_openssh().map_err(|e| ServerError::Crypto(e.to_string()))?.to_string();
+            let new_type = new_pem.split_whitespace().next().unwrap_or("").to_string();
+
+            // Existing (optional)
+            let mut old_fp: Option<String> = None;
+            let mut old_type: Option<String> = None;
+            if let Some(row) = sqlx::query("SELECT value FROM relay_host_options WHERE relay_host_id = ? AND key = 'hostkey.openssh'")
+                .bind(host.id)
+                .fetch_optional(&pool)
+                .await?
+            {
+                let raw: String = row.get("value");
+                let dec = if crate::secrets::is_encrypted_marker(&raw) {
+                    match crate::secrets::decrypt_string_if_encrypted(&raw) {
+                        Ok(s) => s,
+                        Err(_) => crate::secrets::SecretString::new(Box::new("".to_string())),
+                    }
+                } else {
+                    crate::secrets::SecretString::new(Box::new(raw))
                 };
-                set_flash_message(msg);
-                return Err(e);
+                if !dec.expose_secret().is_empty()
+                    && let Ok(pk) = PublicKey::from_openssh(dec.expose_secret())
+                {
+                    old_fp = Some(pk.fingerprint(HashAlg::Sha256).to_string());
+                    // Extract type from stored content (prefix token)
+                    old_type = Some(dec.expose_secret().split_whitespace().next().unwrap_or("").to_string());
+                }
             }
+
+            return Ok(Some(tui_core::AppAction::ReviewHostkey(
+                tui_core::apps::management::HostkeyReview {
+                    host_id: host.id,
+                    host: host.name,
+                    new_fingerprint: new_fp,
+                    new_key_type: new_type,
+                    old_fingerprint: old_fp,
+                    old_key_type: old_type,
+                    new_key_pem: new_pem,
+                },
+            )));
         }
-        tui_core::AppAction::UnassignCredential(hostname) => {
-            if let Err(e) = crate::unassign_credential(&hostname).await {
-                let msg = format!("Cannot clear credential for '{}': {}", hostname, e);
-                set_flash_message(msg);
-                return Err(e);
-            }
+        tui_core::AppAction::StoreHostkey { id, name: _name, key } => {
+            let db = server_db().await?;
+            migrate_server(&db).await?;
+            let pool = db.into_pool();
+
+            // Resolve host strictly by id to avoid races when names change mid-review
+            let host = state_store::fetch_relay_host_by_id(&pool, id)
+                .await?
+                .ok_or_else(|| ServerError::not_found("relay host", id.to_string()))?;
+            let stored = crate::secrets::encrypt_string(crate::secrets::SecretString::new(Box::new(key)))?;
+            sqlx::query(
+                "INSERT INTO relay_host_options (relay_host_id, key, value) VALUES (?, ?, ?) \
+                 ON CONFLICT(relay_host_id, key) DO UPDATE SET value = excluded.value",
+            )
+            .bind(host.id)
+            .bind("hostkey.openssh")
+            .bind(stored)
+            .execute(&pool)
+            .await?;
+            info!(relay = %host.name, relay_id = host.id, "relay host key accepted and stored");
         }
-        tui_core::AppAction::AssignCredential { host, cred_name } => {
-            if let Err(e) = crate::assign_credential(&host, &cred_name).await {
-                let msg = format!("Cannot set credential for '{}': {}", host, e);
-                set_flash_message(msg);
-                return Err(e);
-            }
+        tui_core::AppAction::CancelHostkey { .. } => {
+            // No global state to clear
         }
         _ => {}
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Convenience wrapper for TUI callers: runs the management action and, on error,
 /// sets a one-shot flash message so the Management UI can surface feedback.
-pub async fn handle_management_action_with_flash(action: tui_core::AppAction) -> ServerResult<()> {
-    match handle_management_action(action.clone()).await {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            // Build a concise, user-facing message based on the action kind
-            let msg = format_action_error(&action, &e);
-            set_flash_message(msg);
-            Err(e)
-        }
-    }
-}
-
-// Format an error message suitable for display in the ManagementApp flash area
-fn format_action_error(action: &tui_core::AppAction, e: &ServerError) -> String {
+// Format an error message suitable for display in the ManagementApp status area
+pub fn format_action_error(action: &tui_core::AppAction, e: &ServerError) -> String {
     match action {
         tui_core::AppAction::AddRelay(item) => format!("Cannot add relay host '{}': {}", item.name, e),
         tui_core::AppAction::UpdateRelay(item) => format!("Cannot update relay host '{}': {}", item.name, e),

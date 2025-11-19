@@ -1,11 +1,12 @@
 use std::{collections::HashMap, fmt};
 
 use ratatui::{
-    Frame, layout::{Constraint, Direction, Layout, Rect}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Tabs, Wrap}
+    Frame, buffer::Buffer, layout::{Constraint, Direction, Layout, Rect}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Tabs, Wrap}
 };
+use unicode_width::UnicodeWidthChar;
 
 use crate::{
-    AppAction, TuiApp, TuiResult, apps::relay_selector::RelayItem, utils::centered_rect, widgets::{Input, Menu, TextArea}
+    AppAction, TuiApp, TuiResult, app::{StatusKind, StatusLine}, apps::relay_selector::RelayItem, utils::centered_rect, widgets::{Input, Menu, TextArea}
 };
 
 // Public types for credentials used by AppAction
@@ -101,6 +102,57 @@ impl HostForm {
     }
 }
 
+/// Helper to generate consistent input hints for modals
+struct ModalInputHints;
+
+impl ModalInputHints {
+    /// Generate yes/no confirmation prompt
+    /// - `yes_default`: if true, (Y)es is capitalized; if false, (N)o is capitalized
+    /// - `allow_enter`: if true, Enter key confirms the default option
+    fn yes_no(yes_default: bool, allow_enter: bool) -> Line<'static> {
+        Line::from(Self::yes_no_segments(None, yes_default, allow_enter))
+    }
+
+    /// Generate yes/no prompt prefixed with a message (e.g., "Store item?")
+    fn yes_no_with_prompt(prompt: &str, yes_default: bool, allow_enter: bool) -> Line<'static> {
+        Line::from(Self::yes_no_segments(Some(prompt), yes_default, allow_enter))
+    }
+
+    /// Form navigation hints
+    fn form_navigation() -> &'static str {
+        "Tab/↑/↓: Switch Field | ←/→/Home/End: Move Cursor | Enter: Submit | Esc: Cancel"
+    }
+
+    fn yes_no_segments(prompt: Option<&str>, yes_default: bool, allow_enter: bool) -> Vec<Span<'static>> {
+        let mut spans = Vec::new();
+        if let Some(prefix) = prompt
+            && !prefix.is_empty()
+        {
+            spans.push(Span::raw(format!("{prefix} ")));
+        }
+        let yes_is_default = yes_default && allow_enter;
+        let no_is_default = !yes_default && allow_enter;
+        let yes_label = if yes_is_default { "(Y)es" } else { "(y)es" };
+        let no_label = if no_is_default { "(N)o" } else { "(n)o" };
+        let yes_style = if yes_is_default {
+            Style::default().add_modifier(Modifier::UNDERLINED)
+        } else {
+            Style::default()
+        };
+        let no_style = if no_is_default {
+            Style::default().add_modifier(Modifier::UNDERLINED)
+        } else {
+            Style::default()
+        };
+
+        spans.push(Span::styled(yes_label.to_string(), yes_style));
+        spans.push(Span::raw(" / "));
+        spans.push(Span::styled(no_label.to_string(), no_style));
+        spans.push(Span::raw(" / Esc"));
+        spans
+    }
+}
+
 enum PopupState {
     None,
     AddHost(HostForm, usize),       // usize tracks which field is focused (0=name, 1=desc)
@@ -110,6 +162,7 @@ enum PopupState {
     DeleteCredentialConfirm(String),
     ClearCredentialConfirm(i64, String, String),      // host_id, host_name, cred_name
     SetCredential(i64, String, Menu<CredentialItem>), // host_id, host_name, menu of creds
+    HostkeyReview(HostkeyReview),                     // pending hostkey review
 }
 
 /// Admin management interface
@@ -120,11 +173,12 @@ pub struct ManagementApp {
     // Cache for relay hosts
     relay_hosts: Vec<RelayItem>,
     relay_host_creds: HashMap<i64, String>,
+    relay_host_hostkeys: HashMap<i64, bool>,
     table_state: TableState,
     popup: PopupState,
     credentials: Vec<CredentialItem>,
     creds_state: TableState,
-    flash: Option<String>,
+    status: Option<StatusLine>,
 }
 
 impl ManagementApp {
@@ -132,8 +186,10 @@ impl ManagementApp {
     pub fn new(
         relay_hosts: Vec<RelayItem>,
         relay_host_creds: HashMap<i64, String>,
+        relay_host_hostkeys: HashMap<i64, bool>,
         credentials: Vec<CredentialItem>,
-        flash: Option<String>,
+        status: Option<StatusLine>,
+        hostkey_review: Option<HostkeyReview>,
     ) -> Self {
         let mut table_state = TableState::default();
         if !relay_hosts.is_empty() {
@@ -143,6 +199,11 @@ impl ManagementApp {
         if !credentials.is_empty() {
             creds_state.select(Some(0));
         }
+        let popup = if let Some(r) = hostkey_review {
+            PopupState::HostkeyReview(r)
+        } else {
+            PopupState::None
+        };
         Self {
             tabs: vec![
                 "Relay Hosts".to_string(),
@@ -154,17 +215,34 @@ impl ManagementApp {
             should_exit: false,
             relay_hosts,
             relay_host_creds,
+            relay_host_hostkeys,
             table_state,
-            popup: PopupState::None,
+            popup,
             credentials,
             creds_state,
-            flash,
+            status,
         }
     }
 
     pub fn with_selected_tab(mut self, idx: usize) -> Self {
         if !self.tabs.is_empty() {
             self.selected_tab = idx.min(self.tabs.len() - 1);
+        }
+        self
+    }
+
+    /// Prefer to keep the currently selected relay host by name after reloads
+    pub fn with_selected_host_name(mut self, name: &str) -> Self {
+        if let Some(i) = self.relay_hosts.iter().position(|h| h.name == name) {
+            self.table_state.select(Some(i));
+        }
+        self
+    }
+
+    /// Prefer to keep the currently selected credential by name after reloads
+    pub fn with_selected_cred_name(mut self, name: &str) -> Self {
+        if let Some(i) = self.credentials.iter().position(|c| c.name == name) {
+            self.creds_state.select(Some(i));
         }
         self
     }
@@ -307,15 +385,20 @@ impl ManagementApp {
             }
         }
     }
+
+    // removed: open_hostkey_fetch_popup
 }
 
 impl Default for ManagementApp {
     fn default() -> Self {
-        Self::new(Vec::new(), HashMap::new(), Vec::new(), None)
+        Self::new(Vec::new(), HashMap::new(), HashMap::new(), Vec::new(), None, None)
     }
 }
 
 impl TuiApp for ManagementApp {
+    fn set_status(&mut self, status: Option<StatusLine>) {
+        self.status = status;
+    }
     fn handle_input(&mut self, input: &[u8]) -> TuiResult<AppAction> {
         tracing::trace!("ManagementApp input: {:?}", input);
 
@@ -464,10 +547,7 @@ impl TuiApp for ManagementApp {
             if render { FormAction::Render } else { FormAction::Continue }
         }
 
-        // Clear flash on next keystroke (without consuming this input)
-        if self.flash.is_some() && matches!(self.popup, PopupState::None) {
-            self.flash = None;
-        }
+        // Flash is cleared after the next render cycle, not on keypress
 
         // Handle Popup Input
         match &mut self.popup {
@@ -663,6 +743,27 @@ impl TuiApp for ManagementApp {
                 }
                 return Ok(AppAction::Continue);
             }
+            PopupState::HostkeyReview(review) => {
+                match input.first() {
+                    Some(b'y') | Some(b'Y') | Some(b'\r') | Some(b'\n') => {
+                        let action = AppAction::StoreHostkey {
+                            id: review.host_id,
+                            name: review.host.clone(),
+                            key: review.new_key_pem.clone(),
+                        };
+                        return Ok(action);
+                    }
+                    Some(b'n') | Some(b'N') | Some(0x1b) => {
+                        let action = AppAction::CancelHostkey {
+                            id: review.host_id,
+                            name: review.host.clone(),
+                        };
+                        return Ok(action);
+                    }
+                    _ => {}
+                }
+                return Ok(AppAction::Render);
+            }
         }
 
         // Handle Main Input
@@ -722,6 +823,17 @@ impl TuiApp for ManagementApp {
                             }
                             return Ok(AppAction::Render);
                         }
+                    }
+                }
+                b'h' => {
+                    if self.selected_tab == 0
+                        && let Some(sel) = self.table_state.selected()
+                        && let Some(h) = self.relay_hosts.get(sel)
+                    {
+                        return Ok(AppAction::FetchHostkey {
+                            id: h.id,
+                            name: h.name.clone(),
+                        });
                     }
                 }
                 0x1b => {
@@ -806,11 +918,13 @@ impl TuiApp for ManagementApp {
     fn render(&mut self, frame: &mut Frame, _uptime: std::time::Duration) {
         let area = frame.area();
 
-        // Build layout with optional flash line below commands
-        let mut layout = vec![Constraint::Length(3), Constraint::Min(0), Constraint::Length(1)];
-        if self.flash.is_some() {
-            layout.push(Constraint::Length(1));
-        }
+        // Build layout with a fixed flash row to ensure stable height and visibility
+        let layout = vec![
+            Constraint::Length(3), // tabs
+            Constraint::Min(0),    // content
+            Constraint::Length(1), // commands
+            Constraint::Length(1), // flash (always present to avoid layout shifts)
+        ];
         let chunks = Layout::default().direction(Direction::Vertical).constraints(layout).split(area);
 
         let titles: Vec<Line> = self
@@ -851,35 +965,47 @@ impl TuiApp for ManagementApp {
         }
 
         // Dynamic commands: include 'c: Set/Clear Credential' on Relay Hosts depending on state
-        let commands = match self.selected_tab {
+        let command_text = match self.selected_tab {
             0 => {
-                let mut base = "Tab/Arrows: Switch Tab | j/k: Navigate | a: Add | e: Edit | d: Delete".to_string();
+                let mut text = "Tab/Arrows: Switch Tab | j/k: Navigate | a: Add | e: Edit | d: Delete".to_string();
                 if let Some(sel) = self.table_state.selected()
                     && let Some(h) = self.relay_hosts.get(sel)
                 {
                     let label = self.relay_host_creds.get(&h.id).cloned().unwrap_or_else(|| "<none>".to_string());
                     if label == "<none>" {
-                        base.push_str(" | c: Set Credential");
+                        text.push_str(" | c: Set Credential");
                     } else if label != "<custom>" {
-                        base.push_str(" | c: Clear Credential");
+                        text.push_str(" | c: Clear Credential");
                     }
+                    text.push_str(" | h: Hostkey");
                 }
-                base.push_str(" | r: Relay Selector | q/Esc: Exit");
-                Paragraph::new(base).style(Style::default().fg(Color::DarkGray))
+                text.push_str(" | r: Relay Selector | q/Esc: Exit");
+                text
             }
-            1 => Paragraph::new("Tab/Arrows: Switch Tab | j/k: Navigate | a: Add | d: Delete | r: Relay Selector | q/Esc: Exit")
-                .style(Style::default().fg(Color::DarkGray)),
-            _ => Paragraph::new("Tab/Arrows: Switch Tab | r: Relay Selector | q/Esc: Exit").style(Style::default().fg(Color::DarkGray)),
+            1 => "Tab/Arrows: Switch Tab | j/k: Navigate | a: Add | d: Delete | r: Relay Selector | q/Esc: Exit".to_string(),
+            _ => "Tab/Arrows: Switch Tab | r: Relay Selector | q/Esc: Exit".to_string(),
         };
-        let cmd_idx = if self.flash.is_some() { chunks.len() - 2 } else { chunks.len() - 1 };
-        frame.render_widget(commands, chunks[cmd_idx]);
-        if let Some(msg) = &self.flash {
-            let p = Paragraph::new(msg.clone()).style(Style::default().fg(Color::Red));
-            frame.render_widget(p, chunks[chunks.len() - 1]);
+        // Commands on the row above the flash
+        let cmd_chunk = chunks[chunks.len() - 2];
+        self.render_command_line(frame, cmd_chunk, &command_text);
+
+        // Status row (always rendered, empty when no status)
+        let flash_chunk = chunks[chunks.len() - 1];
+        frame.render_widget(Clear, flash_chunk);
+        if let Some(st) = &self.status {
+            let color = match st.kind {
+                StatusKind::Info => Color::Yellow,
+                StatusKind::Success => Color::Green,
+                StatusKind::Error => Color::Red,
+            };
+            let p = Paragraph::new(st.text.clone()).style(Style::default().fg(color));
+            frame.render_widget(p, flash_chunk);
         }
 
         // Render Popup
         self.render_popup(frame, area);
+
+        // Leave status until explicitly changed
     }
 
     fn should_exit(&self) -> bool {
@@ -892,8 +1018,23 @@ impl TuiApp for ManagementApp {
 }
 
 impl ManagementApp {
+    fn render_command_line(&self, frame: &mut Frame, area: Rect, commands: &str) {
+        let buffer = frame.buffer_mut();
+        clear_line(buffer, area);
+        // Allow disabling dynamic footer to minimize diffs during troubleshooting
+        if std::env::var("RB_TUI_NO_FOOTER")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+        {
+            return;
+        }
+        let col = 0;
+        // Only render the static command help here; flash lives on the dedicated status row.
+        let _ = draw_segment(buffer, area, col, commands, Style::default().fg(Color::DarkGray));
+    }
+
     fn render_relay_hosts(&mut self, frame: &mut Frame, area: Rect) {
-        let header_cells = ["ID", "Name", "Endpoint", "Credential"]
+        let header_cells = ["ID", "Name", "Endpoint", "Credential", "Hostkey"]
             .iter()
             .map(|h| Cell::from(*h).style(Style::default().fg(Color::White)));
         let header = Row::new(header_cells)
@@ -907,6 +1048,11 @@ impl ManagementApp {
                 Cell::from(item.name.clone()),
                 Cell::from(item.description.clone()),
                 Cell::from(self.relay_host_creds.get(&item.id).cloned().unwrap_or_else(|| "<none>".to_string())),
+                Cell::from(if *self.relay_host_hostkeys.get(&item.id).unwrap_or(&false) {
+                    "yes"
+                } else {
+                    "no"
+                }),
             ];
             Row::new(cells).height(1)
         });
@@ -919,6 +1065,7 @@ impl ManagementApp {
                 Constraint::Length(20), // Name
                 Constraint::Length(24), // Endpoint
                 Constraint::Length(20), // Credential
+                Constraint::Length(9),  // Hostkey
             ],
         )
         .header(header)
@@ -974,7 +1121,7 @@ impl ManagementApp {
             PopupState::None => {}
             PopupState::AddHost(form, focus) => {
                 let block = Block::default().title("Add Relay Host").borders(Borders::ALL);
-                let area = centered_rect(60, 40, area);
+                let area = centered_rect(50, 30, area);
                 frame.render_widget(Clear, area);
                 frame.render_widget(block, area);
 
@@ -983,10 +1130,11 @@ impl ManagementApp {
                     .margin(2)
                     .constraints(
                         [
-                            Constraint::Length(3),
-                            Constraint::Length(3),
-                            Constraint::Length(1),
-                            Constraint::Min(1),
+                            Constraint::Length(3), // Name field
+                            Constraint::Length(3), // Endpoint field
+                            Constraint::Length(1), // Error line
+                            Constraint::Min(1),    // Spacer
+                            Constraint::Length(1), // Instructions at bottom
                         ]
                         .as_ref(),
                     )
@@ -1001,20 +1149,12 @@ impl ManagementApp {
                     frame.render_widget(err_p, chunks[2]);
                 }
 
-                // Draw focus indicator
-                // Since Input::render handles the cursor, I might not need to do much else.
-                // But I want to highlight the active field.
-                // I can draw a block around them?
-                // Or just rely on the cursor.
-
-                let instructions =
-                    Paragraph::new("Tab/Up/Down: Switch Field | Left/Right/Home/End: Move Cursor | Enter: Submit | Esc: Cancel")
-                        .style(Style::default().fg(Color::DarkGray));
-                frame.render_widget(instructions, chunks[3]);
+                let instructions = Paragraph::new(ModalInputHints::form_navigation()).style(Style::default().fg(Color::DarkGray));
+                frame.render_widget(instructions, chunks[4]);
             }
             PopupState::EditHost(form, focus, _id) => {
                 let block = Block::default().title("Edit Relay Host").borders(Borders::ALL);
-                let area = centered_rect(60, 40, area);
+                let area = centered_rect(50, 30, area);
                 frame.render_widget(Clear, area);
                 frame.render_widget(block, area);
 
@@ -1023,10 +1163,11 @@ impl ManagementApp {
                     .margin(2)
                     .constraints(
                         [
-                            Constraint::Length(3),
-                            Constraint::Length(3),
-                            Constraint::Length(1),
-                            Constraint::Min(1),
+                            Constraint::Length(3), // Name field
+                            Constraint::Length(3), // Endpoint field
+                            Constraint::Length(1), // Error line
+                            Constraint::Min(1),    // Spacer
+                            Constraint::Length(1), // Instructions at bottom
                         ]
                         .as_ref(),
                     )
@@ -1041,17 +1182,15 @@ impl ManagementApp {
                     frame.render_widget(err_p, chunks[2]);
                 }
 
-                let instructions =
-                    Paragraph::new("Tab/Up/Down: Switch Field | Left/Right/Home/End: Move Cursor | Enter: Save | Esc: Cancel")
-                        .style(Style::default().fg(Color::DarkGray));
-                frame.render_widget(instructions, chunks[3]);
+                let instructions = Paragraph::new(ModalInputHints::form_navigation()).style(Style::default().fg(Color::DarkGray));
+                frame.render_widget(instructions, chunks[4]);
             }
             PopupState::DeleteConfirm(_id, name) => {
                 let block = Block::default()
                     .title("Confirm Delete")
                     .borders(Borders::ALL)
                     .style(Style::default().fg(Color::Red));
-                let area = centered_rect(40, 20, area);
+                let area = centered_rect(50, 25, area);
                 frame.render_widget(Clear, area);
                 frame.render_widget(block, area);
 
@@ -1068,34 +1207,39 @@ impl ManagementApp {
 
                 frame.render_widget(p, chunks[0]);
 
-                let instructions = Paragraph::new("y/Enter: Yes | n/Esc: No")
+                let instructions = Paragraph::new(ModalInputHints::yes_no(true, true))
                     .alignment(ratatui::layout::Alignment::Center)
                     .style(Style::default().fg(Color::DarkGray));
                 frame.render_widget(instructions, chunks[1]);
             }
             PopupState::AddCredential(form, focus) => {
                 let block = Block::default().title("Add Credential").borders(Borders::ALL);
-                let area = centered_rect(70, 60, area);
+                let area = centered_rect(60, 50, area);
                 frame.render_widget(Clear, area);
                 frame.render_widget(block, area);
 
-                // Build constraints: type(1), name(3), username(3), then per-type fields
-                let mut constraints: Vec<Constraint> = vec![Constraint::Length(1), Constraint::Length(3), Constraint::Length(3)];
+                // Build constraints: type(1), name(3), username(3), then per-type fields, error(1), instructions(1)
+                let mut constraints: Vec<Constraint> = vec![
+                    Constraint::Length(1), // Type selector
+                    Constraint::Length(3), // Name
+                    Constraint::Length(3), // Username
+                ];
                 match form.ctype {
                     CredentialType::Password => {
-                        constraints.push(Constraint::Length(3));
+                        constraints.push(Constraint::Length(3)); // Password
                     }
                     CredentialType::SshKey => {
-                        constraints.push(Constraint::Length(7));
-                        constraints.push(Constraint::Length(7));
-                        constraints.push(Constraint::Length(3));
+                        constraints.push(Constraint::Length(7)); // Key
+                        constraints.push(Constraint::Length(7)); // Cert
+                        constraints.push(Constraint::Length(3)); // Passphrase
                     }
                     CredentialType::Agent => {
-                        constraints.push(Constraint::Length(5));
+                        constraints.push(Constraint::Length(5)); // Public key
                     }
                 }
-                constraints.push(Constraint::Length(1)); // error
-                constraints.push(Constraint::Min(1)); // instructions
+                constraints.push(Constraint::Length(1)); // Error line
+                constraints.push(Constraint::Min(1)); // Spacer
+                constraints.push(Constraint::Length(1)); // Instructions at bottom
 
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
@@ -1104,11 +1248,15 @@ impl ManagementApp {
                     .split(area);
 
                 // 0: Type selector
-                let type_text = format!("Type: {}", form.ctype.as_str());
-                let type_style = if *focus == 0 {
-                    Style::default().fg(Color::Yellow)
+                let type_text = if *focus == 0 {
+                    format!("Type: < {} >  (use ←/→ to change)", form.ctype.as_str())
                 } else {
-                    Style::default()
+                    format!("Type: {}", form.ctype.as_str())
+                };
+                let type_style = if *focus == 0 {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default().fg(Color::Yellow)
                 };
                 frame.render_widget(Paragraph::new(type_text).style(type_style), chunks[0]);
 
@@ -1142,7 +1290,7 @@ impl ManagementApp {
                     let err_p = Paragraph::new(err.as_str()).style(Style::default().fg(Color::Red));
                     frame.render_widget(err_p, chunks[line]);
                 }
-                // Instructions
+                // Instructions at the last chunk
                 let instr = "Tab/Up/Down: Switch Field | Left/Right/Home/End: Move | Enter: Submit (TextArea: newline) | Esc: Cancel | Left/Right on Type to change";
                 let instr_p = Paragraph::new(instr).style(Style::default().fg(Color::DarkGray));
                 frame.render_widget(instr_p, chunks[chunks.len() - 1]);
@@ -1152,7 +1300,7 @@ impl ManagementApp {
                     .title("Delete Credential")
                     .borders(Borders::ALL)
                     .style(Style::default().fg(Color::Red));
-                let area = centered_rect(50, 20, area);
+                let area = centered_rect(50, 25, area);
                 frame.render_widget(Clear, area);
                 frame.render_widget(block, area);
                 let text = format!("Delete credential '{name}'?");
@@ -1163,7 +1311,7 @@ impl ManagementApp {
                     .constraints([Constraint::Min(1), Constraint::Length(1)].as_ref())
                     .split(area);
                 frame.render_widget(p, chunks[0]);
-                let instr = Paragraph::new("y/Enter: Yes | n/Esc: No")
+                let instr = Paragraph::new(ModalInputHints::yes_no(true, true))
                     .alignment(ratatui::layout::Alignment::Center)
                     .style(Style::default().fg(Color::DarkGray));
                 frame.render_widget(instr, chunks[1]);
@@ -1173,7 +1321,7 @@ impl ManagementApp {
                     .title("Clear Credential")
                     .borders(Borders::ALL)
                     .style(Style::default().fg(Color::Red));
-                let area = centered_rect(60, 24, area);
+                let area = centered_rect(60, 25, area);
                 frame.render_widget(Clear, area);
                 frame.render_widget(block, area);
                 let text = format!("Clear shared credential '{cred}' from host '{host}'?");
@@ -1184,7 +1332,7 @@ impl ManagementApp {
                     .constraints([Constraint::Min(1), Constraint::Length(1)].as_ref())
                     .split(area);
                 frame.render_widget(p, chunks[0]);
-                let instr = Paragraph::new("y/Enter: Yes | n/Esc: No")
+                let instr = Paragraph::new(ModalInputHints::yes_no(true, true))
                     .alignment(ratatui::layout::Alignment::Center)
                     .style(Style::default().fg(Color::DarkGray));
                 frame.render_widget(instr, chunks[1]);
@@ -1196,8 +1344,75 @@ impl ManagementApp {
                 menu.render(frame, area);
                 // Draw instructions below if space allows (best-effort)
             }
+            PopupState::HostkeyReview(review) => {
+                let block = Block::default().title("Verify Host Key").borders(Borders::ALL);
+                let area = centered_rect(70, 30, area);
+                frame.render_widget(Clear, area);
+                frame.render_widget(block, area);
+
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .margin(2)
+                    .constraints(
+                        [
+                            Constraint::Length(1), // Host header
+                            Constraint::Length(2), // Old fingerprint
+                            Constraint::Length(2), // New fingerprint
+                            Constraint::Min(1),    // Spacer
+                            Constraint::Length(1), // Instructions at bottom
+                        ]
+                        .as_ref(),
+                    )
+                    .split(area);
+                let header = Paragraph::new(format!("Host: {}", review.host));
+                frame.render_widget(header, chunks[0]);
+                let old = review.old_fingerprint.as_deref().unwrap_or("<none>");
+                let old_type = review.old_key_type.as_deref().unwrap_or("<unknown>");
+                let oldp = Paragraph::new(format!("Existing: {}  ({})", old, old_type));
+                frame.render_widget(oldp, chunks[1]);
+                let newp = Paragraph::new(format!("New: {}  ({})", review.new_fingerprint, review.new_key_type));
+                frame.render_widget(newp, chunks[2]);
+                let inst = Paragraph::new(ModalInputHints::yes_no_with_prompt("Store/replace this host key?", true, true))
+                    .alignment(ratatui::layout::Alignment::Center)
+                    .style(Style::default().fg(Color::DarkGray));
+                frame.render_widget(inst, chunks[4]);
+            }
         }
     }
+}
+
+fn clear_line(buffer: &mut Buffer, area: Rect) {
+    for dx in 0..area.width {
+        let cell = &mut buffer[(area.x + dx, area.y)];
+        cell.reset();
+    }
+}
+
+fn draw_segment(buffer: &mut Buffer, area: Rect, mut col: usize, text: &str, style: Style) -> usize {
+    for ch in text.chars() {
+        let width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width == 0 {
+            continue;
+        }
+        if col + width > area.width as usize {
+            break;
+        }
+        let mut utf8 = [0u8; 4];
+        let symbol = ch.encode_utf8(&mut utf8);
+        let cell = &mut buffer[(area.x + col as u16, area.y)];
+        cell.set_symbol(symbol);
+        cell.set_style(style);
+        if width == 2 {
+            if col + 1 >= area.width as usize {
+                break;
+            }
+            let next = &mut buffer[(area.x + col as u16 + 1, area.y)];
+            next.set_symbol(" ");
+            next.set_style(style);
+        }
+        col += width;
+    }
+    col
 }
 
 // -------------------------
@@ -1632,4 +1847,19 @@ fn handle_credential_form_input(form: &mut CredentialForm, focus: &mut usize, in
         }
     }
     if render { CFAction::Render } else { CFAction::Continue }
+}
+
+// -------------------------
+// Hostkey review payload
+// -------------------------
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostkeyReview {
+    pub host_id: i64,
+    pub host: String,
+    pub old_fingerprint: Option<String>,
+    pub old_key_type: Option<String>,
+    pub new_fingerprint: String,
+    pub new_key_type: String,
+    pub new_key_pem: String,
 }

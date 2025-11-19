@@ -25,12 +25,16 @@ pub(super) struct ServerHandler {
     pty_size: Option<(u16, u16)>,
     alt_screen: bool,
     size_updates: watch::Sender<(u16, u16)>,
+    // Channel for background tasks (e.g., hostkey fetch) to inject actions
+    action_tx: tokio::sync::mpsc::UnboundedSender<AppAction>,
+    action_rx: tokio::sync::mpsc::UnboundedReceiver<AppAction>,
 }
 
 impl ServerHandler {
     /// Create a handler bound to the connecting client's socket address.
     pub(super) fn new(peer_addr: Option<SocketAddr>) -> Self {
         let (size_updates, _) = watch::channel((80, 24));
+        let (action_tx, action_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             peer_addr,
             username: None,
@@ -44,10 +48,15 @@ impl ServerHandler {
             pty_size: None,
             alt_screen: false,
             size_updates,
+            action_tx,
+            action_rx,
         }
     }
 
     fn send_bytes(&self, session: &mut Session, channel: ChannelId, bytes: &[u8]) -> Result<(), russh::Error> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
         let mut payload = CryptoVec::new();
         payload.extend(bytes);
         session.data(channel, payload)
@@ -96,7 +105,7 @@ impl ServerHandler {
         let (app, app_name): (Box<dyn tui_core::TuiApp>, &str) = if self.username.as_deref() == Some("admin") {
             (
                 Box::new(
-                    crate::create_management_app()
+                    crate::create_management_app(None)
                         .await
                         .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?,
                 ),
@@ -143,6 +152,19 @@ impl ServerHandler {
         Ok(())
     }
 
+    fn show_status_line(
+        &mut self,
+        status: tui_core::app::StatusLine,
+        session: &mut Session,
+        channel: ChannelId,
+    ) -> Result<(), russh::Error> {
+        if let Some(app_session) = self.app_session.as_mut() {
+            app_session.set_status(Some(status));
+            self.render_terminal(session, channel)?;
+        }
+        Ok(())
+    }
+
     async fn switch_app(&mut self, app_name: &str, session: &mut Session, channel: ChannelId) -> Result<(), russh::Error> {
         let username = self.username.as_deref().unwrap_or("unknown");
         let peer_addr = if let Some(peer_addr) = self.peer_addr {
@@ -152,29 +174,61 @@ impl ServerHandler {
         };
         info!(app_name, username, peer_addr, "tui switched");
 
-        let app: Box<dyn tui_core::TuiApp> = match app_name {
-            "Management" => Box::new(
-                crate::create_management_app()
-                    .await
-                    .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?,
-            ),
-            _ => Box::new(
-                crate::create_relay_selector_app(self.username.as_deref())
-                    .await
-                    .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?,
-            ),
-        };
+        self.show_app_by_name(app_name, None, session, channel).await
+    }
 
-        let rect = desired_rect(self.view_size());
-        let backend = RemoteBackend::new(rect);
-        let mut new_session = AppSession::new(app, backend).map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
-
-        new_session.clear().map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
-        new_session.render().map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
-
-        self.app_session = Some(new_session);
-        self.flush_terminal(session, channel)?;
+    async fn reload_management_app(
+        &mut self,
+        session: &mut Session,
+        channel: ChannelId,
+        tab: usize,
+        review: Option<tui_core::apps::management::HostkeyReview>,
+    ) -> Result<(), russh::Error> {
+        let app = crate::create_management_app_with_tab(tab, review)
+            .await
+            .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+        if let Some(app_session) = self.app_session.as_mut() {
+            let _ = app_session.set_app(Box::new(app));
+            self.render_terminal(session, channel)?;
+        }
         Ok(())
+    }
+
+    /// Helper: set the current TUI app and render+flush, reusing the existing session if present.
+    fn set_and_render_app(
+        &mut self,
+        app: Box<dyn tui_core::TuiApp>,
+        session: &mut Session,
+        channel: ChannelId,
+    ) -> Result<(), russh::Error> {
+        if let Some(app_session) = self.app_session.as_mut() {
+            app_session.set_app(app).map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+            app_session.render().map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+            self.flush_terminal(session, channel)?;
+            Ok(())
+        } else {
+            let rect = desired_rect(self.view_size());
+            let backend = RemoteBackend::new(rect);
+            let mut new_session = AppSession::new(app, backend).map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+            new_session.render().map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+            self.app_session = Some(new_session);
+            self.flush_terminal(session, channel)?;
+            Ok(())
+        }
+    }
+
+    /// Helper: build an app by name (Management or RelaySelector for current user) and show it.
+    async fn show_app_by_name(
+        &mut self,
+        name: &str,
+        selected_tab: Option<usize>,
+        session: &mut Session,
+        channel: ChannelId,
+    ) -> Result<(), russh::Error> {
+        let app = crate::create_app_by_name(self.username.as_deref(), name, selected_tab)
+            .await
+            .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+        self.set_and_render_app(app, session, channel)
     }
 
     /// Push accumulated escape sequences toward the remote SSH channel.
@@ -418,6 +472,11 @@ impl ssh_server::Handler for ServerHandler {
             return Ok(());
         }
 
+        // Process any queued background actions (e.g., results from hostkey fetch)
+        while let Ok(action) = self.action_rx.try_recv() {
+            self.process_action(action, session, channel).await?;
+        }
+
         if let Some(relay) = self.relay_handle.as_ref() {
             if !data.is_empty() {
                 relay.send(data.to_vec());
@@ -428,70 +487,17 @@ impl ssh_server::Handler for ServerHandler {
         if let Some(app_session) = self.app_session.as_mut() {
             // Normalize incoming SSH bytes to canonical TUI sequences
             let canonical = tui_core::input::canonicalize(data);
+
+            // Filter out DSR response if we requested it (cursor position report)
+            // \x1b[<row>;<col>R
+            if canonical.starts_with(b"\x1b[") && canonical.ends_with(b"R") {
+                return Ok(());
+            }
+
             let action = app_session
                 .handle_input(&canonical)
                 .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
-            match action {
-                AppAction::Exit => {
-                    self.handle_exit(session, channel)?;
-                }
-                AppAction::Render => {
-                    self.render_terminal(session, channel)?;
-                }
-                AppAction::SwitchTo(app_name) => {
-                    self.switch_app(&app_name, session, channel).await?;
-                }
-                AppAction::ConnectToRelay { id: _, name } => {
-                    self.relay_target = Some(name.clone());
-                    self.drop_terminal(); // Stop TUI
-                    self.leave_alt_screen(session, channel)?; // Leave alt screen
-                    self.connect_to_relay(session, channel, &name).await?; // Now Connect
-                }
-                AppAction::AddRelay(_)
-                | AppAction::UpdateRelay(_)
-                | AppAction::DeleteRelay(_)
-                | AppAction::AddCredential(_)
-                | AppAction::DeleteCredential(_)
-                | AppAction::UnassignCredential(_)
-                | AppAction::AssignCredential { .. } => {
-                    let cloned = action.clone();
-                    let tab = match action {
-                        AppAction::AddCredential(_) | AppAction::DeleteCredential(_) => 1,
-                        _ => 0,
-                    };
-                    if let Err(e) = crate::handle_management_action_with_flash(cloned).await {
-                        warn!("failed to apply management action: {}", e);
-                        // Reload Management app anyway so the flash message surfaces.
-                        let app: Box<dyn tui_core::TuiApp> = Box::new(
-                            crate::create_management_app_with_tab(tab)
-                                .await
-                                .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?,
-                        );
-                        let rect = desired_rect(self.view_size());
-                        let backend = RemoteBackend::new(rect);
-                        let mut new_session = AppSession::new(app, backend).map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
-                        new_session.clear().map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
-                        new_session.render().map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
-                        self.app_session = Some(new_session);
-                        self.flush_terminal(session, channel)?;
-                    } else {
-                        // Reload Management app with fresh data and redraw.
-                        let app: Box<dyn tui_core::TuiApp> = Box::new(
-                            crate::create_management_app_with_tab(tab)
-                                .await
-                                .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?,
-                        );
-                        let rect = desired_rect(self.view_size());
-                        let backend = RemoteBackend::new(rect);
-                        let mut new_session = AppSession::new(app, backend).map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
-                        new_session.clear().map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
-                        new_session.render().map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
-                        self.app_session = Some(new_session);
-                        self.flush_terminal(session, channel)?;
-                    }
-                }
-                AppAction::Continue => {}
-            }
+            self.process_action(action, session, channel).await?;
         }
         Ok(())
     }
@@ -546,7 +552,124 @@ impl ssh_server::Handler for ServerHandler {
     }
 }
 
+impl ServerHandler {
+    async fn process_action(&mut self, action: AppAction, session: &mut Session, channel: ChannelId) -> Result<(), russh::Error> {
+        match action {
+            AppAction::Exit => {
+                self.handle_exit(session, channel)?;
+            }
+            AppAction::Render => {
+                self.render_terminal(session, channel)?;
+            }
+            AppAction::SwitchTo(app_name) => {
+                self.switch_app(&app_name, session, channel).await?;
+            }
+            AppAction::ConnectToRelay { id: _, name } => {
+                self.relay_target = Some(name.clone());
+                self.drop_terminal(); // Stop TUI
+                self.leave_alt_screen(session, channel)?; // Leave alt screen
+                self.connect_to_relay(session, channel, &name).await?; // Now Connect
+            }
+            AppAction::FetchHostkey { id, name } => {
+                let status = tui_core::app::StatusLine {
+                    text: format!("Fetching host key for '{}'...", name),
+                    kind: tui_core::app::StatusKind::Info,
+                };
+                self.show_status_line(status, session, channel)?;
+                // Kick off the fetch in the background; results are pushed through action_tx.
+                let tx = self.action_tx.clone();
+                let name_clone = name.clone();
+                let server_handle = session.handle();
+                tokio::spawn(async move {
+                    let action = AppAction::FetchHostkey {
+                        id,
+                        name: name_clone.clone(),
+                    };
+                    match crate::handle_management_action(action).await {
+                        Ok(Some(res_action)) => {
+                            let _ = tx.send(res_action);
+                        }
+                        Ok(None) => {
+                            let _ = tx.send(AppAction::Error(format!("Host '{}' did not present a host key", name_clone)));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(AppAction::Error(format!("Hostkey fetch failed: {}", e)));
+                        }
+                    }
+                    // Trigger a DSR to wake the data loop even if the client stays idle.
+                    let _ = server_handle.data(channel, CryptoVec::from_slice(b"\x1b[6n")).await;
+                });
+            }
+            AppAction::ReviewHostkey(review) => {
+                // Reload management app with the review data
+                self.reload_management_app(session, channel, 0, Some(review)).await?;
+            }
+            AppAction::AddRelay(_)
+            | AppAction::UpdateRelay(_)
+            | AppAction::DeleteRelay(_)
+            | AppAction::AddCredential(_)
+            | AppAction::DeleteCredential(_)
+            | AppAction::UnassignCredential(_)
+            | AppAction::AssignCredential { .. }
+            | AppAction::StoreHostkey { .. }
+            | AppAction::CancelHostkey { .. } => {
+                let cloned = action.clone();
+                let tab = match action {
+                    AppAction::AddCredential(_) | AppAction::DeleteCredential(_) => 1,
+                    _ => 0,
+                };
+                match crate::handle_management_action(cloned.clone()).await {
+                    Ok(_) => {
+                        // Reload Management app with fresh data and redraw.
+                        self.reload_management_app(session, channel, tab, None).await?;
+                        // Success-specific status for certain actions
+                        if let AppAction::StoreHostkey { name, .. } = &action
+                            && let Some(app_session) = self.app_session.as_mut()
+                        {
+                            let status = tui_core::app::StatusLine {
+                                text: format!("Stored host key for '{}'", name),
+                                kind: tui_core::app::StatusKind::Success,
+                            };
+                            app_session.set_status(Some(status));
+                            self.render_terminal(session, channel)?;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("failed to apply management action: {}", e);
+                        // Reload Management app anyway so the status message surfaces on the new instance.
+                        self.reload_management_app(session, channel, tab, None).await?;
+                        if let Some(app_session) = self.app_session.as_mut() {
+                            let msg = crate::format_action_error(&cloned, &e);
+                            let status = tui_core::app::StatusLine {
+                                text: msg,
+                                kind: tui_core::app::StatusKind::Error,
+                            };
+                            app_session.set_status(Some(status));
+                            self.render_terminal(session, channel)?;
+                        }
+                    }
+                }
+            }
+            AppAction::Error(msg) => {
+                if let Some(app_session) = self.app_session.as_mut() {
+                    let status = tui_core::app::StatusLine {
+                        text: msg,
+                        kind: tui_core::app::StatusKind::Error,
+                    };
+                    app_session.set_status(Some(status));
+                    self.render_terminal(session, channel)?;
+                }
+            }
+            AppAction::Continue => {
+                // no background reloads; status and fetches are session-scoped
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Display helper used for tracing; keeps logging concise when the socket address is unavailable.
 pub(super) fn display_addr(addr: Option<SocketAddr>) -> String {
     addr.map(|a| a.to_string()).unwrap_or_else(|| "<unknown>".into())
 }
+// (moved helper methods into impl ServerHandler)

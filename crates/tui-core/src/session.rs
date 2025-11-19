@@ -26,6 +26,14 @@ impl<B: Backend> AppSession<B> {
         })
     }
 
+    /// Replace the active app while keeping the same terminal/back-end context.
+    pub fn set_app(&mut self, app: Box<dyn TuiApp>) -> TuiResult<()> {
+        self.app = app;
+        self.connected_at = Instant::now();
+        self.last_render = Instant::now();
+        Ok(())
+    }
+
     /// Handle window resize
     pub fn resize(&mut self, area: Rect) -> TuiResult<()> {
         self.terminal.resize(area)?;
@@ -50,6 +58,16 @@ impl<B: Backend> AppSession<B> {
         })?;
         self.last_render = Instant::now();
         Ok(())
+    }
+
+    /// Set a session-scoped status/flash message on the current app (if supported)
+    pub fn set_status_message(&mut self, msg: Option<String>) {
+        self.app.set_status_message(msg);
+    }
+
+    /// Set a typed status on the current app (if supported)
+    pub fn set_status(&mut self, status: Option<crate::app::StatusLine>) {
+        self.app.set_status(status);
     }
 
     /// Clear the terminal screen

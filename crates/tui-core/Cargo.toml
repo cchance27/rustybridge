@@ -11,6 +11,7 @@ thiserror.workspace = true
 crossterm = "0.29.0"
 async-trait.workspace = true
 anyhow.workspace = true
+unicode-width.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true

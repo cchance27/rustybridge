@@ -3,7 +3,7 @@
 //! This crate provides a clean architecture for building interactive terminal
 //! applications that can run both over SSH (remote) and in standalone mode (local).
 
-mod app;
+pub mod app;
 mod error;
 
 pub mod apps;

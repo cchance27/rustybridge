@@ -164,7 +164,10 @@ impl TextArea {
 
     pub fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
         // Draw block with label
-        let block = Block::default().borders(Borders::ALL).title(self.label.clone());
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(self.label.clone())
+            .style(ratatui::style::Style::default().fg(ratatui::style::Color::Yellow));
         frame.render_widget(block.clone(), area);
         let inner = block.inner(area);
 
@@ -181,7 +184,10 @@ impl TextArea {
         let lines: Vec<Line> = if self.value.is_empty() {
             vec![Line::from("")]
         } else {
-            self.value.split('\n').map(|s| Line::from(Span::raw(s))).collect()
+            self.value
+                .split('\n')
+                .map(|s| Line::from(Span::styled(s, ratatui::style::Style::default().fg(ratatui::style::Color::Yellow))))
+                .collect()
         };
 
         let mut p = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });

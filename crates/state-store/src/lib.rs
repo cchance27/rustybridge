@@ -75,6 +75,23 @@ pub async fn fetch_relay_host_by_name(pool: &SqlitePool, name: &str) -> DbResult
     }
 }
 
+pub async fn fetch_relay_host_by_id(pool: &SqlitePool, id: i64) -> DbResult<Option<RelayHost>> {
+    if let Some(row) = sqlx::query_as::<_, RelayHost>("SELECT id, name, ip, port FROM relay_hosts WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+    {
+        Ok(Some(RelayHost {
+            id: row.id,
+            name: row.name,
+            ip: row.ip,
+            port: row.port,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
 pub async fn fetch_relay_host_options(pool: &SqlitePool, relay_host_id: i64) -> DbResult<std::collections::HashMap<String, String>> {
     let mut map = std::collections::HashMap::new();
     let rows = sqlx::query_as::<_, (String, String)>("SELECT key, value FROM relay_host_options WHERE relay_host_id = ?")

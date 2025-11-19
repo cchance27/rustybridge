@@ -1,13 +1,18 @@
 use anyhow::{Result, anyhow};
 use clap::{CommandFactory, FromArgMatches, error::ErrorKind};
+use crossterm::{
+    event::{self, Event, KeyEventKind}, execute, terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode}
+};
+use ratatui::prelude::*;
 use rb_cli::{
     init_tracing, server_cli::{
         CredsCmd, CredsCreateCmd, HostsAccessCmd, HostsCmd, HostsCredsCmd, HostsOptionsCmd, SecretsCmd, ServerArgs, ServerSubcommand, UsersCmd
-    }
+    }, tui_input
 };
 use server_core::{
     add_relay_host, add_user, assign_credential, create_agent_credential, create_password_credential, delete_credential, grant_relay_access, list_access, list_credentials, list_hosts, list_options, list_users, refresh_target_hostkey, remove_user, revoke_relay_access, rotate_secrets_key, run_server, set_relay_option, unassign_credential, unset_relay_option
 };
+use tui_core::{AppAction, AppSession};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -172,7 +177,7 @@ async fn main() -> Result<()> {
             // Load app with real data from database (as admin)
             let app: Box<dyn tui_core::TuiApp> = match cmd {
                 TuiCmd::RelaySelector => Box::new(server_core::create_relay_selector_app(None).await?),
-                TuiCmd::Management => Box::new(server_core::create_management_app().await?),
+                TuiCmd::Management => Box::new(server_core::create_management_app(None).await?),
             };
 
             run_tui(app).await?;
@@ -181,132 +186,176 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_tui(mut app: Box<dyn tui_core::TuiApp>) -> Result<()> {
-    use std::io::stdout;
-
-    use crossterm::{
-        event::{self, Event, KeyEventKind}, execute, terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode}
-    };
-    use ratatui::prelude::*;
-    // Shared key mapping for local TUI
-    use rb_cli::tui_input;
-    use tui_core::{AppAction, AppSession};
-
-    // Disable logging to prevent interference with TUI
+async fn run_tui(app: Box<dyn tui_core::TuiApp>) -> Result<()> {
     ssh_core::logging::disable_logging();
 
     enable_raw_mode()?;
-    let mut stdout = stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(std::io::stdout(), EnterAlternateScreen)?;
+    let mut in_alt_screen = true;
+
+    let backend = CrosstermBackend::new(std::io::stdout());
+    let mut session = AppSession::new(app, backend).map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
 
     loop {
-        let backend = CrosstermBackend::new(std::io::stdout());
-        let mut session = AppSession::new(app, backend).map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
-        let mut next_app_name: Option<String> = None;
-        let mut next_mgmt_tab: Option<usize> = None;
+        session.render().map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
 
-        loop {
-            session.render().map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
-
-            if event::poll(std::time::Duration::from_millis(100))?
-                && let Event::Key(key) = event::read()?
-                && key.kind == KeyEventKind::Press
-            {
-                // Map crossterm keys to canonical TUI bytes
-                let bytes = tui_input::map_key_to_bytes(&key);
-
-                if bytes.is_none() {
-                    continue;
-                }
-                let canonical = tui_core::input::canonicalize(&bytes.unwrap());
-                let action = session
-                    .handle_input(&canonical)
-                    .map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
-                match action {
-                    AppAction::Exit => {
-                        next_app_name = None;
-                        break;
-                    }
-                    AppAction::SwitchTo(name) => {
-                        next_app_name = Some(name);
-                        break;
-                    }
-                    AppAction::ConnectToRelay { name, .. } => {
-                        // Exit TUI and connect to the relay
-                        disable_raw_mode()?;
-                        execute!(stdout, LeaveAlternateScreen)?;
-
-                        // Give immediate feedback so it doesn't feel frozen
-                        use std::io::Write as _;
-                        println!("Connecting via proxy to {}...", name);
-                        std::io::stdout().flush().ok();
-
-                        // Best effort: print endpoint once available (does not block the initial feedback)
-                        if let Ok(handle) = state_store::server_db().await {
-                            let _ = state_store::migrate_server(&handle).await;
-                            let pool = handle.into_pool();
-                            if let Ok(Some(h)) = state_store::fetch_relay_host_by_name(&pool, &name).await {
-                                println!("Endpoint: {}:{}", h.ip, h.port);
-                            }
-                        }
-
-                        let user = std::env::var("USER").unwrap_or_else(|_| "root".to_string());
-
-                        if let Err(e) = server_core::connect_to_relay_local(&name, &user).await {
-                            eprintln!("Connection failed: {}", e);
-                        }
-                        return Ok(());
-                    }
-                    AppAction::AddRelay(_)
-                    | AppAction::UpdateRelay(_)
-                    | AppAction::DeleteRelay(_)
-                    | AppAction::AddCredential(_)
-                    | AppAction::DeleteCredential(_)
-                    | AppAction::UnassignCredential(_)
-                    | AppAction::AssignCredential { .. } => {
-                        let cloned = action.clone();
-                        let _ = server_core::handle_management_action_with_flash(cloned).await;
-                        // Reload Management app data
-                        next_app_name = Some("Management".to_string());
-                        // Keep user on the relevant tab after action
-                        next_mgmt_tab = Some(match action {
-                            AppAction::AddCredential(_) | AppAction::DeleteCredential(_) => 1,
-                            _ => 0,
-                        });
-                        break;
-                    }
-                    _ => {}
-                }
+        if event::poll(std::time::Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+            && key.kind == KeyEventKind::Press
+            && let Some(bytes) = tui_input::map_key_to_bytes(&key)
+        {
+            let canonical = tui_core::input::canonicalize(&bytes);
+            let action = session
+                .handle_input(&canonical)
+                .map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
+            if handle_local_action(&mut session, action, &mut in_alt_screen).await? {
+                break;
             }
-
-            let action = session.tick().map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
-            match action {
-                AppAction::Exit => break,
-                AppAction::SwitchTo(name) => {
-                    next_app_name = Some(name);
-                    break;
-                }
-                _ => {}
-            }
+            continue;
         }
 
-        if let Some(name) = next_app_name {
-            // Load app with real data from database
-            app = match name.as_str() {
-                "Management" => {
-                    let tab = next_mgmt_tab.unwrap_or(0);
-                    Box::new(server_core::create_management_app_with_tab(tab).await?)
-                }
-                _ => Box::new(server_core::create_relay_selector_app(None).await?), // None = admin
-            };
-            // Clear screen for next app
-            execute!(stdout, crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?;
-        } else {
+        let action = session.tick().map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
+        if handle_local_action(&mut session, action, &mut in_alt_screen).await? {
             break;
         }
+
+        // No background reloads; status and fetches are session-scoped
     }
 
-    disable_raw_mode()?;
-    execute!(std::io::stdout(), LeaveAlternateScreen)?;
+    if in_alt_screen {
+        disable_raw_mode()?;
+        execute!(std::io::stdout(), LeaveAlternateScreen)?;
+    }
     Ok(())
+}
+
+async fn handle_local_action(
+    session: &mut AppSession<CrosstermBackend<std::io::Stdout>>,
+    action: AppAction,
+    in_alt_screen: &mut bool,
+) -> Result<bool> {
+    use AppAction::*;
+    match action {
+        Exit => Ok(true),
+        Render | Continue => Ok(false),
+        SwitchTo(name) => {
+            let app = build_app_for_local(&name, None).await?;
+            session.set_app(app).map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
+            Ok(false)
+        }
+        ConnectToRelay { name, .. } => {
+            use std::io::Write as _;
+            disable_raw_mode()?;
+            execute!(std::io::stdout(), LeaveAlternateScreen)?;
+            *in_alt_screen = false;
+            println!("Connecting via proxy to {}...", name);
+            std::io::stdout().flush().ok();
+            if let Ok(handle) = state_store::server_db().await {
+                let _ = state_store::migrate_server(&handle).await;
+                let pool = handle.into_pool();
+                if let Ok(Some(h)) = state_store::fetch_relay_host_by_name(&pool, &name).await {
+                    println!("Endpoint: {}:{}", h.ip, h.port);
+                }
+            }
+            let user = std::env::var("USER").unwrap_or_else(|_| "root".to_string());
+            if let Err(e) = server_core::connect_to_relay_local(&name, &user).await {
+                eprintln!("Connection failed: {}", e);
+            }
+            Ok(true)
+        }
+        FetchHostkey { id, name } => {
+            // Per-session status message
+            session.set_status(Some(tui_core::app::StatusLine {
+                text: format!("Fetching host key for '{}'...", name),
+                kind: tui_core::app::StatusKind::Info,
+            }));
+            session.render().map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
+            // Perform the fetch inline
+            let action = tui_core::AppAction::FetchHostkey { id, name: name.clone() };
+            match server_core::handle_management_action(action).await {
+                Ok(Some(AppAction::ReviewHostkey(review))) => {
+                    // Reload with the review data
+                    let app2 = server_core::create_management_app_with_tab(0, Some(review)).await?;
+                    session
+                        .set_app(Box::new(app2))
+                        .map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
+                }
+                Ok(Some(AppAction::Error(msg))) => {
+                    session.set_status(Some(tui_core::app::StatusLine {
+                        text: msg,
+                        kind: tui_core::app::StatusKind::Error,
+                    }));
+                }
+                Ok(_) => {
+                    // Reload without review
+                    let app2 = build_app_for_local("Management", Some(0)).await?;
+                    session.set_app(app2).map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
+                }
+                Err(e) => {
+                    tracing::warn!("hostkey fetch failed: {}", e);
+                    session.set_status(Some(tui_core::app::StatusLine {
+                        text: format!("Hostkey fetch failed: {}", e),
+                        kind: tui_core::app::StatusKind::Error,
+                    }));
+                }
+            }
+            Ok(false)
+        }
+        add @ (AddRelay(_)
+        | UpdateRelay(_)
+        | DeleteRelay(_)
+        | AddCredential(_)
+        | DeleteCredential(_)
+        | UnassignCredential(_)
+        | AssignCredential { .. }
+        | StoreHostkey { .. }
+        | CancelHostkey { .. }) => {
+            let tab = if matches!(add, AddCredential(_) | DeleteCredential(_)) {
+                1
+            } else {
+                0
+            };
+            let res = server_core::handle_management_action(add.clone()).await;
+            let app = build_app_for_local("Management", Some(tab)).await?;
+            session.set_app(app).map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
+            match res {
+                Ok(_) => {
+                    if let AppAction::StoreHostkey { name, .. } = add {
+                        session.set_status(Some(tui_core::app::StatusLine {
+                            text: format!("Stored host key for '{}'", name),
+                            kind: tui_core::app::StatusKind::Success,
+                        }));
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("failed to apply management action: {}", e);
+                    let msg = server_core::format_action_error(&add, &e);
+                    session.set_status(Some(tui_core::app::StatusLine {
+                        text: msg,
+                        kind: tui_core::app::StatusKind::Error,
+                    }));
+                }
+            }
+            session.render().map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
+            Ok(false)
+        }
+        Error(msg) => {
+            session.set_status(Some(tui_core::app::StatusLine {
+                text: msg,
+                kind: tui_core::app::StatusKind::Error,
+            }));
+            Ok(false)
+        }
+        ReviewHostkey(review) => {
+            // Reload management app with the review
+            let app = server_core::create_management_app_with_tab(0, Some(review)).await?;
+            session.set_app(Box::new(app)).map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
+            Ok(false)
+        }
+    }
+}
+
+async fn build_app_for_local(name: &str, tab: Option<usize>) -> anyhow::Result<Box<dyn tui_core::TuiApp>> {
+    let app = server_core::create_app_by_name(None, name, tab).await?;
+    Ok(app)
 }

@@ -1,5 +1,18 @@
 use ratatui::Frame;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusKind {
+    Info,
+    Success,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusLine {
+    pub text: String,
+    pub kind: StatusKind,
+}
+
 use crate::TuiResult;
 
 /// Core trait that all TUI applications must implement.
@@ -33,6 +46,22 @@ pub trait TuiApp: Send {
     fn name(&self) -> &str {
         "TuiApp"
     }
+
+    /// Optional: Set a session-scoped status/flash message for this app instance.
+    /// Defaults to no-op; apps can override to display a message.
+    fn set_status(&mut self, _status: Option<StatusLine>) {}
+
+    /// Back-compat helper if callers only have text (defaults to Error style).
+    fn set_status_message(&mut self, msg: Option<String>) {
+        if let Some(m) = msg {
+            self.set_status(Some(StatusLine {
+                text: m,
+                kind: StatusKind::Error,
+            }));
+        } else {
+            self.set_status(None);
+        }
+    }
 }
 
 /// Result of an app operation indicating the next step
@@ -62,6 +91,16 @@ pub enum AppAction {
     UnassignCredential(String),
     /// Assign a shared credential to a relay host by hostname
     AssignCredential { host: String, cred_name: String },
+    /// Fetch the current host key from the selected relay host (no store yet)
+    FetchHostkey { id: i64, name: String },
+    /// Store the last fetched host key for the selected relay host (replace if exists)
+    StoreHostkey { id: i64, name: String, key: String },
+    /// Cancel any pending hostkey review for the selected relay host
+    CancelHostkey { id: i64, name: String },
+    /// Propagate an error message to the UI
+    Error(String),
+    /// Review a fetched hostkey
+    ReviewHostkey(crate::apps::management::HostkeyReview),
 }
 
 // Backward compatibility constants (deprecated)
