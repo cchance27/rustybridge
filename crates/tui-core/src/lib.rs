@@ -12,6 +12,7 @@ pub mod registry;
 pub mod session;
 pub mod utils;
 pub mod widgets;
+pub mod input;
 
 // Re-export core types
 pub use app::{AppAction, CONTINUE, RE_RENDER, TuiApp};

@@ -184,11 +184,17 @@ async fn main() -> Result<()> {
 async fn run_tui(mut app: Box<dyn tui_core::TuiApp>) -> Result<()> {
     use std::io::stdout;
 
-    use crossterm::{
-        event::{self, Event, KeyCode, KeyEventKind, KeyModifiers}, execute, terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode}
+use crossterm::{
+        event::{self, Event, KeyEventKind}, execute, terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode}
     };
     use ratatui::prelude::*;
     use tui_core::{AppAction, AppSession};
+    
+    // Shared key mapping for local TUI
+    use rb_cli::tui_input;
+
+    // Disable logging to prevent interference with TUI
+    ssh_core::logging::disable_logging();
 
     enable_raw_mode()?;
     let mut stdout = stdout();
@@ -206,33 +212,15 @@ async fn run_tui(mut app: Box<dyn tui_core::TuiApp>) -> Result<()> {
                 && let Event::Key(key) = event::read()?
                 && key.kind == KeyEventKind::Press
             {
-                // Map crossterm keys to the byte sequences expected by the TUI
-                let bytes: Option<Vec<u8>> = match key.code {
-                    KeyCode::Char(c) => {
-                        // Handle Ctrl+C explicitly
-                        if key.modifiers.contains(KeyModifiers::CONTROL) && (c == 'c' || c == 'C') {
-                            Some(vec![0x03])
-                        } else {
-                            let mut tmp = [0u8; 4];
-                            let s = c.encode_utf8(&mut tmp);
-                            Some(s.as_bytes().to_vec())
-                        }
-                    }
-                    KeyCode::Enter => Some(vec![b'\r']),
-                    KeyCode::Esc => Some(vec![0x1b]),
-                    KeyCode::Tab => Some(vec![b'\t']),
-                    KeyCode::Up => Some(vec![0x1b, b'[', b'A']),
-                    KeyCode::Down => Some(vec![0x1b, b'[', b'B']),
-                    KeyCode::Right => Some(vec![0x1b, b'[', b'C']),
-                    KeyCode::Left => Some(vec![0x1b, b'[', b'D']),
-                    _ => None,
-                };
+                // Map crossterm keys to canonical TUI bytes
+                let bytes = tui_input::map_key_to_bytes(&key);
 
                 if bytes.is_none() {
                     continue;
                 }
+                let canonical = tui_core::input::canonicalize(&bytes.unwrap());
                 let action = session
-                    .handle_input(&bytes.unwrap())
+                    .handle_input(&canonical)
                     .map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
                 match action {
                     AppAction::Exit => {
@@ -268,6 +256,15 @@ async fn run_tui(mut app: Box<dyn tui_core::TuiApp>) -> Result<()> {
                             eprintln!("Connection failed: {}", e);
                         }
                         return Ok(());
+                    }
+                    AppAction::AddRelay(_) | AppAction::UpdateRelay(_) | AppAction::DeleteRelay(_) => {
+                        let cloned = action.clone();
+                        if let Err(e) = server_core::handle_management_action(cloned).await {
+                            eprintln!("failed to apply management action: {}", e);
+                        }
+                        // Reload Management app data
+                        next_app_name = Some("Management".to_string());
+                        break;
                     }
                     _ => {}
                 }

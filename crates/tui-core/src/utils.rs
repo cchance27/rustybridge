@@ -1,4 +1,5 @@
 use std::time::Duration;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 pub fn format_duration(d: Duration) -> String {
     let secs = d.as_secs();
@@ -14,6 +15,33 @@ pub fn format_duration(d: Duration) -> String {
 
 pub fn desired_rect(size: (u16, u16)) -> ratatui::layout::Rect {
     ratatui::layout::Rect::new(0, 0, size.0, size.1)
+}
+
+/// Helper function to create a centered rect using up certain percentage of the available rect `r`
+pub fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(
+            [
+                Constraint::Percentage((100 - percent_y) / 2),
+                Constraint::Percentage(percent_y),
+                Constraint::Percentage((100 - percent_y) / 2),
+            ]
+            .as_ref(),
+        )
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(
+            [
+                Constraint::Percentage((100 - percent_x) / 2),
+                Constraint::Percentage(percent_x),
+                Constraint::Percentage((100 - percent_x) / 2),
+            ]
+            .as_ref(),
+        )
+        .split(popup_layout[1])[1]
 }
 
 /// Build a lightweight escape sequence that updates only the status-bar timer at the bottom right.

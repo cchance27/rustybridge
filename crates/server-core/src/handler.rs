@@ -426,8 +426,10 @@ impl ssh_server::Handler for ServerHandler {
         }
 
         if let Some(app_session) = self.app_session.as_mut() {
+            // Normalize incoming SSH bytes to canonical TUI sequences
+            let canonical = tui_core::input::canonicalize(data);
             let action = app_session
-                .handle_input(data)
+                .handle_input(&canonical)
                 .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
             match action {
                 AppAction::Exit => {
@@ -444,6 +446,12 @@ impl ssh_server::Handler for ServerHandler {
                     self.drop_terminal(); // Stop TUI
                     self.leave_alt_screen(session, channel)?; // Leave alt screen
                     self.connect_to_relay(session, channel, &name).await?; // Now Connect
+                }
+                AppAction::AddRelay(_) | AppAction::UpdateRelay(_) | AppAction::DeleteRelay(_) => {
+                    let cloned = action.clone();
+                    if let Err(e) = crate::handle_management_action(cloned).await {
+                        warn!("failed to apply management action: {}", e);
+                    }
                 }
                 AppAction::Continue => {}
             }

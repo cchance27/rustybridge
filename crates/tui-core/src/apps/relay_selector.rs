@@ -5,7 +5,7 @@ use ratatui::Frame;
 use crate::{AppAction, TuiApp, TuiResult, widgets::Menu};
 
 /// Represents a relay host option in the menu
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RelayItem {
     pub name: String,
     pub description: String,

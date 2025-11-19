@@ -60,3 +60,17 @@ fn level_to_str(level: LevelFilter) -> &'static str {
         _ => "info",
     }
 }
+
+pub fn disable_logging() {
+    if let Some(handle) = RELOAD.get() {
+        let _ = handle.reload(EnvFilter::new("off"));
+    }
+}
+
+
+pub fn enable_logging(level: LevelFilter) {
+    if let Some(handle) = RELOAD.get() {
+        let _ = handle.reload(EnvFilter::new(level_to_str(level)));
+    }
+}
+

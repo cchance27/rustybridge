@@ -678,6 +678,35 @@ pub async fn create_management_app() -> ServerResult<tui_core::apps::ManagementA
     Ok(tui_core::apps::ManagementApp::new(relay_items))
 }
 
+/// Apply side effects for management-related AppActions (add/update/delete relay hosts).
+/// Centralizing this logic avoids divergence between local and SSH TUI paths.
+pub async fn handle_management_action(action: tui_core::AppAction) -> ServerResult<()> {
+    match action {
+        tui_core::AppAction::AddRelay(item) => {
+            let (ip, port) = parse_endpoint(&item.description)?;
+            let db = server_db().await?;
+            migrate_server(&db).await?;
+            let pool = db.into_pool();
+            state_store::insert_relay_host(&pool, &item.name, &ip, port).await?;
+        }
+        tui_core::AppAction::UpdateRelay(item) => {
+            let (ip, port) = parse_endpoint(&item.description)?;
+            let db = server_db().await?;
+            migrate_server(&db).await?;
+            let pool = db.into_pool();
+            state_store::update_relay_host(&pool, item.id, &item.name, &ip, port).await?;
+        }
+        tui_core::AppAction::DeleteRelay(id) => {
+            let db = server_db().await?;
+            migrate_server(&db).await?;
+            let pool = db.into_pool();
+            state_store::delete_relay_host_by_id(&pool, id).await?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Create a RelaySelectorApp with relay hosts loaded from the database
 /// If username is Some, filters by access. If None (or "admin"), shows all relays with admin privileges.
 pub async fn create_relay_selector_app(username: Option<&str>) -> ServerResult<tui_core::apps::RelaySelectorApp> {

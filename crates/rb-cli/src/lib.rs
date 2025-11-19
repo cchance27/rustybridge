@@ -1,5 +1,6 @@
 pub mod client_cli;
 pub mod server_cli;
+pub mod tui_input;
 
 pub fn init_tracing() {
     use tracing::level_filters::LevelFilter;

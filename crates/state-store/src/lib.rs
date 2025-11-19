@@ -131,6 +131,39 @@ pub async fn list_relay_hosts(pool: &SqlitePool, username: Option<&str>) -> DbRe
         .collect())
 }
 
+pub async fn insert_relay_host(pool: &SqlitePool, name: &str, ip: &str, port: i64) -> DbResult<i64> {
+    sqlx::query("INSERT INTO relay_hosts (name, ip, port) VALUES (?, ?, ?)")
+        .bind(name)
+        .bind(ip)
+        .bind(port)
+        .execute(pool)
+        .await?;
+    let row = sqlx::query("SELECT id FROM relay_hosts WHERE name = ?")
+        .bind(name)
+        .fetch_one(pool)
+        .await?;
+    Ok(row.get::<i64, _>("id"))
+}
+
+pub async fn update_relay_host(pool: &SqlitePool, id: i64, name: &str, ip: &str, port: i64) -> DbResult<()> {
+    sqlx::query("UPDATE relay_hosts SET name = ?, ip = ?, port = ? WHERE id = ?")
+        .bind(name)
+        .bind(ip)
+        .bind(port)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn delete_relay_host_by_id(pool: &SqlitePool, id: i64) -> DbResult<()> {
+    sqlx::query("DELETE FROM relay_hosts WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn fetch_relay_access_usernames(pool: &SqlitePool, relay_host_id: i64) -> DbResult<Vec<String>> {
     let rows = sqlx::query("SELECT username FROM relay_host_acl WHERE relay_host_id = ? ORDER BY username")
         .bind(relay_host_id)

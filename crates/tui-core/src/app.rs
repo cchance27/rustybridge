@@ -48,6 +48,12 @@ pub enum AppAction {
     SwitchTo(String),
     /// Connect to a specific relay
     ConnectToRelay { id: i64, name: String },
+    /// Add a new relay host
+    AddRelay(crate::apps::relay_selector::RelayItem),
+    /// Update an existing relay host
+    UpdateRelay(crate::apps::relay_selector::RelayItem),
+    /// Delete a relay host by ID
+    DeleteRelay(i64),
 }
 
 // Backward compatibility constants (deprecated)

@@ -3,6 +3,7 @@ use ratatui::{
 };
 
 /// A text input widget with a prompt
+#[derive(Clone)]
 pub struct Input {
     prompt: String,
     value: String,
@@ -37,7 +38,7 @@ impl Input {
         std::mem::take(&mut self.value)
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, show_cursor: bool) {
         if area.width == 0 {
             return;
         }
@@ -46,11 +47,13 @@ impl Input {
         let prompt_line = Line::from(Span::styled(display, Style::default().fg(Color::Yellow)));
         frame.render_widget(Paragraph::new(prompt_line), area);
 
-        let cursor_x = area.x + cursor_col as u16;
-        frame.set_cursor_position(ratatui::layout::Position {
-            x: cursor_x.min(area.x + area.width.saturating_sub(1)),
-            y: area.y,
-        });
+        if show_cursor {
+            let cursor_x = area.x + cursor_col as u16;
+            frame.set_cursor_position(ratatui::layout::Position {
+                x: cursor_x.min(area.x + area.width.saturating_sub(1)),
+                y: area.y,
+            });
+        }
     }
 }
 

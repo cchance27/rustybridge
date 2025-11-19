@@ -1,8 +1,44 @@
 use ratatui::{
-    Frame, layout::{Constraint, Direction, Layout}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, Paragraph, Tabs}
+    Frame,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph, Tabs, Table, Row, Cell, TableState, Clear, Wrap},
 };
 
 use crate::{AppAction, TuiApp, TuiResult};
+use crate::apps::relay_selector::RelayItem;
+use crate::widgets::input::Input;
+use crate::utils::centered_rect;
+
+#[derive(Clone)]
+struct HostForm {
+    name: Input,
+    description: Input,
+}
+
+impl HostForm {
+    fn new() -> Self {
+        Self {
+            name: Input::new("Name: "),
+            description: Input::new("Endpoint (IP:Port): "),
+        }
+    }
+
+    fn from_relay(relay: &RelayItem) -> Self {
+        Self {
+            name: Input::new("Name: ").with_value(&relay.name),
+            description: Input::new("Endpoint (IP:Port): ").with_value(&relay.description),
+        }
+    }
+}
+
+enum PopupState {
+    None,
+    AddHost(HostForm, usize), // usize tracks which field is focused (0=name, 1=desc)
+    EditHost(HostForm, usize, i64), // i64 is the ID of the host being edited
+    DeleteConfirm(i64, String), // ID and Name of host to delete
+}
 
 /// Admin management interface
 pub struct ManagementApp {
@@ -10,12 +46,18 @@ pub struct ManagementApp {
     selected_tab: usize,
     should_exit: bool,
     // Cache for relay hosts
-    relay_hosts: Vec<crate::apps::relay_selector::RelayItem>,
+    relay_hosts: Vec<RelayItem>,
+    table_state: TableState,
+    popup: PopupState,
 }
 
 impl ManagementApp {
     /// Create a new ManagementApp with pre-loaded relay hosts
-    pub fn new(relay_hosts: Vec<crate::apps::relay_selector::RelayItem>) -> Self {
+    pub fn new(relay_hosts: Vec<RelayItem>) -> Self {
+        let mut table_state = TableState::default();
+        if !relay_hosts.is_empty() {
+            table_state.select(Some(0));
+        }
         Self {
             tabs: vec![
                 "Relay Hosts".to_string(),
@@ -26,6 +68,8 @@ impl ManagementApp {
             selected_tab: 0,
             should_exit: false,
             relay_hosts,
+            table_state,
+            popup: PopupState::None,
         }
     }
 
@@ -40,6 +84,64 @@ impl ManagementApp {
             self.selected_tab = self.tabs.len() - 1;
         }
     }
+
+    fn next_row(&mut self) {
+        if self.relay_hosts.is_empty() {
+            return;
+        }
+        let i = match self.table_state.selected() {
+            Some(i) => {
+                if i >= self.relay_hosts.len() - 1 {
+                    0
+                } else {
+                    i + 1
+                }
+            }
+            None => 0,
+        };
+        self.table_state.select(Some(i));
+    }
+
+    fn previous_row(&mut self) {
+        if self.relay_hosts.is_empty() {
+            return;
+        }
+        let i = match self.table_state.selected() {
+            Some(i) => {
+                if i == 0 {
+                    self.relay_hosts.len() - 1
+                } else {
+                    i - 1
+                }
+            }
+            None => 0,
+        };
+        self.table_state.select(Some(i));
+    }
+
+    fn open_add_popup(&mut self) {
+        self.popup = PopupState::AddHost(HostForm::new(), 0);
+    }
+
+    fn open_edit_popup(&mut self) {
+        if let Some(selected) = self.table_state.selected() {
+            if let Some(host) = self.relay_hosts.get(selected) {
+                self.popup = PopupState::EditHost(HostForm::from_relay(host), 0, host.id);
+            }
+        }
+    }
+
+    fn open_delete_popup(&mut self) {
+        if let Some(selected) = self.table_state.selected() {
+            if let Some(host) = self.relay_hosts.get(selected) {
+                self.popup = PopupState::DeleteConfirm(host.id, host.name.clone());
+            }
+        }
+    }
+
+    fn close_popup(&mut self) {
+        self.popup = PopupState::None;
+    }
 }
 
 impl Default for ManagementApp {
@@ -50,6 +152,141 @@ impl Default for ManagementApp {
 
 impl TuiApp for ManagementApp {
     fn handle_input(&mut self, input: &[u8]) -> TuiResult<AppAction> {
+        tracing::info!("ManagementApp input: {:?}", input);
+        
+        // Helper for form input handling
+        enum FormAction {
+            Continue,
+            Render,
+            Submit,
+            Cancel,
+        }
+
+        fn handle_form_input(form: &mut HostForm, focus: &mut usize, input: &[u8]) -> FormAction {
+            let mut i = 0;
+            let mut render = false;
+            while i < input.len() {
+                let byte = input[i];
+                i += 1;
+                match byte {
+                    0x1b => {
+                        if i < input.len() && input[i] == b'[' {
+                             // Handle CSI
+                             i += 1;
+                             if i < input.len() {
+                                 let code = input[i];
+                                 i += 1;
+                                 match code {
+                                     b'3' => {
+                                         if i < input.len() && input[i] == b'~' {
+                                             i += 1;
+                                             // Delete key - treat as backspace for now since we don't have cursor nav
+                                             match focus {
+                                                 0 => { form.name.pop_char(); }
+                                                 1 => { form.description.pop_char(); }
+                                                 _ => {}
+                                             }
+                                             render = true;
+                                         }
+                                     }
+                                     _ => {}
+                                 }
+                             }
+                        } else {
+                            return FormAction::Cancel;
+                        }
+                    }
+                    b'\t' => {
+                        *focus = (*focus + 1) % 2;
+                        render = true;
+                    }
+                    b'\r' | b'\n' => {
+                        return FormAction::Submit;
+                    }
+                    0x7f | 0x08 => {
+                        match focus {
+                            0 => { form.name.pop_char(); }
+                            1 => { form.description.pop_char(); }
+                            _ => {}
+                        }
+                        render = true;
+                    }
+                    c if c >= 32 && c <= 126 => {
+                        let char = c as char;
+                        match focus {
+                            0 => form.name.push_char(char),
+                            1 => form.description.push_char(char),
+                            _ => {}
+                        }
+                        render = true;
+                    }
+                    _ => {}
+                }
+            }
+            if render { FormAction::Render } else { FormAction::Continue }
+        }
+
+        // Handle Popup Input
+        match &mut self.popup {
+            PopupState::AddHost(form, focus) => {
+                match handle_form_input(form, focus, input) {
+                    FormAction::Cancel => {
+                        self.close_popup();
+                        return Ok(AppAction::Render);
+                    }
+                    FormAction::Submit => {
+                        let new_host = RelayItem {
+                            name: form.name.value().to_string(),
+                            description: form.description.value().to_string(),
+                            id: 0,
+                        };
+                        self.close_popup();
+                        return Ok(AppAction::AddRelay(new_host));
+                    }
+                    FormAction::Render => return Ok(AppAction::Render),
+                    FormAction::Continue => return Ok(AppAction::Continue),
+                }
+            }
+            PopupState::EditHost(form, focus, id) => {
+                match handle_form_input(form, focus, input) {
+                    FormAction::Cancel => {
+                        self.close_popup();
+                        return Ok(AppAction::Render);
+                    }
+                    FormAction::Submit => {
+                        let updated_host = RelayItem {
+                            name: form.name.value().to_string(),
+                            description: form.description.value().to_string(),
+                            id: *id,
+                        };
+                        self.close_popup();
+                        return Ok(AppAction::UpdateRelay(updated_host));
+                    }
+                    FormAction::Render => return Ok(AppAction::Render),
+                    FormAction::Continue => return Ok(AppAction::Continue),
+                }
+            }
+            PopupState::DeleteConfirm(id, _) => {
+                for &byte in input {
+                    match byte {
+                        b'y' | b'Y' | b'\r' | b'\n' => {
+                            let id_to_delete = *id;
+                            self.close_popup();
+                            return Ok(AppAction::DeleteRelay(id_to_delete));
+                        }
+                        b'n' | b'N' | 0x1b => {
+                            self.close_popup();
+                            return Ok(AppAction::Render);
+                        }
+                        _ => {}
+                    }
+                }
+                return Ok(AppAction::Continue);
+            }
+            PopupState::None => {}
+        }
+
+        // Handle Main Input
         for &byte in input {
             match byte {
                 b'q' | 0x03 => {
@@ -64,9 +301,39 @@ impl TuiApp for ManagementApp {
                 b'r' => {
                     return Ok(AppAction::SwitchTo("RelaySelector".into()));
                 }
+                b'a' => {
+                    if self.selected_tab == 0 {
+                        self.open_add_popup();
+                        return Ok(AppAction::Render);
+                    }
+                }
+                b'e' => {
+                    if self.selected_tab == 0 {
+                        self.open_edit_popup();
+                        return Ok(AppAction::Render);
+                    }
+                }
+                b'd' => {
+                    if self.selected_tab == 0 {
+                        self.open_delete_popup();
+                        return Ok(AppAction::Render);
+                    }
+                }
                 0x1b => {
                     if input.len() == 1 {
                         return Ok(AppAction::Exit);
+                    }
+                }
+                b'j' => {
+                    if self.selected_tab == 0 {
+                        self.next_row();
+                        return Ok(AppAction::Render);
+                    }
+                }
+                b'k' => {
+                    if self.selected_tab == 0 {
+                        self.previous_row();
+                        return Ok(AppAction::Render);
                     }
                 }
                 _ => {}
@@ -85,6 +352,20 @@ impl TuiApp for ManagementApp {
                     // Left
                     self.previous_tab();
                     return Ok(AppAction::Render);
+                }
+                b'A' => {
+                    // Up
+                    if self.selected_tab == 0 {
+                        self.previous_row();
+                        return Ok(AppAction::Render);
+                    }
+                }
+                b'B' => {
+                    // Down
+                    if self.selected_tab == 0 {
+                        self.next_row();
+                        return Ok(AppAction::Render);
+                    }
                 }
                 _ => {}
             }
@@ -121,17 +402,29 @@ impl TuiApp for ManagementApp {
         frame.render_widget(tabs, chunks[0]);
 
         let inner = match self.selected_tab {
-            0 => self.render_relay_hosts(),
-            1 => self.render_credentials(),
-            2 => self.render_options(),
-            3 => self.render_stats(),
+            0 => {
+                self.render_relay_hosts(frame, chunks[1]);
+                None
+            },
+            1 => Some(self.render_credentials()),
+            2 => Some(self.render_options()),
+            3 => Some(self.render_stats()),
             _ => unreachable!(),
         };
-        frame.render_widget(inner, chunks[1]);
+        
+        if let Some(widget) = inner {
+            frame.render_widget(widget, chunks[1]);
+        }
 
-        let commands =
-            Paragraph::new("Tab/Arrows: Switch Tab | r: Relay Selector | q/Esc: Exit").style(Style::default().fg(Color::DarkGray));
+        let commands = if self.selected_tab == 0 {
+             Paragraph::new("Tab/Arrows: Switch Tab | j/k: Navigate | a: Add | e: Edit | d: Delete | r: Relay Selector | q/Esc: Exit").style(Style::default().fg(Color::DarkGray))
+        } else {
+             Paragraph::new("Tab/Arrows: Switch Tab | r: Relay Selector | q/Esc: Exit").style(Style::default().fg(Color::DarkGray))
+        };
         frame.render_widget(commands, chunks[2]);
+
+        // Render Popup
+        self.render_popup(frame, area);
     }
 
     fn should_exit(&self) -> bool {
@@ -144,18 +437,37 @@ impl TuiApp for ManagementApp {
 }
 
 impl ManagementApp {
-    fn render_relay_hosts(&self) -> Paragraph<'static> {
-        let content = if self.relay_hosts.is_empty() {
-            "No relay hosts found.".to_string()
-        } else {
-            self.relay_hosts
-                .iter()
-                .map(|h| format!("{} ({})", h.name, h.description))
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
+    fn render_relay_hosts(&mut self, frame: &mut Frame, area: Rect) {
+        let header_cells = ["ID", "Name", "Endpoint"]
+            .iter()
+            .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow)));
+        let header = Row::new(header_cells)
+            .style(Style::default().bg(Color::Blue))
+            .height(1)
+            .bottom_margin(1);
 
-        Paragraph::new(content).block(Block::default().borders(Borders::ALL).title("Relay Hosts"))
+        let rows = self.relay_hosts.iter().map(|item| {
+            let cells = vec![
+                Cell::from(item.id.to_string()),
+                Cell::from(item.name.clone()),
+                Cell::from(item.description.clone()),
+            ];
+            Row::new(cells).height(1)
+        });
+
+        let t = Table::new(
+            rows,
+            [
+                Constraint::Length(5),
+                Constraint::Length(20),
+                Constraint::Min(10),
+            ]
+        )
+        .header(header)
+        .block(Block::default().borders(Borders::ALL).title("Relay Hosts"))
+        .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+
+        frame.render_stateful_widget(t, area, &mut self.table_state);
     }
 
     fn render_credentials(&self) -> Paragraph<'static> {
@@ -168,5 +480,89 @@ impl ManagementApp {
 
     fn render_stats(&self) -> Paragraph<'static> {
         Paragraph::new("Server Statistics (Coming Soon)").block(Block::default().borders(Borders::ALL).title("Stats"))
+    }
+
+    fn render_popup(&self, frame: &mut Frame, area: Rect) {
+        match &self.popup {
+            PopupState::None => {}
+            PopupState::AddHost(form, focus) => {
+                let block = Block::default().title("Add Relay Host").borders(Borders::ALL);
+                let area = centered_rect(60, 40, area);
+                frame.render_widget(Clear, area);
+                frame.render_widget(block, area);
+
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .margin(2)
+                    .constraints(
+                        [
+                            Constraint::Length(3),
+                            Constraint::Length(3),
+                            Constraint::Min(1),
+                        ]
+                        .as_ref(),
+                    )
+                    .split(area);
+
+                form.name.render(frame, chunks[0], *focus == 0);
+                form.description.render(frame, chunks[1], *focus == 1);
+                
+                // Draw focus indicator
+                // Since Input::render handles the cursor, I might not need to do much else.
+                // But I want to highlight the active field.
+                // I can draw a block around them?
+                // Or just rely on the cursor.
+                
+                let instructions = Paragraph::new("Tab: Switch | Enter: Submit | Esc: Cancel")
+                    .style(Style::default().fg(Color::DarkGray));
+                frame.render_widget(instructions, chunks[2]);
+            }
+            PopupState::EditHost(form, focus, _id) => {
+                let block = Block::default().title("Edit Relay Host").borders(Borders::ALL);
+                let area = centered_rect(60, 40, area);
+                frame.render_widget(Clear, area);
+                frame.render_widget(block, area);
+
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .margin(2)
+                    .constraints(
+                        [
+                            Constraint::Length(3),
+                            Constraint::Length(3),
+                            Constraint::Min(1),
+                        ]
+                        .as_ref(),
+                    )
+                    .split(area);
+
+                form.name.render(frame, chunks[0], *focus == 0);
+                form.description.render(frame, chunks[1], *focus == 1);
+
+                let instructions = Paragraph::new("Tab: Switch | Enter: Save | Esc: Cancel")
+                    .style(Style::default().fg(Color::DarkGray));
+                frame.render_widget(instructions, chunks[2]);
+            }
+            PopupState::DeleteConfirm(_id, name) => {
+                let block = Block::default().title("Confirm Delete").borders(Borders::ALL).style(Style::default().fg(Color::Red));
+                let area = centered_rect(40, 20, area);
+                frame.render_widget(Clear, area);
+                frame.render_widget(block, area);
+
+                let text = format!("Are you sure you want to delete '{}'?", name);
+                let p = Paragraph::new(text).wrap(Wrap { trim: true }).alignment(ratatui::layout::Alignment::Center);
+                
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .margin(2)
+                    .constraints([Constraint::Min(1), Constraint::Length(1)].as_ref())
+                    .split(area);
+                    
+                frame.render_widget(p, chunks[0]);
+                
+                let instructions = Paragraph::new("y/Enter: Yes | n/Esc: No").alignment(ratatui::layout::Alignment::Center).style(Style::default().fg(Color::DarkGray));
+                frame.render_widget(instructions, chunks[1]);
+            }
+        }
     }
 }
