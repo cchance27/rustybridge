@@ -2,7 +2,7 @@
 
 `rb-cli` hosts the workspace binaries:
 - `rb`: a legacy-friendly SSH client that supports password, public-key, agent, keyboard-interactive, and certificate authentication plus optional agent forwarding.
-- `rb-server`: the jump-host wrapper that embeds the relaxed SSH server from `server-core` and manages relay host metadata.
+- `rb-server`: the jump-host wrapper that embeds the SSH server from `server-core` (secure defaults for inbound) and manages relay host metadata.
 
 ## Usage
 ```bash

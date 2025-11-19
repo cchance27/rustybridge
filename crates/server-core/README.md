@@ -1,7 +1,7 @@
 # server-core
 
 `server-core` exposes the embedded SSH server and relay management used by `rb-server`. It handles:
-- russh server configuration with legacy-friendly cipher suites (opt-in) and Ed25519 host keys.
+- russh server configuration with secure defaults for inbound connections (Ed25519 host keys). Legacy suites are used only for outbound relay when a host is explicitly marked `insecure=true`.
 - SQLite-backed state for server options and relay hosts via `state-store`.
 - A minimal TUI/handler stack so inbound sessions see a friendly prompt before being proxied.
 

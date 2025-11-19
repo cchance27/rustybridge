@@ -276,7 +276,7 @@ impl ManagementApp {
     fn open_add_credential_popup(&mut self) {
         self.popup = PopupState::AddCredential(Box::new(CredentialForm::new()), 0);
     }
-    
+
     fn open_delete_credential_popup(&mut self) {
         if let Some(i) = self.creds_state.selected()
             && let Some(c) = self.credentials.get(i)
@@ -1276,11 +1276,7 @@ impl CredentialForm {
                 }
                 // Optional certificate content (OpenSSH format)
                 let cert_val = self.cert_value.value().trim();
-                let cert_opt = if cert_val.is_empty() {
-                    None
-                } else {
-                    Some(cert_val.to_string())
-                };
+                let cert_opt = if cert_val.is_empty() { None } else { Some(cert_val.to_string()) };
                 let passphrase = if self.passphrase.value().trim().is_empty() {
                     None
                 } else {

@@ -23,7 +23,7 @@ use russh::{
 use secrecy::ExposeSecret;
 use server_manager::ServerManager;
 use sqlx::{Row, SqlitePool};
-use ssh_core::crypto::legacy_preferred;
+use ssh_core::crypto::default_preferred;
 use state_store::{migrate_server, server_db};
 use tracing::info;
 
@@ -80,7 +80,8 @@ pub async fn run_server(config: ServerConfig) -> ServerResult<()> {
     let host_key = load_or_create_host_key(&pool).await?;
 
     let mut server_config = ssh_server::Config {
-        preferred: legacy_preferred(),
+        // Inbound server connections must always run with secure defaults
+        preferred: default_preferred(),
         auth_rejection_time: Duration::from_millis(250),
         auth_rejection_time_initial: Some(Duration::from_millis(0)),
         nodelay: true,
@@ -900,8 +901,12 @@ fn format_action_error(action: &tui_core::AppAction, e: &ServerError) -> String 
         tui_core::AppAction::UpdateRelay(item) => format!("Cannot update relay host '{}': {}", item.name, e),
         tui_core::AppAction::DeleteRelay(id) => format!("Cannot delete relay host id {}: {}", id, e),
         tui_core::AppAction::AddCredential(spec) => match spec {
-            tui_core::apps::management::CredentialSpec::Password { name, .. } => format!("Cannot create password credential '{}': {}", name, e),
-            tui_core::apps::management::CredentialSpec::SshKey { name, .. } => format!("Cannot create ssh_key credential '{}': {}", name, e),
+            tui_core::apps::management::CredentialSpec::Password { name, .. } => {
+                format!("Cannot create password credential '{}': {}", name, e)
+            }
+            tui_core::apps::management::CredentialSpec::SshKey { name, .. } => {
+                format!("Cannot create ssh_key credential '{}': {}", name, e)
+            }
             tui_core::apps::management::CredentialSpec::Agent { name, .. } => format!("Cannot create agent credential '{}': {}", name, e),
         },
         tui_core::AppAction::DeleteCredential(name) => format!("Cannot delete credential '{}': {}", name, e),

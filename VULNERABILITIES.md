@@ -21,13 +21,13 @@ Insecure cryptographic suites are *only* enabled when a user explicitly requests
 
 ### How It Is Triggered
 
-This vulnerability is only exposed when RSA-based algorithms are in use. In `rustybridge`, RSA and other weak algorithms are only enabled when an insecure mode is explicitly activated.
+This vulnerability is only exposed when RSA-based algorithms are in use. In `rustybridge`, RSA and other weak algorithms are only enabled when an insecure mode is explicitly activated for outbound connections.
 
-- **On the Client (`rb`):**
+- **On the Client (`rb`) [outbound]:**
   - By using the `--insecure` command-line flag.
   - This enables a legacy suite of algorithms, including `rsa-sha1`, which uses the vulnerable `rsa` crate functionality.
 
-- **On the Server (`rb-server` as a Jump Host):**
+- **On the Server (`rb-server` as a Jump Host) [outbound to relay targets]:**
   - By setting the `insecure=true` option on a specific relay host.
   - Example: `rb-server hosts options set my-legacy-host insecure true`
   - When the server connects to `my-legacy-host`, it will use the same legacy suite, thus exposing the server's outbound connection to this vulnerability.
@@ -36,7 +36,7 @@ This vulnerability is only exposed when RSA-based algorithms are in use. In `rus
 
 **Do not use the `--insecure` flag or the `insecure=true` server option unless it is absolutely necessary to connect to a legacy device and you are on a completely trusted network where network traffic cannot be monitored by malicious actors.**
 
-By default, `rustybridge` uses a modern, secure set of algorithms that are not vulnerable to this attack.
+By default, `rustybridge` uses a modern, secure set of algorithms for all connections, and `rb-server` always uses secure defaults for inbound client connections.
 
 ---
 
@@ -54,10 +54,12 @@ In addition to the specific `rsa` vulnerability, the insecure mode enables other
 
 ### How It Is Triggered
 
-This is triggered in the exact same way as the RSA vulnerability:
+This is triggered in the exact same way as the RSA vulnerability, and only for outbound connections:
 
-- **On the Client (`rb`):** Use of the `--insecure` flag.
-- **On the Server (`rb-server`):** Use of the `insecure=true` option for a relay host.
+- **Client (`rb`) outbound:** Use of the `--insecure` flag.
+- **Server (`rb-server`) outbound to relay target:** Use of the `insecure=true` option for that host.
+
+Inbound connections to `rb-server` are always negotiated with secure defaults.
 
 ### Mitigation
 

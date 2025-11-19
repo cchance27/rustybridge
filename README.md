@@ -6,7 +6,7 @@
 A legacy-friendly SSH toolkit that keeps forgotten hardware reachable while still giving modern operators control. rustybridge ships both a relaxed SSH client (`rb`) and an embeddable jump host (`rb-server`). By default we stick to modern crypto, but you can explicitly opt into older ciphers, hashes, or KEX so you can nurse decades-old routers, kiosks, or lab gear through one more upgrade cycle.
 
 ## Highlights
-- **Legacy crypto on tap**: Toggle relaxed suites (`--insecure`) when you must talk to ancient firmware; we require explicit approval each time.
+- **Legacy crypto on tap (outbound only)**: Toggle relaxed suites for outbound connections when you must talk to ancient firmware. Use `rb --insecure` (client) or mark a relay target with `insecure=true` (server per-host). Inbound connections to `rb-server` always use secure defaults.
 - **Forwarding parity**: Local/remote TCP (`-L`/`-R`), dynamic SOCKS (`-D`), Unix sockets (Unix), environment + locale propagation, and subsystem channels (`--subsystem`, e.g. sftp).
 - **Escape sequences**: Type Enter then `~` to open the local control menu with colored status tag; supports `~.` (disconnect), `~R` (rekey), `~V/~v` (change verbosity), `~#` (list forwards), `~~` (literal `~`), `~^Z` (suspend on Unix), and `~&` (detach stdin; reattach via `SIGUSR1`).
 - **Modular workspace**: Separate crates for CLI, client/session logic, server logic, SSH helpers, and SQLite state handling keep contributions focused.
@@ -45,7 +45,8 @@ rb-server hosts delete legacy-db                      # remove a relay target (c
 All binaries source their SQLite state from `~/Library/Application Support/rustybridge/` (macOS) or the platform’s data/state dirs. The first run logs when a database is created and migrations applied.
 
 ## Security & Safety Notes
-- Legacy algorithms drastically reduce security; only pass `--insecure` (client) or enable relaxed KEX server-side when you fully trust the endpoint and network.
+- Server inbound security: `rb-server` always advertises a modern, secure algorithm set for inbound client connections. There is no insecure mode for the embedded server itself.
+- Outbound to legacy devices: Legacy algorithms drastically reduce security; only pass `--insecure` with `rb` (client) or set `insecure=true` on a specific relay host in `rb-server` when you fully trust the endpoint and network.
 - We never log raw credentials, but you should still clear shell history when sharing terminals.
 - Host key prompts default to “reject”, so you must opt in per-host (with `--accept-hostkey`/`--accept-store-hostkey`).
 
