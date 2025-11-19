@@ -11,7 +11,9 @@ pub use relay::connect_to_relay_local;
 pub mod secrets;
 mod server_manager;
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, Mutex, OnceLock}, time::Duration
+};
 
 use russh::{
     MethodKind, MethodSet, keys::{
@@ -24,6 +26,19 @@ use sqlx::{Row, SqlitePool};
 use ssh_core::crypto::legacy_preferred;
 use state_store::{migrate_server, server_db};
 use tracing::info;
+
+// One-shot flash message for Management app reloads (local + SSH paths)
+static FLASH_MSG: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+fn set_flash_message(msg: String) {
+    let m = FLASH_MSG.get_or_init(|| Mutex::new(None));
+    *m.lock().unwrap() = Some(msg);
+}
+
+fn take_flash_message() -> Option<String> {
+    let m = FLASH_MSG.get_or_init(|| Mutex::new(None));
+    m.lock().unwrap().take()
+}
 
 use crate::error::{ServerError, ServerResult};
 
@@ -659,6 +674,10 @@ fn parse_endpoint(endpoint: &str) -> ServerResult<(String, i64)> {
 
 /// Create a ManagementApp with all relay hosts loaded from the database (admin view)
 pub async fn create_management_app() -> ServerResult<tui_core::apps::ManagementApp> {
+    create_management_app_with_tab(0).await
+}
+
+pub async fn create_management_app_with_tab(selected_tab: usize) -> ServerResult<tui_core::apps::ManagementApp> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
@@ -675,7 +694,96 @@ pub async fn create_management_app() -> ServerResult<tui_core::apps::ManagementA
         })
         .collect();
 
-    Ok(tui_core::apps::ManagementApp::new(relay_items))
+    // Credentials with counts
+    let creds_rows = state_store::list_relay_credentials(&pool).await?;
+    // Build assigned counts by scanning relay_host_options auth.id
+    use secrecy::ExposeSecret as _;
+    let mut counts: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    let rows = sqlx::query("SELECT value FROM relay_host_options WHERE key = 'auth.id'")
+        .fetch_all(&pool)
+        .await?;
+    for row in rows {
+        let value: String = row.get("value");
+        let id_str = if crate::secrets::is_encrypted_marker(&value) {
+            match crate::secrets::decrypt_string_if_encrypted(&value) {
+                Ok(s) => s,
+                Err(_) => continue,
+            }
+        } else {
+            crate::secrets::SecretString::new(Box::new(value))
+        };
+        if let Ok(id) = id_str.expose_secret().parse::<i64>() {
+            *counts.entry(id).or_insert(0) += 1;
+        }
+    }
+    let credentials: Vec<tui_core::apps::management::CredentialItem> = creds_rows
+        .into_iter()
+        .map(|(id, name, kind)| tui_core::apps::management::CredentialItem {
+            id,
+            name,
+            kind,
+            assigned: *counts.get(&id).unwrap_or(&0),
+        })
+        .collect();
+
+    // Build host->credential label mapping
+    let mut host_creds: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
+    // Gather relevant options in one query
+    let opt_rows = sqlx::query(
+        "SELECT relay_host_id, key, value FROM relay_host_options WHERE key IN ('auth.source','auth.id','auth.identity','auth.password')",
+    )
+    .fetch_all(&pool)
+    .await?;
+    // Map host_id -> key -> resolved value
+    let mut host_opts: std::collections::HashMap<i64, std::collections::HashMap<String, crate::secrets::SecretString>> =
+        std::collections::HashMap::new();
+    for row in opt_rows {
+        let host_id: i64 = row.get("relay_host_id");
+        let key: String = row.get("key");
+        let raw: String = row.get("value");
+        let resolved = if crate::secrets::is_encrypted_marker(&raw) {
+            match crate::secrets::decrypt_string_if_encrypted(&raw) {
+                Ok(s) => s,
+                Err(_) => continue,
+            }
+        } else {
+            crate::secrets::SecretString::new(Box::new(raw))
+        };
+        host_opts.entry(host_id).or_default().insert(key, resolved);
+    }
+    // id -> name
+    let mut cred_name_by_id: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
+    // rebuild from list (we had moved creds_rows)
+    let creds_rows2 = state_store::list_relay_credentials(&pool).await?;
+    for (id, name, _kind) in creds_rows2 {
+        cred_name_by_id.insert(id, name);
+    }
+    // Compute label
+    for (hid, opts) in host_opts.iter() {
+        let label = if let Some(src) = opts.get("auth.source") {
+            if src.expose_secret() == "credential" {
+                if let Some(id_str) = opts.get("auth.id") {
+                    if let Ok(cid) = id_str.expose_secret().parse::<i64>() {
+                        cred_name_by_id.get(&cid).cloned().unwrap_or_else(|| "<credential>".to_string())
+                    } else {
+                        "<credential>".to_string()
+                    }
+                } else {
+                    "<credential>".to_string()
+                }
+            } else {
+                "<custom>".to_string()
+            }
+        } else if opts.contains_key("auth.identity") || opts.contains_key("auth.password") {
+            "<custom>".to_string()
+        } else {
+            "<none>".to_string()
+        };
+        host_creds.insert(*hid, label);
+    }
+
+    let flash = take_flash_message();
+    Ok(tui_core::apps::ManagementApp::new(relay_items, host_creds, credentials, flash).with_selected_tab(selected_tab))
 }
 
 /// Apply side effects for management-related AppActions (add/update/delete relay hosts).
@@ -702,9 +810,109 @@ pub async fn handle_management_action(action: tui_core::AppAction) -> ServerResu
             let pool = db.into_pool();
             state_store::delete_relay_host_by_id(&pool, id).await?;
         }
+        tui_core::AppAction::AddCredential(spec) => {
+            use tui_core::apps::management::CredentialSpec as Spec;
+            match spec {
+                Spec::Password { name, username, password } => {
+                    let _ = crate::create_password_credential(&name, username.as_deref(), &password).await?;
+                }
+                Spec::SshKey {
+                    name,
+                    username,
+                    key_file: _,
+                    value,
+                    cert_file,
+                    passphrase,
+                } => {
+                    // TUI provides inline key value; file path not used here
+                    let key_data = if let Some(val) = value {
+                        val
+                    } else {
+                        return Err(ServerError::Other("ssh_key requires key content".into()));
+                    };
+                    let cert_data = cert_file; // may be None
+                    let _ = crate::create_ssh_key_credential(
+                        &name,
+                        username.as_deref(),
+                        &key_data,
+                        cert_data.as_deref(),
+                        passphrase.as_deref(),
+                    )
+                    .await?;
+                }
+                Spec::Agent {
+                    name,
+                    username,
+                    public_key,
+                } => {
+                    let _ = crate::create_agent_credential(&name, username.as_deref(), &public_key).await?;
+                }
+            }
+        }
+        tui_core::AppAction::DeleteCredential(name) => {
+            if let Err(e) = crate::delete_credential(&name).await {
+                // Set concise flash message for the next Management load
+                let msg = match &e {
+                    ServerError::NotPermitted { reason, .. } => format!("Cannot delete credential '{}': {}", name, reason),
+                    _ => format!("Cannot delete credential '{}': {}", name, e),
+                };
+                set_flash_message(msg);
+                return Err(e);
+            }
+        }
+        tui_core::AppAction::UnassignCredential(hostname) => {
+            if let Err(e) = crate::unassign_credential(&hostname).await {
+                let msg = format!("Cannot clear credential for '{}': {}", hostname, e);
+                set_flash_message(msg);
+                return Err(e);
+            }
+        }
+        tui_core::AppAction::AssignCredential { host, cred_name } => {
+            if let Err(e) = crate::assign_credential(&host, &cred_name).await {
+                let msg = format!("Cannot set credential for '{}': {}", host, e);
+                set_flash_message(msg);
+                return Err(e);
+            }
+        }
         _ => {}
     }
     Ok(())
+}
+
+/// Convenience wrapper for TUI callers: runs the management action and, on error,
+/// sets a one-shot flash message so the Management UI can surface feedback.
+pub async fn handle_management_action_with_flash(action: tui_core::AppAction) -> ServerResult<()> {
+    match handle_management_action(action.clone()).await {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // Build a concise, user-facing message based on the action kind
+            let msg = format_action_error(&action, &e);
+            set_flash_message(msg);
+            Err(e)
+        }
+    }
+}
+
+// Format an error message suitable for display in the ManagementApp flash area
+fn format_action_error(action: &tui_core::AppAction, e: &ServerError) -> String {
+    match action {
+        tui_core::AppAction::AddRelay(item) => format!("Cannot add relay host '{}': {}", item.name, e),
+        tui_core::AppAction::UpdateRelay(item) => format!("Cannot update relay host '{}': {}", item.name, e),
+        tui_core::AppAction::DeleteRelay(id) => format!("Cannot delete relay host id {}: {}", id, e),
+        tui_core::AppAction::AddCredential(spec) => match spec {
+            tui_core::apps::management::CredentialSpec::Password { name, .. } => format!("Cannot create password credential '{}': {}", name, e),
+            tui_core::apps::management::CredentialSpec::SshKey { name, .. } => format!("Cannot create ssh_key credential '{}': {}", name, e),
+            tui_core::apps::management::CredentialSpec::Agent { name, .. } => format!("Cannot create agent credential '{}': {}", name, e),
+        },
+        tui_core::AppAction::DeleteCredential(name) => format!("Cannot delete credential '{}': {}", name, e),
+        tui_core::AppAction::AssignCredential { host, cred_name } => {
+            format!("Cannot set credential '{}' for '{}': {}", cred_name, host, e)
+        }
+        tui_core::AppAction::UnassignCredential(host) => {
+            format!("Cannot clear credential for '{}': {}", host, e)
+        }
+        _ => format!("Operation failed: {}", e),
+    }
 }
 
 /// Create a RelaySelectorApp with relay hosts loaded from the database

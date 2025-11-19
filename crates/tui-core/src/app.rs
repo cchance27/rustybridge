@@ -54,6 +54,14 @@ pub enum AppAction {
     UpdateRelay(crate::apps::relay_selector::RelayItem),
     /// Delete a relay host by ID
     DeleteRelay(i64),
+    /// Add a new credential
+    AddCredential(crate::apps::management::CredentialSpec),
+    /// Delete a credential by name
+    DeleteCredential(String),
+    /// Unassign a shared credential from a relay host by hostname
+    UnassignCredential(String),
+    /// Assign a shared credential to a relay host by hostname
+    AssignCredential { host: String, cred_name: String },
 }
 
 // Backward compatibility constants (deprecated)

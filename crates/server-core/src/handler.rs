@@ -447,16 +447,47 @@ impl ssh_server::Handler for ServerHandler {
                     self.leave_alt_screen(session, channel)?; // Leave alt screen
                     self.connect_to_relay(session, channel, &name).await?; // Now Connect
                 }
-                AppAction::AddRelay(_) | AppAction::UpdateRelay(_) | AppAction::DeleteRelay(_) => {
+                AppAction::AddRelay(_)
+                | AppAction::UpdateRelay(_)
+                | AppAction::DeleteRelay(_)
+                | AppAction::AddCredential(_)
+                | AppAction::DeleteCredential(_)
+                | AppAction::UnassignCredential(_)
+                | AppAction::AssignCredential { .. } => {
                     let cloned = action.clone();
-                    if let Err(e) = crate::handle_management_action(cloned).await {
+                    let tab = match action {
+                        AppAction::AddCredential(_) | AppAction::DeleteCredential(_) => 1,
+                        _ => 0,
+                    };
+                    if let Err(e) = crate::handle_management_action_with_flash(cloned).await {
                         warn!("failed to apply management action: {}", e);
-                        // The modal has already been closed by the app; force a redraw
-                        // so the overlay disappears even on failure.
-                        self.render_terminal(session, channel)?;
+                        // Reload Management app anyway so the flash message surfaces.
+                        let app: Box<dyn tui_core::TuiApp> = Box::new(
+                            crate::create_management_app_with_tab(tab)
+                                .await
+                                .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?,
+                        );
+                        let rect = desired_rect(self.view_size());
+                        let backend = RemoteBackend::new(rect);
+                        let mut new_session = AppSession::new(app, backend).map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+                        new_session.clear().map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+                        new_session.render().map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+                        self.app_session = Some(new_session);
+                        self.flush_terminal(session, channel)?;
                     } else {
                         // Reload Management app with fresh data and redraw.
-                        self.switch_app("Management", session, channel).await?;
+                        let app: Box<dyn tui_core::TuiApp> = Box::new(
+                            crate::create_management_app_with_tab(tab)
+                                .await
+                                .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?,
+                        );
+                        let rect = desired_rect(self.view_size());
+                        let backend = RemoteBackend::new(rect);
+                        let mut new_session = AppSession::new(app, backend).map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+                        new_session.clear().map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+                        new_session.render().map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+                        self.app_session = Some(new_session);
+                        self.flush_terminal(session, channel)?;
                     }
                 }
                 AppAction::Continue => {}

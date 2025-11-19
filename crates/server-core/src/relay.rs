@@ -27,6 +27,7 @@ impl RelayHandle {
 /// - `client_channel` is the inbound channel id on the embedded server.
 /// - `pty_size_rx` emits window-size updates to propagate to the relay session.
 /// - `options` is a key-value map from `relay_host_options`.
+#[allow(clippy::too_many_arguments)]
 pub async fn start_bridge(
     server_handle: russh::server::Handle,
     client_channel: russh::ChannelId,

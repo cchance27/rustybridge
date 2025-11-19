@@ -203,6 +203,7 @@ async fn run_tui(mut app: Box<dyn tui_core::TuiApp>) -> Result<()> {
         let backend = CrosstermBackend::new(std::io::stdout());
         let mut session = AppSession::new(app, backend).map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
         let mut next_app_name: Option<String> = None;
+        let mut next_mgmt_tab: Option<usize> = None;
 
         loop {
             session.render().map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
@@ -256,13 +257,22 @@ async fn run_tui(mut app: Box<dyn tui_core::TuiApp>) -> Result<()> {
                         }
                         return Ok(());
                     }
-                    AppAction::AddRelay(_) | AppAction::UpdateRelay(_) | AppAction::DeleteRelay(_) => {
+                    AppAction::AddRelay(_)
+                    | AppAction::UpdateRelay(_)
+                    | AppAction::DeleteRelay(_)
+                    | AppAction::AddCredential(_)
+                    | AppAction::DeleteCredential(_)
+                    | AppAction::UnassignCredential(_)
+                    | AppAction::AssignCredential { .. } => {
                         let cloned = action.clone();
-                        if let Err(e) = server_core::handle_management_action(cloned).await {
-                            eprintln!("failed to apply management action: {}", e);
-                        }
+                        let _ = server_core::handle_management_action_with_flash(cloned).await;
                         // Reload Management app data
                         next_app_name = Some("Management".to_string());
+                        // Keep user on the relevant tab after action
+                        next_mgmt_tab = Some(match action {
+                            AppAction::AddCredential(_) | AppAction::DeleteCredential(_) => 1,
+                            _ => 0,
+                        });
                         break;
                     }
                     _ => {}
@@ -283,7 +293,10 @@ async fn run_tui(mut app: Box<dyn tui_core::TuiApp>) -> Result<()> {
         if let Some(name) = next_app_name {
             // Load app with real data from database
             app = match name.as_str() {
-                "Management" => Box::new(server_core::create_management_app().await?),
+                "Management" => {
+                    let tab = next_mgmt_tab.unwrap_or(0);
+                    Box::new(server_core::create_management_app_with_tab(tab).await?)
+                }
                 _ => Box::new(server_core::create_relay_selector_app(None).await?), // None = admin
             };
             // Clear screen for next app
