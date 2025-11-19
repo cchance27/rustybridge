@@ -19,3 +19,12 @@ async-trait.workspace = true
 tracing-subscriber.workspace = true
 once_cell.workspace = true
 libc.workspace = true
+rsa.workspace = true
+des.workspace = true
+cbc.workspace = true
+md5.workspace = true
+hex.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+rand.workspace = true

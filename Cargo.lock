@@ -459,13 +459,7 @@ name = "client-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "base64",
- "cbc",
- "des",
- "hex",
- "md5 0.8.0",
  "rpassword",
- "rsa",
  "russh",
  "secrecy",
  "sqlx",
@@ -2294,6 +2288,7 @@ dependencies = [
  "serial_test",
  "server-core",
  "ssh-core",
+ "state-store",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2702,6 +2697,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "argon2",
+ "async-trait",
  "base64",
  "chacha20poly1305",
  "futures",
@@ -3064,10 +3060,17 @@ name = "ssh-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64",
+ "cbc",
  "clap",
  "crossterm 0.29.0",
+ "des",
+ "hex",
  "libc",
+ "md5 0.8.0",
  "once_cell",
+ "rand 0.8.5",
+ "rsa",
  "russh",
  "rustix 1.1.2",
  "signal-hook",
@@ -3378,6 +3381,7 @@ name = "tui-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "crossterm 0.29.0",
  "ratatui",
  "thiserror 2.0.17",

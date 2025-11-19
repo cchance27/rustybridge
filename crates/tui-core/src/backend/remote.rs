@@ -3,13 +3,11 @@
 //! This is migrated from server-core/src/remote_backend.rs
 
 use std::{
-    io::{self, Write},
-    sync::{Arc, Mutex},
+    io::{self, Write}, sync::{Arc, Mutex}
 };
 
 use ratatui::{
-    backend::{Backend, ClearType, CrosstermBackend, WindowSize},
-    layout::{Position, Rect, Size},
+    backend::{Backend, ClearType, CrosstermBackend, WindowSize}, layout::{Position, Rect, Size}
 };
 
 /// Owns a [`Terminal`] configured with the custom backend that writes into an in-memory buffer.

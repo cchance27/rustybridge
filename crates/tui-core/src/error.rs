@@ -6,11 +6,11 @@ pub enum TuiError {
     /// I/O error
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-    
+
     /// Terminal backend error
     #[error("terminal error: {0}")]
     Terminal(String),
-    
+
     /// App-specific error
     #[error("app error: {0}")]
     App(String),

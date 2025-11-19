@@ -65,7 +65,10 @@ fn forwarding_arg_matrix_parses_expected_configs() {
 #[serial]
 fn invalid_forward_specs_error() {
     match parse_config(&["-L", "bad-spec", "demo"]) {
-        Err(err) => assert!(err.to_string().contains("invalid local TCP forward spec"), "unexpected error: {err:?}"),
+        Err(err) => assert!(
+            err.to_string().contains("invalid local TCP forward spec"),
+            "unexpected error: {err:?}"
+        ),
         Ok(cfg) => panic!("expected local forward error, got {:?}", cfg.forwarding),
     }
 

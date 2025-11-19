@@ -18,6 +18,7 @@ secrecy.workspace = true
 tui-core.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
+state-store = { path = "../state-store" }
 
 [dev-dependencies]
 serial_test = "3"

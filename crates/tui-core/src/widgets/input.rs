@@ -1,9 +1,5 @@
 use ratatui::{
-    Frame,
-    layout::Rect,
-    style::{Color, Style},
-    text::{Line, Span},
-    widgets::Paragraph,
+    Frame, layout::Rect, style::{Color, Style}, text::{Line, Span}, widgets::Paragraph
 };
 
 /// A text input widget with a prompt
@@ -49,7 +45,7 @@ impl Input {
         let (display, cursor_col) = visible_prompt_line(&full_prompt, area.width as usize);
         let prompt_line = Line::from(Span::styled(display, Style::default().fg(Color::Yellow)));
         frame.render_widget(Paragraph::new(prompt_line), area);
-        
+
         let cursor_x = area.x + cursor_col as u16;
         frame.set_cursor_position(ratatui::layout::Position {
             x: cursor_x.min(area.x + area.width.saturating_sub(1)),

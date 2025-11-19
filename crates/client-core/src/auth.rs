@@ -1,22 +1,15 @@
 use std::{
-    collections::HashMap, path::{Path, PathBuf}, sync::Arc
+    path::{Path, PathBuf}, sync::Arc
 };
 
 // Internal Result type alias
 type Result<T> = crate::ClientResult<T>;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use cbc::{
-    Decryptor, cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7}
-};
-use des::TdesEde3;
-use hex::FromHex;
 use rpassword::{prompt_password, read_password};
-use rsa::{RsaPrivateKey, pkcs1::DecodeRsaPrivateKey, pkcs8::EncodePrivateKey};
 use russh::{
     MethodSet, client::{self, AuthResult, KeyboardInteractiveAuthResponse}, keys::{self, Certificate, HashAlg, PrivateKeyWithHashAlg}
 };
-use ssh_core::session::SessionHandle;
 use secrecy::{ExposeSecret, SecretString};
+use ssh_core::session::SessionHandle;
 use tokio::{fs, task};
 use tracing::{debug, info, warn};
 
@@ -144,9 +137,7 @@ struct LoadedIdentity {
 async fn load_identities(identities: &[ClientIdentity]) -> Result<Vec<LoadedIdentity>> {
     let mut loaded = Vec::with_capacity(identities.len());
     for identity in identities {
-        let key_data = fs::read_to_string(&identity.key_path)
-            .await
-            .map_err(crate::ClientError::Io)?;
+        let key_data = fs::read_to_string(&identity.key_path).await.map_err(crate::ClientError::Io)?;
         let key = Arc::new(load_private_key(&key_data, &identity.key_path)?);
 
         let cert = resolve_certificate(identity).await?;
@@ -179,154 +170,16 @@ async fn resolve_certificate(identity: &ClientIdentity) -> Result<Option<Certifi
 }
 
 fn load_private_key(data: &str, path: &Path) -> Result<keys::PrivateKey> {
-    match keys::PrivateKey::from_openssh(data) {
+    match ssh_core::keys::load_private_key_from_str(data, None) {
         Ok(key) => Ok(key),
-        Err(_openssh_err) => match keys::decode_secret_key(data, None) {
-            Ok(key) => Ok(key),
-            Err(keys::Error::KeyIsEncrypted) => {
-                let prompt = format!("Enter passphrase for {}: ", path.display());
-                let passphrase = prompt_password(prompt)?;
-                let key = keys::decode_secret_key(data, Some(&passphrase))
-                    .map_err(|err| crate::ClientError::Crypto(format!("failed to decrypt {}: {err}", path.display())))?;
-                Ok(key)
-            }
-            Err(_err) => {
-                if let Some(key) = try_convert_legacy_pem(data, path)? {
-                    return Ok(key);
-                }
-                Err(crate::ClientError::Crypto(format!(
-                    "{} is not a valid OpenSSH or PEM private key",
-                    path.display()
-                )))
-            }
-        },
-    }
-}
-
-fn try_convert_legacy_pem(data: &str, path: &Path) -> Result<Option<keys::PrivateKey>> {
-    let Some(parts) = parse_rsa_pem(data) else {
-        return Ok(None);
-    };
-    let PemParts { headers, body } = parts;
-    let mut der = BASE64
-        .decode(body)
-        .map_err(|e| crate::ClientError::Crypto(format!("base64 decode error: {e}")))?;
-
-    if is_encrypted(&headers) {
-        der = decrypt_traditional_pem(&headers, &der, path)?;
-    }
-
-    let key = load_pkcs1(&der)?;
-    Ok(Some(key))
-}
-
-struct PemParts {
-    headers: HashMap<String, String>,
-    body: String,
-}
-
-fn parse_rsa_pem(data: &str) -> Option<PemParts> {
-    let begin = "-----BEGIN RSA PRIVATE KEY-----";
-    let end = "-----END RSA PRIVATE KEY-----";
-    let start = data.find(begin)? + begin.len();
-    let end_idx = data.find(end)?;
-    let section = &data[start..end_idx];
-    let mut headers = HashMap::new();
-    let mut body = String::new();
-    let mut in_headers = true;
-    let mut saw_header = false;
-    for line in section.lines() {
-        let line = line.trim();
-        if in_headers {
-            if line.is_empty() {
-                if saw_header {
-                    in_headers = false;
-                }
-                continue;
-            }
-            if let Some((key, value)) = line.split_once(':') {
-                headers.insert(key.trim().to_string(), value.trim().to_string());
-                saw_header = true;
-                continue;
-            }
-            in_headers = false;
-        }
-        if !line.is_empty() {
-            body.push_str(line);
+        Err(_e) => {
+            // If key is encrypted or needs a passphrase, prompt and retry once
+            let prompt = format!("Enter passphrase for {}: ", path.display());
+            let passphrase = prompt_password(prompt)?;
+            ssh_core::keys::load_private_key_from_str(data, Some(&passphrase))
+                .map_err(|err| crate::ClientError::Crypto(format!("failed to load {}: {}", path.display(), err)))
         }
     }
-    Some(PemParts { headers, body })
-}
-
-fn is_encrypted(headers: &HashMap<String, String>) -> bool {
-    matches!(headers.get("Proc-Type"), Some(value) if value.contains("ENCRYPTED"))
-}
-
-fn decrypt_traditional_pem(headers: &HashMap<String, String>, ciphertext: &[u8], path: &Path) -> Result<Vec<u8>> {
-    let dek_info = headers
-        .get("DEK-Info")
-        .ok_or_else(|| crate::ClientError::Crypto(format!("missing DEK-Info header in {}", path.display())))?;
-    let mut parts = dek_info.split(',');
-    let algo = parts.next().unwrap_or_default().trim();
-    let iv_hex = parts.next().unwrap_or_default().trim();
-    let iv = Vec::from_hex(iv_hex).map_err(|_| crate::ClientError::Crypto(format!("invalid DEK-Info IV for {}", path.display())))?;
-    match algo {
-        "DES-EDE3-CBC" => decrypt_des_ede3(ciphertext, &iv, path),
-        other => {
-            Err(crate::ClientError::Crypto(format!(
-                "unsupported PEM cipher {other} in {}",
-                path.display()
-            )))
-        }
-    }
-}
-
-fn decrypt_des_ede3(ciphertext: &[u8], iv: &[u8], path: &Path) -> Result<Vec<u8>> {
-    if iv.len() < 8 {
-        return Err(crate::ClientError::Crypto(format!(
-            "invalid IV for DES-EDE3-CBC in {}",
-            path.display()
-        )));
-    }
-    let salt = &iv[..8];
-    let prompt = format!("Enter passphrase for {}: ", path.display());
-    let passphrase = prompt_password(prompt)?;
-    let key = evp_bytes_to_key(passphrase.as_bytes(), salt, 24);
-    let cipher = Decryptor::<TdesEde3>::new_from_slices(&key, &iv[..8])
-        .map_err(|err| crate::ClientError::Crypto(format!("unable to init DES-EDE3 cipher: {err}")))?;
-    let mut buf = ciphertext.to_vec();
-    let decrypted = cipher
-        .decrypt_padded_mut::<Pkcs7>(&mut buf)
-        .map_err(|err| crate::ClientError::Crypto(format!("failed to decrypt {}: {err}", path.display())))?
-        .to_vec();
-    Ok(decrypted)
-}
-
-fn evp_bytes_to_key(passphrase: &[u8], salt: &[u8], key_len: usize) -> Vec<u8> {
-    let mut key = Vec::with_capacity(key_len);
-    let mut prev: Option<[u8; 16]> = None;
-    while key.len() < key_len {
-        let mut data = Vec::new();
-        if let Some(ref digest) = prev {
-            data.extend_from_slice(digest);
-        }
-        data.extend_from_slice(passphrase);
-        data.extend_from_slice(salt);
-        let digest = md5::compute(&data).0;
-        prev = Some(digest);
-        key.extend_from_slice(&digest);
-    }
-    key.truncate(key_len);
-    key
-}
-
-fn load_pkcs1(der: &[u8]) -> Result<keys::PrivateKey> {
-    let rsa = RsaPrivateKey::from_pkcs1_der(der).map_err(|e| crate::ClientError::Crypto(format!("PKCS1 decode error: {e}")))?;
-    let pkcs8 = rsa
-        .to_pkcs8_pem(Default::default())
-        .map_err(|e| crate::ClientError::Crypto(format!("PKCS8 encode error: {e}")))?;
-    let key = keys::decode_secret_key(pkcs8.as_str(), None).map_err(|e| crate::ClientError::Crypto(e.to_string()))?;
-    Ok(key)
 }
 
 fn default_cert_path(key_path: &Path) -> Option<PathBuf> {

@@ -23,6 +23,8 @@ base64.workspace = true
 secrecy.workspace = true
 tui-core.workspace = true
 futures = "0.3"
+anyhow.workspace = true
+async-trait.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true

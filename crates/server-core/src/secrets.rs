@@ -71,10 +71,14 @@ pub fn decrypt_secret_with(salt: &[u8], nonce: &[u8], ciphertext: &[u8], master:
 }
 
 fn derive_record_key(salt: &[u8]) -> ServerResult<SecretVec<u8>> {
-    if let Ok(key_b64) = std::env::var(MASTER_KEY_ENV) {
+    if let Ok(mut key_b64) = std::env::var(MASTER_KEY_ENV) {
+        key_b64 = key_b64.trim().to_string();
+        if key_b64.is_empty() {
+            return Err(ServerError::InvalidMasterSecret);
+        }
         // Derive per-record key from master key via Argon2 using per-record salt.
         let master = base64::engine::general_purpose::STANDARD
-            .decode(key_b64)
+            .decode(&key_b64)
             .map_err(|e| ServerError::Base64(format!("RB_SERVER_SECRETS_KEY must be base64-encoded 32 bytes: {e}")))?;
         if master.len() != 32 {
             return Err(ServerError::InvalidMasterSecret);
@@ -82,7 +86,39 @@ fn derive_record_key(salt: &[u8]) -> ServerResult<SecretVec<u8>> {
         return kdf_argon2(&master, salt);
     }
     if let Ok(pass) = std::env::var(MASTER_PASSPHRASE_ENV) {
+        let pass = pass.trim().to_string();
+        if pass.is_empty() {
+            return Err(ServerError::InvalidMasterSecret);
+        }
         return kdf_argon2(pass.as_bytes(), salt);
+    }
+    Err(ServerError::MissingEnvVar(
+        "set RB_SERVER_SECRETS_KEY (base64 32 bytes) or RB_SERVER_SECRETS_PASSPHRASE".to_string(),
+    ))
+}
+
+/// Validate that a non-empty master secret is configured via env.
+/// Returns Ok(()) when either RB_SERVER_SECRETS_KEY (valid base64 32 bytes)
+/// or a non-empty RB_SERVER_SECRETS_PASSPHRASE is set.
+pub fn require_master_secret() -> ServerResult<()> {
+    if let Ok(mut key_b64) = std::env::var(MASTER_KEY_ENV) {
+        key_b64 = key_b64.trim().to_string();
+        if key_b64.is_empty() {
+            return Err(ServerError::InvalidMasterSecret);
+        }
+        let master = base64::engine::general_purpose::STANDARD
+            .decode(&key_b64)
+            .map_err(|e| ServerError::Base64(format!("RB_SERVER_SECRETS_KEY must be base64-encoded 32 bytes: {e}")))?;
+        if master.len() != 32 {
+            return Err(ServerError::InvalidMasterSecret);
+        }
+        return Ok(());
+    }
+    if let Ok(pass) = std::env::var(MASTER_PASSPHRASE_ENV) {
+        if pass.trim().is_empty() {
+            return Err(ServerError::InvalidMasterSecret);
+        }
+        return Ok(());
     }
     Err(ServerError::MissingEnvVar(
         "set RB_SERVER_SECRETS_KEY (base64 32 bytes) or RB_SERVER_SECRETS_PASSPHRASE".to_string(),
@@ -180,7 +216,9 @@ pub fn decrypt_string_with(value: &str, master: &[u8]) -> ServerResult<SecretStr
 }
 
 pub fn normalize_master_input(input: &str) -> Vec<u8> {
-    if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(input) && decoded.len() == 32 {
+    if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(input)
+        && decoded.len() == 32
+    {
         return decoded;
     }
     input.as_bytes().to_vec()

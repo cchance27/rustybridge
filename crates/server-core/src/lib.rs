@@ -6,11 +6,11 @@
 mod auth;
 pub mod error;
 mod handler;
-mod relay;
+pub mod relay;
+pub use relay::connect_to_relay_local;
 pub mod secrets;
 mod server_manager;
 
-use secrecy::ExposeSecret;
 use std::{sync::Arc, time::Duration};
 
 use russh::{
@@ -18,6 +18,7 @@ use russh::{
         Algorithm, PrivateKey, ssh_key::{LineEnding, rand_core::OsRng}
     }, server::{self as ssh_server, Server as _}
 };
+use secrecy::ExposeSecret;
 use server_manager::ServerManager;
 use sqlx::{Row, SqlitePool};
 use ssh_core::crypto::legacy_preferred;
@@ -39,6 +40,9 @@ pub struct ServerConfig {
 /// and defers to [`ServerManager`] (and ultimately [`handler::ServerHandler`]) for per-connection
 /// state machines.
 pub async fn run_server(config: ServerConfig) -> ServerResult<()> {
+    // Refuse to start without a non-empty master secret configured
+    crate::secrets::require_master_secret()?;
+
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
@@ -73,7 +77,7 @@ pub async fn run_server(config: ServerConfig) -> ServerResult<()> {
     server_config.keys.push(host_key);
 
     let mut server = ServerManager;
-    info!("starting embedded SSH server on {}:{}", config.bind, config.port);
+    info!(bind = %config.bind, port = config.port, "starting embedded SSH server");
 
     server
         .run_on_address(Arc::new(server_config), (config.bind.as_str(), config.port))
@@ -249,7 +253,7 @@ pub async fn list_hosts() -> ServerResult<Vec<state_store::RelayHost>> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
-    let hosts = state_store::list_relay_hosts(&pool).await?;
+    let hosts = state_store::list_relay_hosts(&pool, None).await?;
     Ok(hosts)
 }
 
@@ -598,20 +602,43 @@ async fn load_or_create_host_key(pool: &SqlitePool) -> ServerResult<PrivateKey> 
         .fetch_optional(pool)
         .await?
     {
-        let pem: String = row.get("value");
-        let key = PrivateKey::from_openssh(&pem).map_err(|e| ServerError::Crypto(e.to_string()))?;
+        let raw: String = row.get("value");
+        // Host key may be stored encrypted; decrypt if needed
+        let pem = crate::secrets::decrypt_string_if_encrypted(&raw)?;
+        // If it wasn't encrypted before and a master secret is configured, upgrade to encrypted at rest
+        if !crate::secrets::is_encrypted_marker(&raw) {
+            if let Ok(()) = crate::secrets::require_master_secret() {
+                if let Ok(enc) = crate::secrets::encrypt_string(crate::secrets::SecretString::new(Box::new(pem.expose_secret().clone()))) {
+                    let _ = sqlx::query("INSERT OR REPLACE INTO server_options (key, value) VALUES (?, ?)")
+                        .bind(KEY_NAME)
+                        .bind(enc)
+                        .execute(pool)
+                        .await;
+                    tracing::info!("secured server host key with encryption");
+                }
+            } else {
+                tracing::warn!(
+                    "server host key is stored unencrypted; set RB_SERVER_SECRETS_KEY or RB_SERVER_SECRETS_PASSPHRASE to enable encryption"
+                );
+            }
+        }
+        let key = PrivateKey::from_openssh(pem.expose_secret()).map_err(|e| ServerError::Crypto(e.to_string()))?;
         info!("loaded persisted server host key");
         Ok(key)
     } else {
+        // Ensure we have a usable master secret before generating so we don't persist unencrypted keys
+        crate::secrets::require_master_secret()?;
         let key = PrivateKey::random(&mut OsRng, Algorithm::Ed25519).map_err(|e| ServerError::Crypto(e.to_string()))?;
         let pem = key
             .to_openssh(LineEnding::LF)
             .map_err(|e| ServerError::Crypto(e.to_string()))?
             .to_string();
 
+        // Encrypt before storing at rest
+        let enc = crate::secrets::encrypt_string(crate::secrets::SecretString::new(Box::new(pem)))?;
         sqlx::query("INSERT OR REPLACE INTO server_options (key, value) VALUES (?, ?)")
             .bind(KEY_NAME)
-            .bind(pem)
+            .bind(enc)
             .execute(pool)
             .await?;
 
@@ -628,4 +655,54 @@ fn parse_endpoint(endpoint: &str) -> ServerResult<(String, i64)> {
         .parse::<u16>()
         .map_err(|_| ServerError::InvalidEndpoint("invalid relay host port".to_string()))?;
     Ok((host.to_string(), port as i64))
+}
+
+/// Create a ManagementApp with all relay hosts loaded from the database (admin view)
+pub async fn create_management_app() -> ServerResult<tui_core::apps::ManagementApp> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+
+    // Admin sees all relay hosts (no filtering)
+    use tui_core::apps::relay_selector::RelayItem;
+    let hosts = state_store::list_relay_hosts(&pool, None).await?;
+    let relay_items: Vec<RelayItem> = hosts
+        .into_iter()
+        .map(|h| RelayItem {
+            name: h.name,
+            description: format!("{}:{}", h.ip, h.port),
+            id: h.id,
+        })
+        .collect();
+
+    Ok(tui_core::apps::ManagementApp::new(relay_items))
+}
+
+/// Create a RelaySelectorApp with relay hosts loaded from the database
+/// If username is Some, filters by access. If None (or "admin"), shows all relays with admin privileges.
+pub async fn create_relay_selector_app(username: Option<&str>) -> ServerResult<tui_core::apps::RelaySelectorApp> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+
+    let is_admin = username == Some("admin") || username.is_none();
+
+    // Fetch relays. Admin view must bypass ACL filtering.
+    use tui_core::apps::relay_selector::RelayItem;
+    let filter_username = if is_admin { None } else { username };
+    let hosts = state_store::list_relay_hosts(&pool, filter_username).await?;
+    let relays: Vec<RelayItem> = hosts
+        .into_iter()
+        .map(|h| RelayItem {
+            name: h.name,
+            description: format!("{}:{}", h.ip, h.port),
+            id: h.id,
+        })
+        .collect();
+
+    Ok(if is_admin {
+        tui_core::apps::RelaySelectorApp::new_for_admin(relays)
+    } else {
+        tui_core::apps::RelaySelectorApp::new(relays)
+    })
 }

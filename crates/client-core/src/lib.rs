@@ -2,13 +2,13 @@ mod auth;
 pub mod error;
 mod hostkeys;
 
-use secrecy::SecretString;
 use std::{borrow::Cow, path::PathBuf, sync::Arc, time::Duration};
 
 use auth::{AuthPreferences, authenticate};
 pub use error::{ClientError, ClientResult};
 use hostkeys::{ClientHandler, HostKeyPolicy, HostKeyVerifier};
 use russh::client;
+use secrecy::SecretString;
 use ssh_core::{
     crypto::{default_preferred, legacy_preferred}, forwarding::{ForwardingConfig, ForwardingManager}, session::{self, ShellOptions, run_command, run_shell, run_subsystem}, terminal::NewlineMode
 };

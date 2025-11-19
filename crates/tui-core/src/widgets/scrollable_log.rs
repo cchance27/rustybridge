@@ -1,9 +1,7 @@
 use std::collections::VecDeque;
+
 use ratatui::{
-    Frame,
-    layout::Rect,
-    text::{Line, Text},
-    widgets::{Paragraph, Wrap},
+    Frame, layout::Rect, text::{Line, Text}, widgets::{Paragraph, Wrap}
 };
 
 /// A scrollable log widget that maintains a fixed number of lines

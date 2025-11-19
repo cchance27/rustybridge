@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+
 use crate::TuiApp;
 
 /// Factory function type for creating TUI apps

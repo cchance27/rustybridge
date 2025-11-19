@@ -16,12 +16,6 @@ tokio.workspace = true
 tracing.workspace = true
 ssh-key.workspace = true
 rpassword.workspace = true
-rsa.workspace = true
-des.workspace = true
-cbc.workspace = true
-md5.workspace = true
-hex.workspace = true
-base64.workspace = true
 secrecy.workspace = true
 
 [dev-dependencies]

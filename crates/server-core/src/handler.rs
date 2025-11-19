@@ -1,19 +1,13 @@
 //! SSH handler implementation that drives per-connection state and the echo TUI.
 
-use std::{
-    net::SocketAddr, time::{Duration, Instant}
-};
+use std::{net::SocketAddr, time::Instant};
 
 use russh::{
     Channel, ChannelId, CryptoVec, Pty, server::{self as ssh_server, Auth, Session}
 };
-use tokio::{sync::watch, task::JoinHandle, time};
+use tokio::sync::watch;
 use tracing::{info, warn};
-use tui_core::{
-    AppSession, AppAction,
-    backend::RemoteBackend,
-    utils::{desired_rect, status_tick_sequence},
-};
+use tui_core::{AppAction, AppSession, backend::RemoteBackend, utils::desired_rect};
 
 use crate::auth::{self, AuthDecision, LoginTarget, parse_login_target};
 
@@ -31,8 +25,6 @@ pub(super) struct ServerHandler {
     pty_size: Option<(u16, u16)>,
     alt_screen: bool,
     size_updates: watch::Sender<(u16, u16)>,
-    tick_shutdown: Option<watch::Sender<bool>>,
-    tick_task: Option<JoinHandle<()>>,
 }
 
 impl ServerHandler {
@@ -52,8 +44,6 @@ impl ServerHandler {
             pty_size: None,
             alt_screen: false,
             size_updates,
-            tick_shutdown: None,
-            tick_task: None,
         }
     }
 
@@ -75,7 +65,7 @@ impl ServerHandler {
             return;
         }
         self.closed = true;
-        self.stop_tick_task();
+
         let elapsed = self.connected_at.elapsed();
         info!(
             peer = %display_addr(self.peer_addr),
@@ -92,7 +82,7 @@ impl ServerHandler {
         if self.alt_screen {
             self.leave_alt_screen(session, channel)?;
         }
-        self.stop_tick_task();
+
         self.send_line(session, channel, "Bye!")?;
         session.exit_status_request(channel, 0)?;
         session.close(channel)?;
@@ -102,22 +92,34 @@ impl ServerHandler {
     }
 
     /// Initialise the echo shell, including a fresh TUI instance and remote terminal.
-    fn init_shell(&mut self) -> Result<(), russh::Error> {
+    async fn init_shell(&mut self) -> Result<(), russh::Error> {
         let (app, app_name): (Box<dyn tui_core::TuiApp>, &str) = if self.username.as_deref() == Some("admin") {
-            (Box::new(tui_core::apps::ManagementApp::new()), "ManagementApp")
+            (
+                Box::new(
+                    crate::create_management_app()
+                        .await
+                        .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?,
+                ),
+                "ManagementApp",
+            )
         } else {
-            use tui_core::apps::relay_selector::RelayItem;
-            // TODO: Fetch real relays from state_store
-            let relays = vec![
-                 RelayItem { name: "us-east-1".into(), description: "Primary US Relay".into(), id: 1 },
-                 RelayItem { name: "eu-central-1".into(), description: "Frankfurt Relay".into(), id: 2 },
-            ];
-            (Box::new(tui_core::apps::RelaySelectorApp::new(relays)), "RelaySelectorApp")
+            (
+                Box::new(
+                    crate::create_relay_selector_app(self.username.as_deref())
+                        .await
+                        .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?,
+                ),
+                "RelaySelectorApp",
+            )
         };
 
         let username = self.username.as_deref().unwrap_or("unknown");
-        let peer_addr = if let  Some(peer_addr) = self.peer_addr { format!("{:?}", peer_addr) } else { "unknown".to_string() };     
-        info!("tui launched app={} user={} peer={}", app_name, username, peer_addr); 
+        let peer_addr = if let Some(peer_addr) = self.peer_addr {
+            format!("{:?}", peer_addr)
+        } else {
+            "unknown".to_string()
+        };
+        info!(app_name, username, peer_addr, "tui launched");
 
         let rect = desired_rect(self.view_size());
         let backend = RemoteBackend::new(rect);
@@ -143,29 +145,33 @@ impl ServerHandler {
 
     async fn switch_app(&mut self, app_name: &str, session: &mut Session, channel: ChannelId) -> Result<(), russh::Error> {
         let username = self.username.as_deref().unwrap_or("unknown");
-        let peer_addr = if let  Some(peer_addr) = self.peer_addr { format!("{:?}", peer_addr) } else { "unknown".to_string() };     
-        info!("tui switched app={} user={} peer={}", app_name, username, peer_addr); 
-        let app: Box<dyn tui_core::TuiApp> = match app_name {
-            "Management" => Box::new(tui_core::apps::ManagementApp::new()),
-            _ => {
-                 use tui_core::apps::relay_selector::RelayItem;
-                // TODO: Fetch real relays from state_store
-
-                 let relays = vec![
-                     RelayItem { name: "us-east-1".into(), description: "Primary US Relay".into(), id: 1 },
-                     RelayItem { name: "eu-central-1".into(), description: "Frankfurt Relay".into(), id: 2 },
-                 ];
-                 Box::new(tui_core::apps::RelaySelectorApp::new(relays))
-            }
+        let peer_addr = if let Some(peer_addr) = self.peer_addr {
+            format!("{:?}", peer_addr)
+        } else {
+            "unknown".to_string()
         };
-        
+        info!(app_name, username, peer_addr, "tui switched");
+
+        let app: Box<dyn tui_core::TuiApp> = match app_name {
+            "Management" => Box::new(
+                crate::create_management_app()
+                    .await
+                    .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?,
+            ),
+            _ => Box::new(
+                crate::create_relay_selector_app(self.username.as_deref())
+                    .await
+                    .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?,
+            ),
+        };
+
         let rect = desired_rect(self.view_size());
         let backend = RemoteBackend::new(rect);
         let mut new_session = AppSession::new(app, backend).map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
-        
+
         new_session.clear().map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
         new_session.render().map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
-        
+
         self.app_session = Some(new_session);
         self.flush_terminal(session, channel)?;
         Ok(())
@@ -217,48 +223,112 @@ impl ServerHandler {
         let _ = self.size_updates.send((cols, rows));
     }
 
-    /// Spawn a lightweight task that refreshes the status timer once per second.
-    fn start_tick_task(&mut self, session: &Session, channel: ChannelId) {
-        if self.tick_task.is_some() {
-            return;
-        }
-        let handle = session.handle();
-        let size_rx = self.size_updates.subscribe();
-        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
-        self.tick_shutdown = Some(shutdown_tx);
-        let connected_at = self.connected_at;
-        self.tick_task = Some(tokio::spawn(async move {
-            let mut ticker = time::interval(Duration::from_secs(1));
-            loop {
-                tokio::select! {
-                    _ = ticker.tick() => {
-                        let size = *size_rx.borrow();
-                        let elapsed = connected_at.elapsed();
-                        if let Some(bytes) = status_tick_sequence(size, elapsed) {
-                            let mut payload = CryptoVec::new();
-                            payload.extend(&bytes);
-                            if handle.data(channel, payload).await.is_err() {
-                                break;
+    async fn connect_to_relay(&mut self, session: &mut Session, channel: ChannelId, relay_name: &str) -> Result<(), russh::Error> {
+        use state_store::{fetch_relay_host_by_name, fetch_relay_host_options, server_db, user_has_relay_access};
+        let username = self.username.clone().unwrap_or_else(|| "<unknown>".into());
+        match server_db().await {
+            Ok(handle) => {
+                let pool = handle.into_pool();
+                match fetch_relay_host_by_name(&pool, relay_name).await {
+                    Ok(Some(host)) => {
+                        match user_has_relay_access(&pool, &username, host.id).await {
+                            Ok(true) => {
+                                let _ = self.send_line(
+                                    session,
+                                    channel,
+                                    &format!("user authenticated; connecting to relay host '{}'...", relay_name),
+                                );
+                                let options = match fetch_relay_host_options(&pool, host.id).await {
+                                    Ok(raw) => {
+                                        // Decrypt any encrypted option values.
+                                        let mut out = std::collections::HashMap::with_capacity(raw.len());
+                                        for (k, v) in raw.into_iter() {
+                                            match crate::secrets::decrypt_string_if_encrypted(&v) {
+                                                Ok(val) => {
+                                                    out.insert(k, val);
+                                                }
+                                                Err(err) => {
+                                                    let _ = self.send_line(
+                                                        session,
+                                                        channel,
+                                                        &format!("internal error decrypting option '{k}': {err}"),
+                                                    );
+                                                    return self.handle_exit(session, channel);
+                                                }
+                                            }
+                                        }
+                                        out
+                                    }
+                                    Err(err) => {
+                                        let _ = self.send_line(session, channel, &format!("internal error loading relay options: {err}"));
+                                        return self.handle_exit(session, channel);
+                                    }
+                                };
+                                let server_handle = session.handle();
+                                let size_rx = self.size_updates.subscribe();
+                                let initial_size = self.view_size();
+                                match crate::relay::start_bridge(
+                                    server_handle,
+                                    channel,
+                                    &host,
+                                    &username,
+                                    initial_size,
+                                    size_rx,
+                                    &options,
+                                    self.peer_addr,
+                                )
+                                .await
+                                {
+                                    Ok(handle) => {
+                                        self.relay_handle = Some(handle);
+                                        Ok(())
+                                    }
+                                    Err(err) => {
+                                        let _ = self.send_line(session, channel, &format!("failed to start relay: {err}"));
+                                        self.handle_exit(session, channel)
+                                    }
+                                }
+                            }
+                            Ok(false) => {
+                                warn!(
+                                    peer = %display_addr(self.peer_addr),
+                                    user = %username,
+                                    relay = %relay_name,
+                                    "relay access denied for user"
+                                );
+                                let _ = self.send_line(
+                                    session,
+                                    channel,
+                                    &format!("access denied: user '{}' is not permitted to connect to '{}'", username, relay_name),
+                                );
+                                self.handle_exit(session, channel)
+                            }
+                            Err(err) => {
+                                let _ = self.send_line(session, channel, &format!("internal error checking access: {err}"));
+                                self.handle_exit(session, channel)
                             }
                         }
                     }
-                    changed = shutdown_rx.changed() => {
-                        if changed.is_err() || *shutdown_rx.borrow() {
-                            break;
-                        }
+                    Ok(None) => {
+                        warn!(
+                            peer = %display_addr(self.peer_addr),
+                            user = %username,
+                            relay = %relay_name,
+                            "relay host not found"
+                        );
+                        let _ = self.send_line(session, channel, &format!("unknown relay host '{}'", relay_name));
+                        self.handle_exit(session, channel)
+                    }
+                    Err(err) => {
+                        let _ = self.send_line(session, channel, &format!("internal error resolving relay host: {err}"));
+                        self.handle_exit(session, channel)
                     }
                 }
             }
-        }));
-    }
-
-    /// Stop the refresh task and drop any pending handle.
-    fn stop_tick_task(&mut self) {
-        if let Some(tx) = self.tick_shutdown.take() {
-            let _ = tx.send(true);
-        }
-        if let Some(handle) = self.tick_task.take() {
-            handle.abort();
+            Err(err) => {
+                let _ = self.send_line(session, channel, &format!("internal error opening server database: {err}"));
+                self.handle_exit(session, channel)
+            }
         }
     }
 }
@@ -268,7 +338,6 @@ impl Drop for ServerHandler {
         if !self.closed {
             self.log_disconnect("connection dropped");
         }
-        self.stop_tick_task();
     }
 }
 
@@ -323,116 +392,10 @@ impl ssh_server::Handler for ServerHandler {
         self.channel = Some(channel);
         if let Some(relay_name) = self.relay_target.clone() {
             // Permission check and connection scaffold
-            use state_store::{fetch_relay_host_by_name, fetch_relay_host_options, server_db, user_has_relay_access};
-            let username = self.username.clone().unwrap_or_else(|| "<unknown>".into());
-            match server_db().await {
-                Ok(handle) => {
-                    let pool = handle.into_pool();
-                    match fetch_relay_host_by_name(&pool, &relay_name).await {
-                        Ok(Some(host)) => {
-                            match user_has_relay_access(&pool, &username, host.id).await {
-                                Ok(true) => {
-                                    let _ = self.send_line(
-                                        session,
-                                        channel,
-                                        &format!("user authenticated; connecting to relay host '{}'...", relay_name),
-                                    );
-                                    let options = match fetch_relay_host_options(&pool, host.id).await {
-                                        Ok(raw) => {
-                                            // Decrypt any encrypted option values.
-                                            let mut out = std::collections::HashMap::with_capacity(raw.len());
-                                            for (k, v) in raw.into_iter() {
-                                                match crate::secrets::decrypt_string_if_encrypted(&v) {
-                                                    Ok(val) => {
-                                                        out.insert(k, val);
-                                                    }
-                                                    Err(err) => {
-                                                        let _ = self.send_line(
-                                                            session,
-                                                            channel,
-                                                            &format!("internal error decrypting option '{k}': {err}"),
-                                                        );
-                                                        return self.handle_exit(session, channel);
-                                                    }
-                                                }
-                                            }
-                                            out
-                                        }
-                                        Err(err) => {
-                                            let _ =
-                                                self.send_line(session, channel, &format!("internal error loading relay options: {err}"));
-                                            return self.handle_exit(session, channel);
-                                        }
-                                    };
-                                    let server_handle = session.handle();
-                                    let size_rx = self.size_updates.subscribe();
-                                    let initial_size = self.view_size();
-                                    match crate::relay::start_bridge(
-                                        server_handle,
-                                        channel,
-                                        &host,
-                                        &username,
-                                        initial_size,
-                                        size_rx,
-                                        &options,
-                                    )
-                                    .await
-                                    {
-                                        Ok(handle) => {
-                                            self.relay_handle = Some(handle);
-                                            Ok(())
-                                        }
-                                        Err(err) => {
-                                            let _ = self.send_line(session, channel, &format!("failed to start relay: {err}"));
-                                            self.handle_exit(session, channel)
-                                        }
-                                    }
-                                }
-                                Ok(false) => {
-                                    warn!(
-                                        peer = %display_addr(self.peer_addr),
-                                        user = %username,
-                                        relay = %relay_name,
-                                        "relay access denied for user"
-                                    );
-                                    let _ = self.send_line(
-                                        session,
-                                        channel,
-                                        &format!("access denied: user '{}' is not permitted to connect to '{}'", username, relay_name),
-                                    );
-                                    self.handle_exit(session, channel)
-                                }
-                                Err(err) => {
-                                    let _ = self.send_line(session, channel, &format!("internal error checking access: {err}"));
-                                    self.handle_exit(session, channel)
-                                }
-                            }
-                        }
-                        Ok(None) => {
-                            warn!(
-                                peer = %display_addr(self.peer_addr),
-                                user = %username,
-                                relay = %relay_name,
-                                "relay host not found"
-                            );
-                            let _ = self.send_line(session, channel, &format!("unknown relay host '{}'", relay_name));
-                            self.handle_exit(session, channel)
-                        }
-                        Err(err) => {
-                            let _ = self.send_line(session, channel, &format!("internal error resolving relay host: {err}"));
-                            self.handle_exit(session, channel)
-                        }
-                    }
-                }
-                Err(err) => {
-                    let _ = self.send_line(session, channel, &format!("internal error opening server database: {err}"));
-                    self.handle_exit(session, channel)
-                }
-            }
+            self.connect_to_relay(session, channel, &relay_name).await
         } else {
-            self.init_shell()?;
+            self.init_shell().await?;
             self.enter_alt_screen(session, channel)?;
-            self.start_tick_task(session, channel);
             self.render_terminal(session, channel)
         }
     }
@@ -440,13 +403,6 @@ impl ssh_server::Handler for ServerHandler {
     async fn exec_request(&mut self, channel: ChannelId, data: &[u8], session: &mut Session) -> Result<(), Self::Error> {
         session.channel_success(channel)?;
         self.channel = Some(channel);
-        // For exec, we don't use the TUI app, just simple echo
-        // Or we could use EchoApp in non-interactive mode?
-        // The original implementation just echoed the command.
-        // Let's keep it simple as before.
-        // use tui_core::apps::echo::{HELLO_BANNER, INSTRUCTIONS};
-        // self.send_line(session, channel, HELLO_BANNER)?;
-        // self.send_line(session, channel, INSTRUCTIONS)?;
         if !data.is_empty() {
             let cmd = String::from_utf8_lossy(data).trim().to_string();
             if !cmd.is_empty() {
@@ -470,19 +426,27 @@ impl ssh_server::Handler for ServerHandler {
         }
 
         if let Some(app_session) = self.app_session.as_mut() {
-             let action = app_session.handle_input(data).map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
-             match action {
-                 AppAction::Exit => {
-                     self.handle_exit(session, channel)?;
-                 }
-                 AppAction::Render => {
-                     self.render_terminal(session, channel)?;
-                 }
-                 AppAction::SwitchTo(app_name) => {
-                     self.switch_app(&app_name, session, channel).await?;
-                 }
-                 AppAction::Continue => {}
-             }
+            let action = app_session
+                .handle_input(data)
+                .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+            match action {
+                AppAction::Exit => {
+                    self.handle_exit(session, channel)?;
+                }
+                AppAction::Render => {
+                    self.render_terminal(session, channel)?;
+                }
+                AppAction::SwitchTo(app_name) => {
+                    self.switch_app(&app_name, session, channel).await?;
+                }
+                AppAction::ConnectToRelay { id: _, name } => {
+                    self.relay_target = Some(name.clone());
+                    self.drop_terminal(); // Stop TUI
+                    self.leave_alt_screen(session, channel)?; // Leave alt screen
+                    self.connect_to_relay(session, channel, &name).await?; // Now Connect
+                }
+                AppAction::Continue => {}
+            }
         }
         Ok(())
     }
@@ -528,7 +492,7 @@ impl ssh_server::Handler for ServerHandler {
             if self.app_session.is_some() {
                 self.leave_alt_screen(session, channel)?;
             }
-            self.stop_tick_task();
+
             self.drop_terminal();
             self.channel = None;
             self.log_disconnect("channel closed");

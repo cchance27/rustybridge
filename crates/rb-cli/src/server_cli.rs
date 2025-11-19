@@ -168,8 +168,9 @@ pub enum CredsCreateCmd {
         value: Option<String>,
         #[arg(long)]
         cert_file: Option<PathBuf>,
-        #[arg(long)]
-        passphrase: Option<String>,
+        /// Optional passphrase for the private key. If provided without a value, prompts securely.
+        #[arg(long, value_name = "PASSPHRASE", num_args = 0..=1, require_equals = true)]
+        passphrase: Option<Option<String>>,
     },
     /// Create an agent credential (restrict agent auth to this public key)
     Agent {

@@ -15,6 +15,24 @@ static SERVER_MIGRATOR: Migrator = sqlx::migrate!("./migrations/server");
 const CLIENT_DB_ENV: &str = "RB_CLIENT_DB_URL";
 const SERVER_DB_ENV: &str = "RB_SERVER_DB_URL";
 
+/// Return a human-friendly string describing where the client DB will live.
+/// Prefers a filesystem path when available, otherwise returns the configured URL.
+pub fn display_client_db_path() -> String {
+    if let Ok(val) = std::env::var(CLIENT_DB_ENV) {
+        return val;
+    }
+    default_client_path().display().to_string()
+}
+
+/// Return a human-friendly string describing where the server DB will live.
+/// Prefers a filesystem path when available, otherwise returns the configured URL.
+pub fn display_server_db_path() -> String {
+    if let Ok(val) = std::env::var(SERVER_DB_ENV) {
+        return val;
+    }
+    default_server_path().display().to_string()
+}
+
 pub struct DbHandle {
     pub pool: SqlitePool,
     pub url: String,
@@ -78,10 +96,30 @@ pub async fn user_has_relay_access(pool: &SqlitePool, username: &str, relay_host
     Ok(row.is_some())
 }
 
-pub async fn list_relay_hosts(pool: &SqlitePool) -> DbResult<Vec<RelayHost>> {
-    let rows = sqlx::query_as::<_, RelayHost>("SELECT id, name, ip, port FROM relay_hosts ORDER BY name")
-        .fetch_all(pool)
-        .await?;
+/// List all relay hosts, optionally filtered by username access
+pub async fn list_relay_hosts(pool: &SqlitePool, username: Option<&str>) -> DbResult<Vec<RelayHost>> {
+    let rows = match username {
+        Some(user) => {
+            // Filter by ACL - only return hosts this user has access to
+            sqlx::query_as::<_, RelayHost>(
+                "SELECT DISTINCT h.id, h.name, h.ip, h.port 
+                 FROM relay_hosts h
+                 INNER JOIN relay_host_acl acl ON h.id = acl.relay_host_id
+                 WHERE acl.username = ?
+                 ORDER BY h.name",
+            )
+            .bind(user)
+            .fetch_all(pool)
+            .await?
+        }
+        None => {
+            // No filter - return all hosts
+            sqlx::query_as::<_, RelayHost>("SELECT id, name, ip, port FROM relay_hosts ORDER BY name")
+                .fetch_all(pool)
+                .await?
+        }
+    };
+
     Ok(rows
         .into_iter()
         .map(|row| RelayHost {

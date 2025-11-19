@@ -20,10 +20,10 @@ pub fn desired_rect(size: (u16, u16)) -> ratatui::layout::Rect {
 pub fn status_tick_sequence(_size: (u16, u16), connected_for: std::time::Duration) -> Option<Vec<u8>> {
     // We ignore the passed size because it might be stale (e.g. 80x24 default) while the terminal is larger.
     // Instead, we use absolute positioning to target the bottom-right corner.
-    
+
     let uptime_str = format!("Connected: {}", format_duration(connected_for));
     let len = uptime_str.len();
-    
+
     use std::fmt::Write;
     let mut buffer = String::new();
     // Save cursor (\x1b[s)
