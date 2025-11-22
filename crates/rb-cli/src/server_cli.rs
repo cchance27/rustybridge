@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use rb_web::{WebServerConfig, WebTlsConfig};
 use server_core::ServerConfig;
 
 const DEFAULT_SERVER_PORT: u16 = 2222;
@@ -18,6 +19,9 @@ pub struct ServerArgs {
     #[arg(long, action = clap::ArgAction::SetTrue)]
     pub roll_hostkey: bool,
 
+    #[command(flatten)]
+    pub web: WebArgs,
+
     #[command(subcommand)]
     pub cmd: Option<ServerSubcommand>,
 }
@@ -29,6 +33,62 @@ impl ServerArgs {
             port: self.port.unwrap_or(DEFAULT_SERVER_PORT),
             roll_hostkey: self.roll_hostkey,
         }
+    }
+
+    pub fn to_web_config(&self) -> anyhow::Result<Option<WebServerConfig>> {
+        self.web.to_config()
+    }
+}
+
+#[derive(Debug, Parser, Default)]
+pub struct WebArgs {
+    /// Start the embedded web server alongside SSH
+    #[arg(long = "web", action = clap::ArgAction::SetTrue, help_heading = "Web Server")]
+    pub enable: bool,
+    /// Address to bind the web server to
+    #[arg(long = "web-bind", value_name = "ADDR", help_heading = "Web Server")]
+    pub web_bind: Option<String>,
+    /// Listening port for the web server
+    #[arg(long = "web-port", value_name = "PORT", help_heading = "Web Server")]
+    pub web_port: Option<u16>,
+    /// Optional path to static assets directory (dev override)
+    #[arg(long = "web-static", value_name = "PATH", help_heading = "Web Server")]
+    pub web_static_dir: Option<PathBuf>,
+    /// Path to TLS certificate (PEM) for native HTTPS
+    #[arg(long = "web-tls-cert", value_name = "PATH", help_heading = "Web Server")]
+    pub web_tls_cert: Option<PathBuf>,
+    /// Path to TLS private key (PEM) for native HTTPS
+    #[arg(long = "web-tls-key", value_name = "PATH", help_heading = "Web Server")]
+    pub web_tls_key: Option<PathBuf>,
+    /// Public mount path for built assets (defaults to /assets)
+    #[arg(long = "web-assets-mount", value_name = "PATH", help_heading = "Web Server")]
+    pub web_assets_mount: Option<String>,
+}
+
+impl WebArgs {
+    pub fn to_config(&self) -> anyhow::Result<Option<WebServerConfig>> {
+        if !self.enable {
+            return Ok(None);
+        }
+
+        let tls = match (&self.web_tls_cert, &self.web_tls_key) {
+            (Some(cert), Some(key)) => Some(WebTlsConfig {
+                cert_path: cert.clone(),
+                key_path: key.clone(),
+            }),
+            (None, None) => None,
+            _ => {
+                return Err(anyhow::anyhow!("--web-tls-cert and --web-tls-key must be provided together"));
+            }
+        };
+
+        Ok(Some(WebServerConfig {
+            bind: self.web_bind.clone().unwrap_or_else(|| "127.0.0.1".to_string()),
+            port: self.web_port.unwrap_or(8080),
+            static_dir: self.web_static_dir.clone(),
+            tls,
+            assets_mount: self.web_assets_mount.clone().unwrap_or_else(|| "/assets".to_string()),
+        }))
     }
 }
 
@@ -43,6 +103,11 @@ pub enum ServerSubcommand {
     Users {
         #[command(subcommand)]
         cmd: UsersCmd,
+    },
+    /// Manage groups and memberships
+    Groups {
+        #[command(subcommand)]
+        cmd: GroupsCmd,
     },
     /// Manage generic relay credentials
     Creds {
@@ -102,11 +167,23 @@ pub enum HostsOptionsCmd {
 
 #[derive(Debug, Subcommand)]
 pub enum HostsAccessCmd {
-    /// Grant a user access to a host
-    Grant { name: String, user: String },
-    /// Revoke a user's access from a host
-    Revoke { name: String, user: String },
-    /// List users with access to a host
+    /// Grant a principal (user or group) access to a host
+    Grant {
+        name: String,
+        #[arg(long, conflicts_with = "group", required_unless_present = "group")]
+        user: Option<String>,
+        #[arg(long, conflicts_with = "user", required_unless_present = "user")]
+        group: Option<String>,
+    },
+    /// Revoke a principal's access from a host
+    Revoke {
+        name: String,
+        #[arg(long, conflicts_with = "group", required_unless_present = "group")]
+        user: Option<String>,
+        #[arg(long, conflicts_with = "user", required_unless_present = "user")]
+        group: Option<String>,
+    },
+    /// List principals with access to a host
     List { name: String },
 }
 
@@ -130,6 +207,33 @@ pub enum UsersCmd {
     Remove { user: String },
     /// List users
     List,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum GroupsCmd {
+    /// Add a group
+    Add { group: String },
+    /// Remove a group (revokes access)
+    Remove { group: String },
+    /// List groups
+    List,
+    /// Manage group membership
+    Members {
+        #[command(subcommand)]
+        cmd: GroupMembersCmd,
+    },
+    /// List groups for a user
+    UserGroups { user: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum GroupMembersCmd {
+    /// Add a user to a group
+    Add { group: String, user: String },
+    /// Remove a user from a group
+    Remove { group: String, user: String },
+    /// List members of a group
+    List { group: String },
 }
 
 #[derive(Debug, Subcommand)]

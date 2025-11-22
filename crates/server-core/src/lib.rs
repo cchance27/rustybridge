@@ -22,7 +22,9 @@ use secrecy::ExposeSecret;
 use server_manager::ServerManager;
 use sqlx::{Row, SqlitePool};
 use ssh_core::crypto::default_preferred;
-use state_store::{migrate_server, server_db};
+use state_store::{
+    add_user_to_group, create_group, delete_group_by_name, fetch_group_id_by_name, fetch_relay_access_principals, grant_relay_access_principal, list_group_members, list_groups as list_groups_db, list_user_groups, migrate_server, remove_user_from_group, revoke_relay_access_principal, server_db
+};
 use tracing::info;
 
 use crate::error::{ServerError, ServerResult};
@@ -30,6 +32,21 @@ use crate::error::{ServerError, ServerResult};
 const FETCH_HOSTKEY_TIMEOUT_ENV: &str = "RB_FETCH_TIMEOUT";
 const DEFAULT_FETCH_HOSTKEY_TIMEOUT_SECS: f64 = 2.0;
 const MAX_FETCH_HOSTKEY_TIMEOUT_SECS: f64 = 5.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrincipalKind {
+    User,
+    Group,
+}
+
+impl PrincipalKind {
+    fn as_str(&self) -> &'static str {
+        match self {
+            PrincipalKind::User => "user",
+            PrincipalKind::Group => "group",
+        }
+    }
+}
 
 fn hostkey_fetch_timeout() -> ServerResult<Duration> {
     match std::env::var(FETCH_HOSTKEY_TIMEOUT_ENV) {
@@ -79,7 +96,7 @@ pub struct ServerConfig {
 /// This configures russh with our crypto preferences, enables only password auth,
 /// and defers to [`ServerManager`] (and ultimately [`handler::ServerHandler`]) for per-connection
 /// state machines.
-pub async fn run_server(config: ServerConfig) -> ServerResult<()> {
+pub async fn run_ssh_server(config: ServerConfig) -> ServerResult<()> {
     // Refuse to start without a non-empty master secret configured
     crate::secrets::require_master_secret()?;
 
@@ -131,14 +148,18 @@ pub async fn add_relay_host(endpoint: &str, name: &str) -> ServerResult<()> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
-    sqlx::query(
-        "INSERT INTO relay_hosts (name, ip, port) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET ip = excluded.ip, port = excluded.port",
-    )
-    .bind(name)
-    .bind(&ip)
-    .bind(port)
-    .execute(&pool)
-    .await?;
+
+    // Check if name already exists
+    if state_store::fetch_relay_host_by_name(&pool, name).await?.is_some() {
+        return Err(ServerError::already_exists("relay host", name));
+    }
+
+    sqlx::query("INSERT INTO relay_hosts (name, ip, port) VALUES (?, ?, ?)")
+        .bind(name)
+        .bind(&ip)
+        .bind(port)
+        .execute(&pool)
+        .await?;
     info!(relay_host = name, ip, port, "relay host saved");
 
     // Attempt to fetch host key and optionally store it.
@@ -148,62 +169,76 @@ pub async fn add_relay_host(endpoint: &str, name: &str) -> ServerResult<()> {
     Ok(())
 }
 
-pub async fn grant_relay_access(name: &str, user: &str) -> ServerResult<()> {
+pub async fn grant_relay_access(name: &str, principal_kind: PrincipalKind, principal_name: &str) -> ServerResult<()> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
         .ok_or_else(|| ServerError::not_found("relay host", name))?;
-    let _uid = state_store::fetch_user_id_by_name(&pool, user)
-        .await?
-        .ok_or_else(|| ServerError::not_found("user", user))?;
-    sqlx::query("INSERT OR IGNORE INTO relay_host_acl (username, relay_host_id) VALUES (?, ?)")
-        .bind(user)
-        .bind(host.id)
-        .execute(&pool)
-        .await?;
-    info!(relay_host = name, user, "granted access to relay host");
+    grant_relay_access_principal(&pool, host.id, principal_kind.as_str(), principal_name).await?;
+    info!(
+        relay_host = name,
+        principal_kind = principal_kind.as_str(),
+        principal = principal_name,
+        "granted access to relay host"
+    );
     Ok(())
 }
 
-pub async fn set_relay_option(name: &str, key: &str, value: &str) -> ServerResult<()> {
+pub async fn set_relay_option(name: &str, key: &str, value: &str, is_secure: bool) -> ServerResult<()> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
         .ok_or_else(|| ServerError::not_found("relay host", name))?;
-    let stored = crate::secrets::encrypt_string(crate::secrets::SecretString::new(Box::new(value.to_string())))?;
+
+    // Auto-determine if the option should be encrypted based on the key name
+    // Only truly sensitive values should be encrypted
+    let should_encrypt = match key {
+        // These should always be encrypted
+        "auth.password" | "auth.identity" | "auth.passphrase" | "hostkey.openssh" => true,
+        // These can be plain text
+        "auth.source" | "auth.id" | "auth.method" | "auth.username" | "auth.agent_socket" | "auth.agent_pubkey" => false,
+        // For any other keys, respect the caller's preference (default to secure)
+        _ => is_secure,
+    };
+
+    let stored_value = if should_encrypt {
+        crate::secrets::encrypt_string(crate::secrets::SecretString::new(Box::new(value.to_string())))?
+    } else {
+        value.to_string()
+    };
+
     sqlx::query(
-        "INSERT INTO relay_host_options (relay_host_id, key, value) VALUES (?, ?, ?) \
-         ON CONFLICT(relay_host_id, key) DO UPDATE SET value = excluded.value",
+        "INSERT INTO relay_host_options (relay_host_id, key, value, is_secure) VALUES (?, ?, ?, ?) \
+         ON CONFLICT(relay_host_id, key) DO UPDATE SET value = excluded.value, is_secure = excluded.is_secure",
     )
     .bind(host.id)
     .bind(key)
-    .bind(stored)
+    .bind(stored_value)
+    .bind(should_encrypt)
     .execute(&pool)
     .await?;
-    info!(relay_host = name, key, "relay option set");
+    info!(relay_host = name, key, is_secure = should_encrypt, "relay option set");
     Ok(())
 }
 
-pub async fn revoke_relay_access(name: &str, user: &str) -> ServerResult<()> {
+pub async fn revoke_relay_access(name: &str, principal_kind: PrincipalKind, principal_name: &str) -> ServerResult<()> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
         .ok_or_else(|| ServerError::not_found("relay host", name))?;
-    let _uid = state_store::fetch_user_id_by_name(&pool, user)
-        .await?
-        .ok_or_else(|| ServerError::not_found("user", user))?;
-    sqlx::query("DELETE FROM relay_host_acl WHERE username = ? AND relay_host_id = ?")
-        .bind(user)
-        .bind(host.id)
-        .execute(&pool)
-        .await?;
-    info!(relay_host = name, user, "revoked access to relay host");
+    revoke_relay_access_principal(&pool, host.id, principal_kind.as_str(), principal_name).await?;
+    info!(
+        relay_host = name,
+        principal_kind = principal_kind.as_str(),
+        principal = principal_name,
+        "revoked access to relay host"
+    );
     Ok(())
 }
 
@@ -309,27 +344,41 @@ pub async fn list_options(name: &str) -> ServerResult<Vec<(String, String)>> {
     // For CLI display, mask encrypted values to avoid leaking secrets.
     let mut items: Vec<(String, String)> = map
         .into_iter()
-        .map(|(k, v)| {
-            if crate::secrets::is_encrypted_marker(&v) {
-                (k, "<encrypted>".to_string())
-            } else {
-                (k, v)
-            }
-        })
+        .map(
+            |(k, (v, is_secure))| {
+                if is_secure { (k, "<encrypted>".to_string()) } else { (k, v) }
+            },
+        )
         .collect();
     items.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(items)
 }
 
-pub async fn list_access(name: &str) -> ServerResult<Vec<String>> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayAccessPrincipal {
+    pub kind: PrincipalKind,
+    pub name: String,
+}
+
+pub async fn list_access(name: &str) -> ServerResult<Vec<RelayAccessPrincipal>> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
         .ok_or_else(|| ServerError::not_found("relay host", name))?;
-    let users = state_store::fetch_relay_access_usernames(&pool, host.id).await?;
-    Ok(users)
+    let principals = fetch_relay_access_principals(&pool, host.id).await?;
+    Ok(principals
+        .into_iter()
+        .map(|p| RelayAccessPrincipal {
+            kind: if p.kind == "group" {
+                PrincipalKind::Group
+            } else {
+                PrincipalKind::User
+            },
+            name: p.name,
+        })
+        .collect())
 }
 
 pub async fn delete_relay_host(name: &str) -> ServerResult<()> {
@@ -366,16 +415,19 @@ pub async fn add_user(user: &str, password: &str) -> ServerResult<()> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
+
+    // Check if user already exists
+    if state_store::fetch_user_id_by_name(&pool, user).await?.is_some() {
+        return Err(ServerError::already_exists("user", user));
+    }
+
     let hash = crate::auth::hash_password(password)?;
-    sqlx::query(
-        "INSERT INTO users (username, password_hash) VALUES (?, ?) \
-         ON CONFLICT(username) DO UPDATE SET password_hash = excluded.password_hash",
-    )
-    .bind(user)
-    .bind(hash)
-    .execute(&pool)
-    .await?;
-    info!(user, "user added/updated");
+    sqlx::query("INSERT INTO users (username, password_hash) VALUES (?, ?)")
+        .bind(user)
+        .bind(hash)
+        .execute(&pool)
+        .await?;
+    info!(user, "user added");
     Ok(())
 }
 
@@ -384,11 +436,11 @@ pub async fn remove_user(user: &str) -> ServerResult<()> {
     migrate_server(&db).await?;
     let pool = db.into_pool();
     // Revoke all ACLs for this user
-    sqlx::query("DELETE FROM relay_host_acl WHERE username = ?")
+    sqlx::query("DELETE FROM relay_host_acl WHERE principal_kind = 'user' AND principal_name = ?")
         .bind(user)
         .execute(&pool)
         .await?;
-    // Remove user record
+    // Remove user record (cascades user_groups)
     sqlx::query("DELETE FROM users WHERE username = ?")
         .bind(user)
         .execute(&pool)
@@ -397,12 +449,104 @@ pub async fn remove_user(user: &str) -> ServerResult<()> {
     Ok(())
 }
 
+pub async fn add_group(name: &str) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+
+    if fetch_group_id_by_name(&pool, name).await?.is_some() {
+        return Err(ServerError::already_exists("group", name));
+    }
+
+    create_group(&pool, name).await?;
+    info!(group = name, "group added");
+    Ok(())
+}
+
+pub async fn remove_group(name: &str) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+
+    // Remove ACLs that reference this group
+    sqlx::query("DELETE FROM relay_host_acl WHERE principal_kind = 'group' AND principal_name = ?")
+        .bind(name)
+        .execute(&pool)
+        .await?;
+
+    delete_group_by_name(&pool, name).await?;
+    info!(group = name, "group removed and access revoked");
+    Ok(())
+}
+
+pub async fn list_groups() -> ServerResult<Vec<String>> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    Ok(list_groups_db(&pool).await?)
+}
+
+pub async fn add_user_to_group_server(username: &str, group: &str) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    add_user_to_group(&pool, username, group).await?;
+    info!(user = username, group, "user added to group");
+    Ok(())
+}
+
+pub async fn remove_user_from_group_server(username: &str, group: &str) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    remove_user_from_group(&pool, username, group).await?;
+    info!(user = username, group, "user removed from group");
+    Ok(())
+}
+
+pub async fn list_user_groups_server(username: &str) -> ServerResult<Vec<String>> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    Ok(list_user_groups(&pool, username).await?)
+}
+
+pub async fn list_group_members_server(group: &str) -> ServerResult<Vec<String>> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    Ok(list_group_members(&pool, group).await?)
+}
+
 pub async fn list_users() -> ServerResult<Vec<String>> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
     let users = state_store::list_usernames(&pool).await?;
     Ok(users)
+}
+
+pub async fn update_user(username: &str, new_password: Option<&str>) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+
+    // Verify user exists
+    let user_id = state_store::fetch_user_id_by_name(&pool, username)
+        .await?
+        .ok_or_else(|| ServerError::not_found("user", username))?;
+
+    if let Some(npw) = new_password {
+        let hash = crate::auth::hash_password(npw)?;
+        sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+            .bind(&hash)
+            .bind(user_id)
+            .execute(&pool)
+            .await?;
+    }
+
+    info!(user = username, "user updated");
+    Ok(())
 }
 
 pub async fn create_password_credential(name: &str, username: Option<&str>, password: &str) -> ServerResult<i64> {
@@ -467,6 +611,81 @@ pub async fn create_agent_credential(name: &str, username: Option<&str>, public_
     Ok(id)
 }
 
+pub async fn update_password_credential(id: i64, name: &str, username: Option<&str>, password: Option<&str>) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    let (salt, nonce, secret) = if let Some(pw) = password {
+        let blob = crate::secrets::encrypt_secret(pw.as_bytes())?;
+        (blob.salt, blob.nonce, blob.ciphertext)
+    } else {
+        let current = state_store::get_relay_credential_by_id(&pool, id)
+            .await?
+            .ok_or_else(|| ServerError::not_found("credential", name))?;
+        (current.salt, current.nonce, current.secret)
+    };
+    let meta = username.map(|u| serde_json::json!({"username": u}).to_string());
+    state_store::update_relay_credential(&pool, id, "password", &salt, &nonce, &secret, meta.as_deref()).await?;
+    info!(credential = name, kind = "password", "credential updated");
+    Ok(())
+}
+
+pub async fn update_ssh_key_credential(
+    id: i64,
+    name: &str,
+    username: Option<&str>,
+    private_key_pem: Option<&str>,
+    cert_openssh: Option<&str>,
+    passphrase: Option<&str>,
+) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    // Store key+cert in encrypted JSON payload
+    let (salt, nonce, secret) = if let Some(key) = private_key_pem {
+        let mut secret_obj = serde_json::Map::new();
+        secret_obj.insert("private_key".to_string(), serde_json::Value::String(key.to_string()));
+        if let Some(cert) = cert_openssh {
+            secret_obj.insert("certificate".to_string(), serde_json::Value::String(cert.to_string()));
+        }
+        if let Some(pw) = passphrase {
+            secret_obj.insert("passphrase".to_string(), serde_json::Value::String(pw.to_string()));
+        }
+        let secret_bytes = serde_json::to_vec(&secret_obj)?;
+        let blob = crate::secrets::encrypt_secret(&secret_bytes)?;
+        (blob.salt, blob.nonce, blob.ciphertext)
+    } else {
+        let current = state_store::get_relay_credential_by_id(&pool, id)
+            .await?
+            .ok_or_else(|| ServerError::not_found("credential", name))?;
+        (current.salt, current.nonce, current.secret)
+    };
+    let meta = username.map(|u| serde_json::json!({"username": u}).to_string());
+    state_store::update_relay_credential(&pool, id, "ssh_key", &salt, &nonce, &secret, meta.as_deref()).await?;
+    info!(credential = name, kind = "ssh_key", "credential updated");
+    Ok(())
+}
+
+pub async fn update_agent_credential(id: i64, name: &str, username: Option<&str>, public_key: Option<&str>) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    // For agent, we just store the public key encrypted (though strictly it's public)
+    let (salt, nonce, secret) = if let Some(pk) = public_key {
+        let blob = crate::secrets::encrypt_secret(pk.as_bytes())?;
+        (blob.salt, blob.nonce, blob.ciphertext)
+    } else {
+        let current = state_store::get_relay_credential_by_id(&pool, id)
+            .await?
+            .ok_or_else(|| ServerError::not_found("credential", name))?;
+        (current.salt, current.nonce, current.secret)
+    };
+    let meta = username.map(|u| serde_json::json!({"username": u}).to_string());
+    state_store::update_relay_credential(&pool, id, "agent", &salt, &nonce, &secret, meta.as_deref()).await?;
+    info!(credential = name, kind = "agent", "credential updated");
+    Ok(())
+}
+
 pub async fn delete_credential(name: &str) -> ServerResult<()> {
     let db = server_db().await?;
     migrate_server(&db).await?;
@@ -502,12 +721,61 @@ pub async fn delete_credential(name: &str) -> ServerResult<()> {
     Ok(())
 }
 
-pub async fn list_credentials() -> ServerResult<Vec<(i64, String, String)>> {
+pub async fn list_credentials() -> ServerResult<Vec<(i64, String, String, Option<String>)>> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
     let rows = state_store::list_relay_credentials(&pool).await?;
     Ok(rows)
+}
+
+/// List credentials with assigned relay hosts
+/// Returns (id, name, kind, username, assigned_relays)
+pub async fn list_credentials_with_assignments() -> ServerResult<Vec<(i64, String, String, Option<String>, Vec<String>)>> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+
+    let creds = state_store::list_relay_credentials(&pool).await?;
+    let hosts = state_store::list_relay_hosts(&pool, None).await?;
+    let host_map: std::collections::HashMap<i64, String> = hosts.into_iter().map(|h| (h.id, h.name)).collect();
+
+    let opts_rows: Vec<(i64, String)> = sqlx::query_as("SELECT relay_host_id, value FROM relay_host_options WHERE key = 'auth.id'")
+        .fetch_all(&pool)
+        .await?;
+
+    let mut assignments: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+
+    for (host_id, value) in opts_rows {
+        let resolved = if crate::secrets::is_encrypted_marker(&value) {
+            match crate::secrets::decrypt_string_if_encrypted(&value) {
+                Ok(s) => s,
+                Err(_) => continue,
+            }
+        } else {
+            crate::secrets::SecretString::new(Box::new(value))
+        };
+
+        let cred_id_str = resolved.expose_secret().clone();
+        if let Some(host_name) = host_map.get(&host_id) {
+            assignments.entry(cred_id_str).or_default().push(host_name.clone());
+        }
+    }
+
+    let mut result = Vec::new();
+    for (id, name, kind, meta) in creds {
+        let username = meta
+            .as_deref()
+            .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+            .and_then(|v| v.get("username").and_then(|u| u.as_str().map(|s| s.to_string())));
+
+        let mut assigned_relays = assignments.remove(&id.to_string()).unwrap_or_default();
+        assigned_relays.sort();
+
+        result.push((id, name, kind, username, assigned_relays));
+    }
+
+    Ok(result)
 }
 
 pub async fn rotate_secrets_key(old_input: &str, new_input: &str) -> ServerResult<()> {
@@ -545,28 +813,43 @@ pub async fn rotate_secrets_key(old_input: &str, new_input: &str) -> ServerResul
         }
     }
 
-    // Rotate relay_host_options values
+    // Rotate relay_host_options values. Respect the is_secure flag so plaintext
+    // options remain plaintext and only sensitive rows are re-encrypted.
     {
-        let rows = sqlx::query("SELECT relay_host_id, key, value FROM relay_host_options")
+        let rows = sqlx::query("SELECT relay_host_id, key, value, is_secure FROM relay_host_options")
             .fetch_all(&pool)
             .await?;
         for row in rows {
             let host_id: i64 = row.get("relay_host_id");
             let key: String = row.get("key");
             let value: String = row.get("value");
-            // Decrypt with old if encrypted; otherwise treat as plaintext
-            let plaintext = if crate::secrets::is_encrypted_marker(&value) {
-                crate::secrets::decrypt_string_with(&value, &old_master)?
-            } else {
-                crate::secrets::SecretString::new(Box::new(value))
-            };
-            let reenc = crate::secrets::encrypt_string_with(plaintext, &new_master)?;
-            sqlx::query("UPDATE relay_host_options SET value = ? WHERE relay_host_id = ? AND key = ?")
-                .bind(reenc)
-                .bind(host_id)
-                .bind(key)
-                .execute(&pool)
-                .await?;
+            let is_secure: bool = row.get("is_secure");
+
+            // Only rotate entries explicitly marked secure; keep plaintext values untouched.
+            if is_secure {
+                // If a secure row somehow contains plaintext, treat it as such to avoid corrupting data.
+                let plaintext = if crate::secrets::is_encrypted_marker(&value) {
+                    crate::secrets::decrypt_string_with(&value, &old_master)?
+                } else {
+                    crate::secrets::SecretString::new(Box::new(value))
+                };
+                let reenc = crate::secrets::encrypt_string_with(plaintext, &new_master)?;
+                sqlx::query("UPDATE relay_host_options SET value = ?, is_secure = 1 WHERE relay_host_id = ? AND key = ?")
+                    .bind(reenc)
+                    .bind(host_id)
+                    .bind(key)
+                    .execute(&pool)
+                    .await?;
+            } else if crate::secrets::is_encrypted_marker(&value) {
+                // Data hygiene: if a non-secure row was encrypted previously, restore plaintext so consumers do not misinterpret it.
+                let plaintext = crate::secrets::decrypt_string_with(&value, &old_master)?;
+                sqlx::query("UPDATE relay_host_options SET value = ?, is_secure = 0 WHERE relay_host_id = ? AND key = ?")
+                    .bind(plaintext.expose_secret().to_string())
+                    .bind(host_id)
+                    .bind(key)
+                    .execute(&pool)
+                    .await?;
+            }
         }
     }
 
@@ -581,42 +864,30 @@ pub async fn assign_credential(hostname: &str, cred_name: &str) -> ServerResult<
     let cred = state_store::get_relay_credential_by_name(&pool, cred_name)
         .await?
         .ok_or_else(|| ServerError::not_found("credential", cred_name))?;
+
+    // Fetch host to get ID for clearing auth
     let host = state_store::fetch_relay_host_by_name(&pool, hostname)
         .await?
         .ok_or_else(|| ServerError::not_found("relay host", hostname))?;
-    // Write auth.source and auth.id; also record normalized method inferred from credential kind for convenience
-    let enc_source = crate::secrets::encrypt_string(crate::secrets::SecretString::new(Box::new("credential".to_string())))?;
-    let enc_id = crate::secrets::encrypt_string(crate::secrets::SecretString::new(Box::new(cred.id.to_string())))?;
+
     // Normalize: map ssh_key-like kinds to publickey for relay auth.method
     let method_plain: &str = match cred.kind.as_str() {
         "ssh_key" | "ssh_cert_key" => "publickey",
         other => other,
     };
-    let enc_method = crate::secrets::encrypt_string(crate::secrets::SecretString::new(Box::new(method_plain.to_string())))?;
-    sqlx::query(
-        "INSERT INTO relay_host_options (relay_host_id, key, value) VALUES (?, 'auth.source', ?) \
-         ON CONFLICT(relay_host_id, key) DO UPDATE SET value = excluded.value",
-    )
-    .bind(host.id)
-    .bind(enc_source)
-    .execute(&pool)
-    .await?;
-    sqlx::query(
-        "INSERT INTO relay_host_options (relay_host_id, key, value) VALUES (?, 'auth.id', ?) \
-         ON CONFLICT(relay_host_id, key) DO UPDATE SET value = excluded.value",
-    )
-    .bind(host.id)
-    .bind(enc_id)
-    .execute(&pool)
-    .await?;
-    sqlx::query(
-        "INSERT INTO relay_host_options (relay_host_id, key, value) VALUES (?, 'auth.method', ?) \
-         ON CONFLICT(relay_host_id, key) DO UPDATE SET value = excluded.value",
-    )
-    .bind(host.id)
-    .bind(enc_method)
-    .execute(&pool)
-    .await?;
+
+    // Clear any existing auth first to ensure clean state
+    sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key LIKE 'auth.%'")
+        .bind(host.id)
+        .execute(&pool)
+        .await?;
+
+    // Use set_relay_option to benefit from automatic security determination
+    // These will be stored as plain text per our security logic
+    set_relay_option(hostname, "auth.source", "credential", true).await?;
+    set_relay_option(hostname, "auth.id", &cred.id.to_string(), true).await?;
+    set_relay_option(hostname, "auth.method", method_plain, true).await?;
+
     info!(relay_host = hostname, credential = cred_name, "credential assigned to host");
     Ok(())
 }
@@ -628,11 +899,101 @@ pub async fn unassign_credential(hostname: &str) -> ServerResult<()> {
     let host = state_store::fetch_relay_host_by_name(&pool, hostname)
         .await?
         .ok_or_else(|| ServerError::not_found("relay host", hostname))?;
-    sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key IN ('auth.source','auth.id','auth.method')")
+    sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key LIKE 'auth.%'")
         .bind(host.id)
         .execute(&pool)
         .await?;
     info!(relay_host = hostname, "credential unassigned from host");
+    Ok(())
+}
+
+/// Set custom password authentication for a relay (inline, not using a saved credential)
+pub async fn set_custom_password_auth(hostname: &str, username: Option<&str>, password: &str) -> ServerResult<()> {
+    // Clear any existing auth first
+    let db = server_db().await?;
+    let pool = db.into_pool();
+    if let Some(host) = state_store::fetch_relay_host_by_name(&pool, hostname).await? {
+        sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key LIKE 'auth.%'")
+            .bind(host.id)
+            .execute(&pool)
+            .await?;
+    }
+
+    set_relay_option(hostname, "auth.source", "inline", true).await?;
+    set_relay_option(hostname, "auth.method", "password", true).await?;
+    if let Some(user) = username {
+        set_relay_option(hostname, "auth.username", user, true).await?;
+    }
+    set_relay_option(hostname, "auth.password", password, true).await?;
+    info!(relay_host = hostname, "custom password auth configured");
+    Ok(())
+}
+
+/// Set custom SSH key authentication for a relay (inline, not using a saved credential)
+pub async fn set_custom_ssh_key_auth(
+    hostname: &str,
+    username: Option<&str>,
+    private_key: &str,
+    passphrase: Option<&str>,
+) -> ServerResult<()> {
+    // Clear any existing auth first
+    let db = server_db().await?;
+    let pool = db.into_pool();
+    if let Some(host) = state_store::fetch_relay_host_by_name(&pool, hostname).await? {
+        sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key LIKE 'auth.%'")
+            .bind(host.id)
+            .execute(&pool)
+            .await?;
+    }
+
+    set_relay_option(hostname, "auth.source", "inline", true).await?;
+    set_relay_option(hostname, "auth.method", "publickey", true).await?;
+    if let Some(user) = username {
+        set_relay_option(hostname, "auth.username", user, true).await?;
+    }
+    set_relay_option(hostname, "auth.identity", private_key, true).await?;
+    if let Some(pass) = passphrase {
+        set_relay_option(hostname, "auth.passphrase", pass, true).await?;
+    }
+    info!(relay_host = hostname, "custom SSH key auth configured");
+    Ok(())
+}
+
+/// Set custom SSH agent authentication for a relay (inline, not using a saved credential)
+pub async fn set_custom_agent_auth(hostname: &str, username: Option<&str>, public_key: &str) -> ServerResult<()> {
+    // Clear any existing auth first
+    let db = server_db().await?;
+    let pool = db.into_pool();
+    if let Some(host) = state_store::fetch_relay_host_by_name(&pool, hostname).await? {
+        sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key LIKE 'auth.%'")
+            .bind(host.id)
+            .execute(&pool)
+            .await?;
+    }
+
+    set_relay_option(hostname, "auth.source", "inline", true).await?;
+    set_relay_option(hostname, "auth.method", "agent", true).await?;
+    if let Some(user) = username {
+        set_relay_option(hostname, "auth.username", user, true).await?;
+    }
+    set_relay_option(hostname, "auth.agent_pubkey", public_key, true).await?;
+    info!(relay_host = hostname, "custom agent auth configured");
+    Ok(())
+}
+
+/// Clear all authentication settings from a relay
+pub async fn clear_all_auth(hostname: &str) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    let host = state_store::fetch_relay_host_by_name(&pool, hostname)
+        .await?
+        .ok_or_else(|| ServerError::not_found("relay host", hostname))?;
+    sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key LIKE 'auth.%'")
+        .bind(host.id)
+        .execute(&pool)
+        .await?;
+    info!(relay_host = hostname, "all auth settings cleared");
     Ok(())
 }
 
@@ -750,7 +1111,7 @@ pub async fn create_management_app_with_tab(
     }
     let credentials: Vec<tui_core::apps::management::CredentialItem> = creds_rows
         .into_iter()
-        .map(|(id, name, kind)| tui_core::apps::management::CredentialItem {
+        .map(|(id, name, kind, _meta)| tui_core::apps::management::CredentialItem {
             id,
             name,
             kind,
@@ -787,7 +1148,7 @@ pub async fn create_management_app_with_tab(
     let mut cred_name_by_id: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
     // rebuild from list (we had moved creds_rows)
     let creds_rows2 = state_store::list_relay_credentials(&pool).await?;
-    for (id, name, _kind) in creds_rows2 {
+    for (id, name, _kind, _meta) in creds_rows2 {
         cred_name_by_id.insert(id, name);
     }
     // Compute label
@@ -1117,4 +1478,79 @@ pub async fn create_relay_selector_app(username: Option<&str>) -> ServerResult<t
     } else {
         tui_core::apps::RelaySelectorApp::new(relays)
     })
+}
+
+/// Fetch relay hostkey for web UI review (returns tuple to avoid tui_core dependency)
+/// Returns: (host_id, host_name, old_fp, old_type, new_fp, new_type, new_pem)
+pub async fn fetch_relay_hostkey_for_web(id: i64) -> ServerResult<(i64, String, Option<String>, Option<String>, String, String, String)> {
+    // Get host name first
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    let host = state_store::fetch_relay_host_by_id(&pool, id)
+        .await?
+        .ok_or_else(|| ServerError::not_found("relay host", id.to_string()))?;
+
+    let action = tui_core::AppAction::FetchHostkey { id, name: host.name };
+    let result = handle_management_action(action).await?;
+
+    match result {
+        Some(tui_core::AppAction::ReviewHostkey(review)) => Ok((
+            review.host_id,
+            review.host,
+            review.old_fingerprint,
+            review.old_key_type,
+            review.new_fingerprint,
+            review.new_key_type,
+            review.new_key_pem,
+        )),
+        _ => Err(ServerError::Other("Failed to fetch hostkey".to_string())),
+    }
+}
+
+/// Store relay hostkey from web UI (avoids tui_core dependency)
+pub async fn store_relay_hostkey_from_web(id: i64, key_pem: String) -> ServerResult<()> {
+    let action = tui_core::AppAction::StoreHostkey {
+        id,
+        name: String::new(), // name is not used in StoreHostkey handler
+        key: key_pem,
+    };
+    handle_management_action(action).await?;
+    Ok(())
+}
+
+pub async fn delete_credential_by_id(id: i64) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+
+    // Guard: prevent deletion if in use by any relay host
+    let rows = sqlx::query("SELECT relay_host_id, value FROM relay_host_options WHERE key = 'auth.id'")
+        .fetch_all(&pool)
+        .await?;
+    let target_id_str = id.to_string();
+    for row in rows {
+        let value: String = row.get("value");
+        let resolved = if crate::secrets::is_encrypted_marker(&value) {
+            match crate::secrets::decrypt_string_if_encrypted(&value) {
+                Ok(s) => s,
+                Err(_) => continue,
+            }
+        } else {
+            crate::secrets::SecretString::new(Box::new(value))
+        };
+        if resolved.expose_secret() == &target_id_str {
+            let host_id: i64 = row.get("relay_host_id");
+            let host = state_store::fetch_relay_host_by_id(&pool, host_id).await?;
+            let host_name = host.map(|h| h.name).unwrap_or_else(|| "unknown".to_string());
+            return Err(ServerError::not_permitted(
+                "delete_credential",
+                format!("credential is in use by relay host '{}'", host_name),
+            ));
+        }
+    }
+
+    state_store::delete_relay_credential_by_id(&pool, id).await?;
+    info!(id, "credential deleted");
+    Ok(())
 }

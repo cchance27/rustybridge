@@ -92,45 +92,78 @@ pub async fn fetch_relay_host_by_id(pool: &SqlitePool, id: i64) -> DbResult<Opti
     }
 }
 
-pub async fn fetch_relay_host_options(pool: &SqlitePool, relay_host_id: i64) -> DbResult<std::collections::HashMap<String, String>> {
+pub async fn fetch_relay_host_options(
+    pool: &SqlitePool,
+    relay_host_id: i64,
+) -> DbResult<std::collections::HashMap<String, (String, bool)>> {
     let mut map = std::collections::HashMap::new();
-    let rows = sqlx::query_as::<_, (String, String)>("SELECT key, value FROM relay_host_options WHERE relay_host_id = ?")
+    let rows = sqlx::query_as::<_, (String, String, bool)>("SELECT key, value, is_secure FROM relay_host_options WHERE relay_host_id = ?")
         .bind(relay_host_id)
         .fetch_all(pool)
         .await?;
     for row in rows {
-        map.insert(row.0, row.1);
+        map.insert(row.0, (row.1, row.2));
     }
     Ok(map)
 }
 
+/// Return true if the user has access to the relay host either directly or via any group membership.
 pub async fn user_has_relay_access(pool: &SqlitePool, username: &str, relay_host_id: i64) -> DbResult<bool> {
-    let row = sqlx::query("SELECT id FROM relay_host_acl WHERE username = ? AND relay_host_id = ?")
-        .bind(username)
-        .bind(relay_host_id)
-        .fetch_optional(pool)
-        .await?;
-    Ok(row.is_some())
+    // Direct user ACL
+    let direct = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM relay_host_acl WHERE relay_host_id = ? AND principal_kind = 'user' AND principal_name = ? LIMIT 1",
+    )
+    .bind(relay_host_id)
+    .bind(username)
+    .fetch_optional(pool)
+    .await?;
+    if direct.is_some() {
+        return Ok(true);
+    }
+
+    // Group-based ACL
+    let via_group = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT a.id
+        FROM relay_host_acl a
+        JOIN groups g ON a.principal_kind = 'group' AND a.principal_name = g.name
+        JOIN user_groups ug ON ug.group_id = g.id
+        JOIN users u ON u.id = ug.user_id
+        WHERE a.relay_host_id = ? AND u.username = ?
+        LIMIT 1
+        "#,
+    )
+    .bind(relay_host_id)
+    .bind(username)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(via_group.is_some())
 }
 
 /// List all relay hosts, optionally filtered by username access
 pub async fn list_relay_hosts(pool: &SqlitePool, username: Option<&str>) -> DbResult<Vec<RelayHost>> {
     let rows = match username {
         Some(user) => {
-            // Filter by ACL - only return hosts this user has access to
             sqlx::query_as::<_, RelayHost>(
-                "SELECT DISTINCT h.id, h.name, h.ip, h.port 
-                 FROM relay_hosts h
-                 INNER JOIN relay_host_acl acl ON h.id = acl.relay_host_id
-                 WHERE acl.username = ?
-                 ORDER BY h.name",
+                r#"
+                SELECT DISTINCT h.id, h.name, h.ip, h.port
+                FROM relay_hosts h
+                JOIN relay_host_acl a ON h.id = a.relay_host_id
+                LEFT JOIN groups g ON a.principal_kind = 'group' AND a.principal_name = g.name
+                LEFT JOIN user_groups ug ON g.id = ug.group_id
+                LEFT JOIN users u ON u.id = ug.user_id
+                WHERE (a.principal_kind = 'user' AND a.principal_name = ?)
+                   OR (a.principal_kind = 'group' AND u.username = ?)
+                ORDER BY h.name
+                "#,
             )
+            .bind(user)
             .bind(user)
             .fetch_all(pool)
             .await?
         }
         None => {
-            // No filter - return all hosts
             sqlx::query_as::<_, RelayHost>("SELECT id, name, ip, port FROM relay_hosts ORDER BY name")
                 .fetch_all(pool)
                 .await?
@@ -178,12 +211,26 @@ pub async fn delete_relay_host_by_id(pool: &SqlitePool, id: i64) -> DbResult<()>
     Ok(())
 }
 
-pub async fn fetch_relay_access_usernames(pool: &SqlitePool, relay_host_id: i64) -> DbResult<Vec<String>> {
-    let rows = sqlx::query("SELECT username FROM relay_host_acl WHERE relay_host_id = ? ORDER BY username")
-        .bind(relay_host_id)
-        .fetch_all(pool)
-        .await?;
-    Ok(rows.into_iter().map(|r| r.get::<String, _>("username")).collect())
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayAclPrincipal {
+    pub kind: String,
+    pub name: String,
+}
+
+pub async fn fetch_relay_access_principals(pool: &SqlitePool, relay_host_id: i64) -> DbResult<Vec<RelayAclPrincipal>> {
+    let rows = sqlx::query(
+        "SELECT principal_kind, principal_name FROM relay_host_acl WHERE relay_host_id = ? ORDER BY principal_kind, principal_name",
+    )
+    .bind(relay_host_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| RelayAclPrincipal {
+            kind: r.get::<String, _>("principal_kind"),
+            name: r.get::<String, _>("principal_name"),
+        })
+        .collect())
 }
 
 pub async fn fetch_user_id_by_name(pool: &SqlitePool, username: &str) -> DbResult<Option<i64>> {
@@ -192,6 +239,133 @@ pub async fn fetch_user_id_by_name(pool: &SqlitePool, username: &str) -> DbResul
         .fetch_optional(pool)
         .await?;
     Ok(row.map(|r| r.get::<i64, _>("id")))
+}
+
+pub async fn fetch_group_id_by_name(pool: &SqlitePool, name: &str) -> DbResult<Option<i64>> {
+    let row = sqlx::query("SELECT id FROM groups WHERE name = ?")
+        .bind(name)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|r| r.get::<i64, _>("id")))
+}
+
+pub async fn create_group(pool: &SqlitePool, name: &str) -> DbResult<i64> {
+    sqlx::query("INSERT INTO groups (name, created_at) VALUES (?, ?)")
+        .bind(name)
+        .bind(current_ts())
+        .execute(pool)
+        .await?;
+    let row = sqlx::query("SELECT id FROM groups WHERE name = ?")
+        .bind(name)
+        .fetch_one(pool)
+        .await?;
+    Ok(row.get::<i64, _>("id"))
+}
+
+pub async fn delete_group_by_name(pool: &SqlitePool, name: &str) -> DbResult<()> {
+    sqlx::query("DELETE FROM groups WHERE name = ?").bind(name).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn list_groups(pool: &SqlitePool) -> DbResult<Vec<String>> {
+    let rows = sqlx::query("SELECT name FROM groups ORDER BY name").fetch_all(pool).await?;
+    Ok(rows.into_iter().map(|r| r.get::<String, _>("name")).collect())
+}
+
+pub async fn add_user_to_group(pool: &SqlitePool, username: &str, group_name: &str) -> DbResult<()> {
+    let user_id = fetch_user_id_by_name(pool, username).await?.ok_or(DbError::UserNotFound {
+        username: username.to_string(),
+    })?;
+    let group_id = fetch_group_id_by_name(pool, group_name).await?.ok_or(DbError::GroupNotFound {
+        group: group_name.to_string(),
+    })?;
+    sqlx::query("INSERT OR IGNORE INTO user_groups (user_id, group_id) VALUES (?, ?)")
+        .bind(user_id)
+        .bind(group_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn remove_user_from_group(pool: &SqlitePool, username: &str, group_name: &str) -> DbResult<()> {
+    let user_id = fetch_user_id_by_name(pool, username).await?.ok_or(DbError::UserNotFound {
+        username: username.to_string(),
+    })?;
+    let group_id = fetch_group_id_by_name(pool, group_name).await?.ok_or(DbError::GroupNotFound {
+        group: group_name.to_string(),
+    })?;
+    sqlx::query("DELETE FROM user_groups WHERE user_id = ? AND group_id = ?")
+        .bind(user_id)
+        .bind(group_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn list_user_groups(pool: &SqlitePool, username: &str) -> DbResult<Vec<String>> {
+    let rows = sqlx::query(
+        "SELECT g.name FROM groups g JOIN user_groups ug ON g.id = ug.group_id JOIN users u ON u.id = ug.user_id WHERE u.username = ? ORDER BY g.name",
+    )
+    .bind(username)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.get::<String, _>("name")).collect())
+}
+
+pub async fn list_group_members(pool: &SqlitePool, group_name: &str) -> DbResult<Vec<String>> {
+    let rows = sqlx::query(
+        "SELECT u.username FROM users u JOIN user_groups ug ON u.id = ug.user_id JOIN groups g ON g.id = ug.group_id WHERE g.name = ? ORDER BY u.username",
+    )
+    .bind(group_name)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.get::<String, _>("username")).collect())
+}
+
+pub async fn grant_relay_access_principal(
+    pool: &SqlitePool,
+    relay_host_id: i64,
+    principal_kind: &str,
+    principal_name: &str,
+) -> DbResult<()> {
+    match principal_kind {
+        "user" => {
+            fetch_user_id_by_name(pool, principal_name).await?.ok_or(DbError::UserNotFound {
+                username: principal_name.to_string(),
+            })?;
+        }
+        "group" => {
+            fetch_group_id_by_name(pool, principal_name).await?.ok_or(DbError::GroupNotFound {
+                group: principal_name.to_string(),
+            })?;
+        }
+        other => {
+            return Err(DbError::InvalidPrincipalKind { kind: other.to_string() });
+        }
+    }
+
+    sqlx::query("INSERT OR IGNORE INTO relay_host_acl (relay_host_id, principal_kind, principal_name) VALUES (?, ?, ?)")
+        .bind(relay_host_id)
+        .bind(principal_kind)
+        .bind(principal_name)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn revoke_relay_access_principal(
+    pool: &SqlitePool,
+    relay_host_id: i64,
+    principal_kind: &str,
+    principal_name: &str,
+) -> DbResult<()> {
+    sqlx::query("DELETE FROM relay_host_acl WHERE relay_host_id = ? AND principal_kind = ? AND principal_name = ?")
+        .bind(relay_host_id)
+        .bind(principal_kind)
+        .bind(principal_name)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn fetch_user_password_hash(pool: &SqlitePool, username: &str) -> DbResult<Option<String>> {
@@ -280,13 +454,20 @@ pub async fn get_relay_credential_by_id(pool: &SqlitePool, id: i64) -> DbResult<
     Ok(row.map(map_cred_row))
 }
 
-pub async fn list_relay_credentials(pool: &SqlitePool) -> DbResult<Vec<(i64, String, String)>> {
-    let rows = sqlx::query("SELECT id, name, kind FROM relay_credentials ORDER BY name")
+pub async fn list_relay_credentials(pool: &SqlitePool) -> DbResult<Vec<(i64, String, String, Option<String>)>> {
+    let rows = sqlx::query("SELECT id, name, kind, meta FROM relay_credentials ORDER BY name")
         .fetch_all(pool)
         .await?;
     Ok(rows
         .into_iter()
-        .map(|r| (r.get::<i64, _>("id"), r.get::<String, _>("name"), r.get::<String, _>("kind")))
+        .map(|r| {
+            (
+                r.get::<i64, _>("id"),
+                r.get::<String, _>("name"),
+                r.get::<String, _>("kind"),
+                r.get::<Option<String>, _>("meta"),
+            )
+        })
         .collect())
 }
 
@@ -300,6 +481,47 @@ fn map_cred_row(r: sqlx::sqlite::SqliteRow) -> RelayCredentialRow {
         secret: r.get("secret"),
         meta: r.get("meta"),
     }
+}
+
+fn current_ts() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+pub async fn update_relay_credential(
+    pool: &SqlitePool,
+    id: i64,
+    kind: &str,
+    salt: &[u8],
+    nonce: &[u8],
+    secret: &[u8],
+    meta: Option<&str>,
+) -> DbResult<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    sqlx::query("UPDATE relay_credentials SET kind = ?, salt = ?, nonce = ?, secret = ?, meta = ?, updated_at = ? WHERE id = ?")
+        .bind(kind)
+        .bind(salt)
+        .bind(nonce)
+        .bind(secret)
+        .bind(meta)
+        .bind(now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn delete_relay_credential_by_id(pool: &SqlitePool, id: i64) -> DbResult<()> {
+    sqlx::query("DELETE FROM relay_credentials WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Establish a pooled SQLite connection for client-side state (host keys, etc.).

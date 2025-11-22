@@ -6,11 +6,12 @@ use crossterm::{
 use ratatui::prelude::*;
 use rb_cli::{
     init_tracing, server_cli::{
-        CredsCmd, CredsCreateCmd, HostsAccessCmd, HostsCmd, HostsCredsCmd, HostsOptionsCmd, SecretsCmd, ServerArgs, ServerSubcommand, UsersCmd
+        CredsCmd, CredsCreateCmd, GroupMembersCmd, GroupsCmd, HostsAccessCmd, HostsCmd, HostsCredsCmd, HostsOptionsCmd, SecretsCmd, ServerArgs, ServerSubcommand, UsersCmd
     }, tui_input
 };
+use rb_web::run_web_server;
 use server_core::{
-    add_relay_host, add_user, assign_credential, create_agent_credential, create_password_credential, delete_credential, grant_relay_access, list_access, list_credentials, list_hosts, list_options, list_users, refresh_target_hostkey, remove_user, revoke_relay_access, rotate_secrets_key, run_server, set_relay_option, unassign_credential, unset_relay_option
+    PrincipalKind, add_group, add_relay_host, add_user, add_user_to_group_server, assign_credential, create_agent_credential, create_password_credential, delete_credential, grant_relay_access, list_access, list_credentials, list_group_members_server, list_groups, list_hosts, list_options, list_user_groups_server, list_users, refresh_target_hostkey, remove_group, remove_user, remove_user_from_group_server, revoke_relay_access, rotate_secrets_key, run_ssh_server, set_relay_option, unassign_credential, unset_relay_option
 };
 use tui_core::{AppAction, AppSession};
 
@@ -35,8 +36,31 @@ async fn main() -> Result<()> {
             }
         }
     };
+    let web_config = args.to_web_config()?;
+
     match args.cmd {
-        None => run_server(args.to_run_config()).await?,
+        None => {
+            if let Some(web_cfg) = web_config {
+                let server_cfg = args.to_run_config();
+
+                let mut server_task = tokio::spawn(async move { run_ssh_server(server_cfg).await });
+                let mut web_task = tokio::spawn(async move { run_web_server(web_cfg, rb_web::app_root::app_root).await });
+
+                tokio::select! {
+                    res = &mut server_task => {
+                        web_task.abort();
+                        res??;
+                    }
+                    res = &mut web_task => {
+                        // If the web server exits (error or shutdown) bring down SSH too
+                        server_task.abort();
+                        res??;
+                    }
+                }
+            } else {
+                run_ssh_server(args.to_run_config()).await?;
+            }
+        }
         Some(ServerSubcommand::Hosts { cmd }) => match cmd {
             HostsCmd::Add { name, endpoint } => add_relay_host(&endpoint, &name).await?,
             HostsCmd::List => {
@@ -53,15 +77,31 @@ async fn main() -> Result<()> {
                         println!("{}={}", k, v);
                     }
                 }
-                HostsOptionsCmd::Set { name, key, value } => set_relay_option(&name, &key, &value).await?,
+                HostsOptionsCmd::Set { name, key, value } => set_relay_option(&name, &key, &value, true).await?,
                 HostsOptionsCmd::Unset { name, key } => unset_relay_option(&name, &key).await?,
             },
             HostsCmd::Access(sub) => match sub {
-                HostsAccessCmd::Grant { name, user } => grant_relay_access(&name, &user).await?,
-                HostsAccessCmd::Revoke { name, user } => revoke_relay_access(&name, &user).await?,
+                HostsAccessCmd::Grant { name, user, group } => {
+                    if let Some(u) = user {
+                        grant_relay_access(&name, PrincipalKind::User, &u).await?
+                    } else if let Some(g) = group {
+                        grant_relay_access(&name, PrincipalKind::Group, &g).await?
+                    }
+                }
+                HostsAccessCmd::Revoke { name, user, group } => {
+                    if let Some(u) = user {
+                        revoke_relay_access(&name, PrincipalKind::User, &u).await?
+                    } else if let Some(g) = group {
+                        revoke_relay_access(&name, PrincipalKind::Group, &g).await?
+                    }
+                }
                 HostsAccessCmd::List { name } => {
-                    for u in list_access(&name).await? {
-                        println!("{}", u);
+                    for p in list_access(&name).await? {
+                        let kind = match p.kind {
+                            PrincipalKind::User => "user",
+                            PrincipalKind::Group => "group",
+                        };
+                        println!("{} {}", kind, p.name);
                     }
                 }
             },
@@ -84,6 +124,29 @@ async fn main() -> Result<()> {
             UsersCmd::List => {
                 for u in list_users().await? {
                     println!("{}", u);
+                }
+            }
+        },
+        Some(ServerSubcommand::Groups { cmd }) => match cmd {
+            GroupsCmd::Add { group } => add_group(&group).await?,
+            GroupsCmd::Remove { group } => remove_group(&group).await?,
+            GroupsCmd::List => {
+                for g in list_groups().await? {
+                    println!("{}", g);
+                }
+            }
+            GroupsCmd::Members { cmd } => match cmd {
+                GroupMembersCmd::Add { group, user } => add_user_to_group_server(&user, &group).await?,
+                GroupMembersCmd::Remove { group, user } => remove_user_from_group_server(&user, &group).await?,
+                GroupMembersCmd::List { group } => {
+                    for u in list_group_members_server(&group).await? {
+                        println!("{}", u);
+                    }
+                }
+            },
+            GroupsCmd::UserGroups { user } => {
+                for g in list_user_groups_server(&user).await? {
+                    println!("{}", g);
                 }
             }
         },
@@ -156,7 +219,7 @@ async fn main() -> Result<()> {
                 delete_credential(&name).await?;
             }
             CredsCmd::List => {
-                for (_id, name, kind) in list_credentials().await? {
+                for (_id, name, kind, _meta) in list_credentials().await? {
                     println!("{} {}", name, kind);
                 }
             }

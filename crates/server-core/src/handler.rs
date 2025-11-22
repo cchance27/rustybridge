@@ -296,19 +296,23 @@ impl ServerHandler {
                                     Ok(raw) => {
                                         // Decrypt any encrypted option values.
                                         let mut out = std::collections::HashMap::with_capacity(raw.len());
-                                        for (k, v) in raw.into_iter() {
-                                            match crate::secrets::decrypt_string_if_encrypted(&v) {
-                                                Ok(val) => {
-                                                    out.insert(k, val);
+                                        for (k, (v, is_secure)) in raw.into_iter() {
+                                            if is_secure {
+                                                match crate::secrets::decrypt_string_if_encrypted(&v) {
+                                                    Ok(val) => {
+                                                        out.insert(k, val);
+                                                    }
+                                                    Err(err) => {
+                                                        let _ = self.send_line(
+                                                            session,
+                                                            channel,
+                                                            &format!("internal error decrypting option '{k}': {err}"),
+                                                        );
+                                                        return self.handle_exit(session, channel);
+                                                    }
                                                 }
-                                                Err(err) => {
-                                                    let _ = self.send_line(
-                                                        session,
-                                                        channel,
-                                                        &format!("internal error decrypting option '{k}': {err}"),
-                                                    );
-                                                    return self.handle_exit(session, channel);
-                                                }
+                                            } else {
+                                                out.insert(k, crate::secrets::SecretString::new(Box::new(v)));
                                             }
                                         }
                                         out

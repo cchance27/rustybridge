@@ -23,16 +23,52 @@ async fn assign_writes_encrypted_values_and_unassign_removes() -> Result<()> {
 
     server_core::assign_credential("h4", "credA").await?;
 
-    // Keys should exist and be encrypted
-    for key in ["auth.source", "auth.id", "auth.method"] {
-        let row =
-            sqlx::query("SELECT value FROM relay_host_options WHERE relay_host_id=(SELECT id FROM relay_hosts WHERE name='h4') AND key=?")
-                .bind(key)
-                .fetch_one(&pool)
-                .await?;
-        let val: String = row.get("value");
-        assert!(server_core::secrets::is_encrypted_marker(&val), "{} should be encrypted", key);
-    }
+    let host_id: i64 = sqlx::query_scalar("SELECT id FROM relay_hosts WHERE name = 'h4'")
+        .fetch_one(&pool)
+        .await?;
+    let cred_id: i64 = sqlx::query_scalar("SELECT id FROM relay_credentials WHERE name = 'credA'")
+        .fetch_one(&pool)
+        .await?;
+
+    // Verify auth.source, auth.id, and auth.method are stored as PLAIN TEXT (not encrypted)
+    let source: String = sqlx::query_scalar("SELECT value FROM relay_host_options WHERE relay_host_id = ? AND key = 'auth.source'")
+        .bind(host_id)
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(source, "credential", "auth.source should be plain text");
+
+    let id_str: String = sqlx::query_scalar("SELECT value FROM relay_host_options WHERE relay_host_id = ? AND key = 'auth.id'")
+        .bind(host_id)
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(id_str, cred_id.to_string(), "auth.id should be plain text");
+
+    let method: String = sqlx::query_scalar("SELECT value FROM relay_host_options WHERE relay_host_id = ? AND key = 'auth.method'")
+        .bind(host_id)
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(method, "password", "auth.method should be plain text");
+
+    // Verify is_secure flag is set to false for these options
+    let source_secure: bool =
+        sqlx::query_scalar("SELECT is_secure FROM relay_host_options WHERE relay_host_id = ? AND key = 'auth.source'")
+            .bind(host_id)
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(source_secure, false, "auth.source should have is_secure=false");
+
+    let id_secure: bool = sqlx::query_scalar("SELECT is_secure FROM relay_host_options WHERE relay_host_id = ? AND key = 'auth.id'")
+        .bind(host_id)
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(id_secure, false, "auth.id should have is_secure=false");
+
+    let method_secure: bool =
+        sqlx::query_scalar("SELECT is_secure FROM relay_host_options WHERE relay_host_id = ? AND key = 'auth.method'")
+            .bind(host_id)
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(method_secure, false, "auth.method should have is_secure=false");
 
     server_core::unassign_credential("h4").await?;
 

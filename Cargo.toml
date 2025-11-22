@@ -6,6 +6,7 @@ members = [
     "crates/ssh-core",
     "crates/state-store",
     "crates/tui-core",
+    "crates/rb-web",
 ]
 resolver = "2"
 
@@ -13,24 +14,40 @@ resolver = "2"
 version = "0.1.0"
 edition = "2024"
 
-
 [workspace.dependencies]
 anyhow = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "io-std",
+    "io-util",
+    "net",
+] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 crossterm = "0.29.0"
 signal-hook = "0.3"
 rustix = { version = "1.1.2", default-features = false, features = ["termios"] }
-russh = { version = "0.54.6", default-features = false, features = ["aws-lc-rs", "rsa", "dsa", "des", "flate2"] }
+russh = { version = "0.54.6", default-features = false, features = [
+    "aws-lc-rs",
+    "rsa",
+    "dsa",
+    "des",
+    "flate2",
+] }
 async-trait = "0.1"
 clap = { version = "4.5.53", features = ["derive"] }
 rpassword = "7"
 whoami = "1"
 rand_core = { version = "0.9.3", features = ["os_rng"] }
 ratatui = "0.29.0"
-sqlx = { version = "0.8.6", features = ["chrono", "macros", "runtime-tokio", "sqlite"] }
+sqlx = { version = "0.8.6", features = [
+    "chrono",
+    "macros",
+    "runtime-tokio",
+    "sqlite",
+] }
 dirs = "6.0.0"
 url = "2.5"
 ssh-key = "0.6"
@@ -50,7 +67,17 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 secrecy = { version = "0.10", features = ["serde"] }
 tui-core = { path = "crates/tui-core" }
+dioxus = { version = "0.7.1", features = ["fullstack", "router"] }
+axum = { version = "0.8.7", features = ["macros", "json", "ws"] }
+tower = "0.5.2"
+tower-http = { version = "0.6.6", features = ["fs", "set-header"] }
 unicode-width = "0.1"
+reqwest = { version = "0.12", features = ["json"] }
 
 [profile.dev.package.sqlx-macros]
 opt-level = 3
+
+[profile.dev.package.argon2]
+opt-level = 3
+debug = false
+codegen-units = 1

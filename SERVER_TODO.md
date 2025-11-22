@@ -4,7 +4,7 @@ This document tracks the current state of the relay-mode feature and what remain
 
 ## Modes
 
-- Echo: `username@` opens the embedded echo TUI (unchanged).
+- Echo: `username@` opens the embedded management TUI or relay TUI, depending on the user's permissions (TODO: implement ACLs for management TUI).
 - Relay: `username:relay-host@` authenticates, enforces ACLs, then connects to the relay target and bridges IO until disconnect.
 
 ## Implemented
@@ -19,7 +19,7 @@ This document tracks the current state of the relay-mode feature and what remain
   - Password authentication verifies against stored Argon2 hash.
 
 - ACLs and authorization
-  - `relay_host_acl(username, relay_host_id)` enforced before connecting.
+  - Unified ACL per host with principals (`user` or `group`) enforced before connecting.
   - Logs rejections with `warn!` when host is unknown or user lacks access, and informs the client.
 
 - Relay host configuration
@@ -112,14 +112,10 @@ This document tracks the current state of the relay-mode feature and what remain
 
 ## Notes
 
-- SQLx dynamic queries are used for portability (no macros prepared offline).
 - Logging avoids secrets; we warn on access denials and host-key issues.
 - Default crypto is secure; `insecure=true` flips to legacy ciphers explicitly.
 
 ## Next Milestones
 
-1) Credential store (schema + AEAD + key provider) and CLI CRUD
-2) Relay auth resolution via `auth.id` (password and ssh-key)
-3) Server-side user public-key auth and OIDC scaffolding
-4) Exec passthrough mode
-5) Tests (unit + optional integration) and error hardening
+1) Server-side user public-key auth and OIDC scaffolding
+2) Exec passthrough mode

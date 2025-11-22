@@ -362,6 +362,56 @@ async fn authenticate_relay_session<H: client::Handler>(
     Ok(())
 }
 
+/// Connect to a relay host and return an open channel for external I/O handling.
+/// This is used for WebSocket bridging where the caller manages the channel I/O.
+pub async fn connect_to_relay_channel(
+    relay_name: &str,
+    base_username: &str,
+    term_size: (u32, u32),
+) -> Result<russh::Channel<russh::client::Msg>> {
+    let db = state_store::server_db().await?;
+    state_store::migrate_server(&db).await?;
+    let pool = db.into_pool();
+
+    let relay = state_store::fetch_relay_host_by_name(&pool, relay_name)
+        .await?
+        .ok_or_else(|| crate::ServerError::not_found("relay host", relay_name))?;
+
+    let options_map = state_store::fetch_relay_host_options(&pool, relay.id).await?;
+    let mut options = std::collections::HashMap::new();
+    for (k, (v, is_secure)) in options_map {
+        if is_secure {
+            if let Ok(decrypted) = crate::secrets::decrypt_string_if_encrypted(&v) {
+                options.insert(k, decrypted);
+            } else {
+                options.insert(k, crate::secrets::SecretString::new(Box::new(v)));
+            }
+        } else {
+            options.insert(k, crate::secrets::SecretString::new(Box::new(v)));
+        }
+    }
+
+    let cfg = build_client_config(&options);
+
+    let handler = SharedRelayHandler {
+        expected_key: options.get("hostkey.openssh").map(|v| v.expose_secret().clone()),
+        relay_name: relay.name.clone(),
+        warning_callback: Box::new(|msg| async move {
+            eprintln!("Warning: {}", msg);
+        }),
+    };
+
+    let mut session = client::connect(cfg, (relay.ip.as_str(), relay.port as u16), handler).await?;
+
+    authenticate_relay_session(&mut session, &options, base_username).await?;
+
+    let channel = session.channel_open_session().await?;
+    channel.request_pty(true, "xterm", term_size.0, term_size.1, 0, 0, &[]).await?;
+    channel.request_shell(true).await?;
+
+    Ok(channel)
+}
+
 /// Connect to a relay host from the local machine (CLI) and bridge to stdio.
 pub async fn connect_to_relay_local(relay_name: &str, base_username: &str) -> Result<()> {
     let db = state_store::server_db().await?;
@@ -374,10 +424,16 @@ pub async fn connect_to_relay_local(relay_name: &str, base_username: &str) -> Re
 
     let options_map = state_store::fetch_relay_host_options(&pool, relay.id).await?;
     let mut options = std::collections::HashMap::new();
-    for (k, v) in options_map {
-        if let Ok(decrypted) = crate::secrets::decrypt_string_if_encrypted(&v) {
-            options.insert(k, decrypted);
+    for (k, (v, is_secure)) in options_map {
+        if is_secure {
+            if let Ok(decrypted) = crate::secrets::decrypt_string_if_encrypted(&v) {
+                options.insert(k, decrypted);
+            } else {
+                // Fallback if decryption fails or it wasn't encrypted but marked secure
+                options.insert(k, crate::secrets::SecretString::new(Box::new(v)));
+            }
         } else {
+            // Plain text
             options.insert(k, crate::secrets::SecretString::new(Box::new(v)));
         }
     }
@@ -444,10 +500,10 @@ fn build_client_config(options: &std::collections::HashMap<String, crate::secret
 }
 
 #[derive(Clone)]
-struct SharedRelayHandler<F> {
-    expected_key: Option<String>,
-    relay_name: String,
-    warning_callback: Box<F>,
+pub struct SharedRelayHandler<F> {
+    pub expected_key: Option<String>,
+    pub relay_name: String,
+    pub warning_callback: Box<F>,
 }
 
 impl<F, Fut> client::Handler for SharedRelayHandler<F>

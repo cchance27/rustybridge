@@ -1,0 +1,49 @@
+[package]
+name = "rb-web"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[features]
+default = ["server"]
+web = ["dioxus/web", "web-sys"]
+server = [
+    "anyhow",
+    "tracing",
+    "tokio",
+    "axum",
+    "tower",
+    "dioxus/server",
+    "dioxus/router",
+    "tower-http",
+    "state-store",
+    "server-core",
+    "secrecy",
+    "russh",
+    "futures",
+]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+dioxus = { workspace = true, features = ["fullstack"] }
+anyhow = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+tower = { workspace = true, optional = true }
+tower-http = { workspace = true, optional = true, features = ["fs"] }
+reqwest = { workspace = true }
+web-sys = { version = "0.3", optional = true, features = [
+    "Storage",
+    "Window",
+    "DomRect",
+    "Element",
+    "HtmlElement",
+] }
+state-store = { path = "../state-store", optional = true }
+server-core = { path = "../server-core", optional = true }
+secrecy = { workspace = true, optional = true }
+russh = { workspace = true, optional = true }
+gloo-timers = { version = "0.3", features = ["futures"] }
+futures = { version = "0.3", optional = true }

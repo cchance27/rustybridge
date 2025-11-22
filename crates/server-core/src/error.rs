@@ -80,6 +80,14 @@ impl ServerError {
         }
     }
 
+    /// Create an already exists error
+    pub fn already_exists(resource: impl Into<String>, name: impl Into<String>) -> Self {
+        Self::AlreadyExists {
+            resource: resource.into(),
+            name: name.into(),
+        }
+    }
+
     /// Create a not permitted error
     pub fn not_permitted(operation: impl Into<String>, reason: impl Into<String>) -> Self {
         Self::NotPermitted {

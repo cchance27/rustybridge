@@ -1,5 +1,4 @@
 use anyhow::Result;
-use secrecy::ExposeSecret;
 use serial_test::serial;
 use sqlx::{Row, SqlitePool};
 
@@ -34,16 +33,14 @@ async fn ssh_key_credential_store_and_assign() -> Result<()> {
     assert!(!ct.is_empty());
 
     server_core::assign_credential("h5", "credK").await?;
-    // Ensure method reflects publickey (encrypted normalization)
+    // Ensure method is stored as plain text "publickey" (not encrypted)
     let method: String = sqlx::query(
         "SELECT value FROM relay_host_options WHERE relay_host_id=(SELECT id FROM relay_hosts WHERE name='h5') AND key='auth.method'",
     )
     .fetch_one(&pool)
     .await?
     .get("value");
-    assert!(server_core::secrets::is_encrypted_marker(&method));
-    let plain = server_core::secrets::decrypt_string_if_encrypted(&method)?;
-    assert_eq!(&**plain.expose_secret(), "publickey");
+    assert_eq!(method, "publickey", "auth.method should be plain text 'publickey'");
 
     Ok(())
 }

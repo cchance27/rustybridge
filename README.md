@@ -44,6 +44,14 @@ rb-server hosts delete legacy-db                      # remove a relay target (c
 ```
 All binaries source their SQLite state from `~/Library/Application Support/rustybridge/` (macOS) or the platform’s data/state dirs. The first run logs when a database is created and migrations applied.
 
+## Web UI
+
+RustyBridge includes a browser-based management console built with Dioxus 0.7 and Tailwind CSS. The web UI provides:
+- Relay server management
+- Credential configuration
+- User administration
+- Real-time session monitoring
+
 ## Security & Safety Notes
 - Server inbound security: `rb-server` always advertises a modern, secure algorithm set for inbound client connections. There is no insecure mode for the embedded server itself.
 - Outbound to legacy devices: Legacy algorithms drastically reduce security; only pass `--insecure` with `rb` (client) or set `insecure=true` on a specific relay host in `rb-server` when you fully trust the endpoint and network.
@@ -102,6 +110,14 @@ rb-server --add-host 10.0.0.10:22 --hostname legacy-router
 - Press Enter then `~` to show the menu and prompt.
 - Supported: `~.` disconnect, `~R` rekey, `~V/~v` verbosity up/down, `~#` list forwards, `~~` literal `~`, `~^Z` suspend (Unix), `~&` detach stdin.
 - Reattach stdin after `~&` with `kill -USR1 <pid>` (PID is displayed when you detach).
+
+## Web Development Notes
+
+Run tailwindcss in watch mode: 
+tailwindcss -i ./crates/rb-web/tailwind.css -o ./crates/rb-web/assets/tailwind.css --watch
+
+Run your web build: 
+RB_SERVER_SECRETS_PASSPHRASE=secret_key cargo run -p rb-cli --bin rb-server -- --web
 
 ---
 

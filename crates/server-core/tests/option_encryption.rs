@@ -21,7 +21,7 @@ async fn option_encryption_and_masked_listing() -> Result<()> {
         .await?;
 
     // Set an option
-    server_core::set_relay_option("h2", "api.secret", "supersecret").await?;
+    server_core::set_relay_option("h2", "api.secret", "supersecret", true).await?;
 
     // Verify it's encrypted at rest
     let row = sqlx::query(

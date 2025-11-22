@@ -1,0 +1,47 @@
+[application]
+# Project identity for dx tooling
+name = "rb-web"
+default_platform = "fullstack"
+
+# Web `build` & `serve` dist path
+out_dir = "dist"
+
+# resource (static) file folder
+asset_dir = "public"
+
+[web.wasm_opt]
+# The level wasm-opt should target. z is the smallest. 4 is the fastest.
+level = "4"
+
+[web.app]
+# HTML title tag content
+title = "RustyBridge"
+
+[web.watcher]
+index_on_404 = true
+watch_path = ["src"]
+
+[bundle]
+# Bundle identifier
+identifier = "com.rustybridge.web"
+
+# Bundle publisher
+publisher = "rustybridge"
+
+# Bundle icon
+icon = ["icons/icon.png"]
+
+# Bundle resources
+resources = ["public/*"]
+
+# Bundle copyright
+copyright = ""
+
+# Bundle category
+category = "Utility"
+
+# Bundle short description
+short_description = "RustyBridge web console and terminal."
+
+# Bundle long description
+long_description = "RustyBridge web console and browser-based terminal experience."

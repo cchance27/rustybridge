@@ -19,6 +19,7 @@ tui-core.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 state-store = { path = "../state-store" }
+rb-web = { path = "../rb-web", features = ["server"] }
 
 [dev-dependencies]
 serial_test = "3"

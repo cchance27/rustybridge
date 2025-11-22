@@ -37,6 +37,10 @@ pub enum DbError {
     #[error("user '{username}' not found")]
     UserNotFound { username: String },
 
+    /// Group not found
+    #[error("group '{group}' not found")]
+    GroupNotFound { group: String },
+
     /// Invalid file path for SQLite database
     #[error("invalid sqlite path: {0}")]
     InvalidPath(PathBuf),
@@ -64,6 +68,10 @@ pub enum DbError {
     /// Invalid environment variable value
     #[error("invalid value for {var}: {message}")]
     InvalidEnvVar { var: String, message: String },
+
+    /// Invalid principal kind for ACL operations
+    #[error("invalid principal kind: {kind}")]
+    InvalidPrincipalKind { kind: String },
 }
 
 /// Result type alias for database operations

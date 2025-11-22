@@ -21,7 +21,7 @@ async fn rotation_reencrypts_credentials_and_options() -> Result<()> {
     sqlx::query("INSERT INTO relay_hosts (name, ip, port) VALUES ('h3', '127.0.0.1', 22)")
         .execute(&pool)
         .await?;
-    server_core::set_relay_option("h3", "api.secret", "abc123").await?;
+    server_core::set_relay_option("h3", "api.secret", "abc123", true).await?;
     let _cred = server_core::create_password_credential("credR", Some("ux"), "pw-xyz").await?;
     server_core::assign_credential("h3", "credR").await?;
 

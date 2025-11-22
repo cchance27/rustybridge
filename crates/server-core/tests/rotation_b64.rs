@@ -24,7 +24,7 @@ async fn rotation_with_base64_master_keys() -> Result<()> {
     sqlx::query("INSERT INTO relay_hosts (name, ip, port) VALUES ('b64h', '127.0.0.1', 22)")
         .execute(&pool)
         .await?;
-    server_core::set_relay_option("b64h", "secret", "val").await?;
+    server_core::set_relay_option("b64h", "secret", "val", true).await?;
 
     let before: String = sqlx::query(
         "SELECT value FROM relay_host_options WHERE relay_host_id=(SELECT id FROM relay_hosts WHERE name='b64h') AND key='secret'",

@@ -1,0 +1,1 @@
+ALTER TABLE relay_host_options ADD COLUMN is_secure BOOLEAN NOT NULL DEFAULT 1;
