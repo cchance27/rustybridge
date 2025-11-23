@@ -37,10 +37,6 @@ pub async fn authenticate_password(login: &LoginTarget, password: &str) -> Serve
             return Ok(AuthDecision::Reject);
         }
     };
-    if let Err(e) = state_store::migrate_server(&handle).await {
-        tracing::error!(error = %e, "failed to run server migrations during authentication");
-        return Ok(AuthDecision::Reject);
-    }
     let pool = handle.into_pool();
     let stored = match state_store::fetch_user_password_hash(&pool, &login.username).await {
         Ok(opt) => match opt {

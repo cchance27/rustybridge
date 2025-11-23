@@ -28,7 +28,6 @@ pub async fn run_web_server(config: WebServerConfig, app: fn() -> Element) -> an
 
     // Initialize DB for session store
     let db = state_store::server_db().await?;
-    state_store::migrate_server(&db).await?;
     let pool = db.into_pool();
 
     // Session Layer

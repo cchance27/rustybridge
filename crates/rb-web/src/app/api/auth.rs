@@ -9,10 +9,9 @@ use crate::server::auth::WebAuthSession;
 
 #[post("/api/auth/login", auth: WebAuthSession)]
 pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
-    use state_store::{get_user_claims, migrate_server, server_db};
+    use state_store::{get_user_claims, server_db};
 
     let db = server_db().await.map_err(|e| anyhow::anyhow!(e.to_string()))?;
-    migrate_server(&db).await.map_err(|e| anyhow::anyhow!(e.to_string()))?;
     let pool = db.into_pool();
 
     // Authenticate user

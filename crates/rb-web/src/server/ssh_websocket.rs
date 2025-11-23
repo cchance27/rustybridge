@@ -13,7 +13,7 @@ use serde::Serialize;
 #[cfg(feature = "server")]
 use server_core::relay::connect_to_relay_channel;
 #[cfg(feature = "server")]
-use state_store::{fetch_relay_host_by_name, migrate_server, server_db, user_has_relay_access};
+use state_store::{fetch_relay_host_by_name, server_db, user_has_relay_access};
 
 #[cfg(feature = "server")]
 use crate::server::auth::guards::{WebAuthSession, ensure_authenticated};
@@ -71,11 +71,6 @@ async fn ensure_relay_websocket_permissions(relay_name: &str, auth: &WebAuthSess
 
     let db = server_db().await.map_err(|err| {
         tracing::error!(relay = %relay_name, "Failed to open server DB: {err}");
-        SshAccessError::Internal
-    })?;
-
-    migrate_server(&db).await.map_err(|err| {
-        tracing::error!(relay = %relay_name, "Failed to run server migrations: {err}");
         SshAccessError::Internal
     })?;
 

@@ -21,9 +21,6 @@ pub async fn list_groups() -> Result<Vec<GroupInfo>, ServerFnError> {
     use state_store::{fetch_relay_access_principals, list_relay_hosts};
 
     let db = state_store::server_db().await.map_err(|e| ServerFnError::new(e.to_string()))?;
-    state_store::migrate_server(&db)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
     let pool = db.into_pool();
 
     let group_names = list_groups().await.map_err(|e| ServerFnError::new(e.to_string()))?;

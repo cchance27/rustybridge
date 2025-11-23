@@ -26,7 +26,7 @@ use server_manager::ServerManager;
 use sqlx::{Row, SqlitePool};
 use ssh_core::crypto::default_preferred;
 use state_store::{
-    add_user_to_group, create_group, delete_group_by_name, fetch_group_id_by_name, fetch_relay_access_principals, grant_relay_access_principal, list_group_members, list_groups as list_groups_db, list_user_groups, migrate_server, remove_user_from_group, revoke_relay_access_principal, server_db
+    add_user_to_group, create_group, delete_group_by_name, fetch_group_id_by_name, fetch_relay_access_principals, grant_relay_access_principal, list_group_members, list_groups as list_groups_db, list_user_groups, remove_user_from_group, revoke_relay_access_principal, server_db
 };
 use tracing::{info, warn};
 
@@ -89,7 +89,7 @@ pub async fn run_ssh_server(config: ServerConfig) -> ServerResult<()> {
     crate::secrets::require_master_secret()?;
 
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
 
     // Require at least one user to be present; avoid starting an unauthenticated server.
@@ -145,7 +145,7 @@ pub async fn add_relay_host_without_hostkey(endpoint: &str, name: &str) -> Serve
 async fn add_relay_host_inner(endpoint: &str, name: &str, fetch_hostkey: bool) -> ServerResult<()> {
     let (ip, port) = parse_endpoint(endpoint)?;
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
 
     // Check if name already exists
@@ -170,7 +170,7 @@ async fn add_relay_host_inner(endpoint: &str, name: &str, fetch_hostkey: bool) -
 
 pub async fn grant_relay_access(name: &str, principal_kind: PrincipalKind, principal_name: &str) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
@@ -187,7 +187,7 @@ pub async fn grant_relay_access(name: &str, principal_kind: PrincipalKind, princ
 
 pub async fn set_relay_option(name: &str, key: &str, value: &str, is_secure: bool) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
@@ -226,7 +226,7 @@ pub async fn set_relay_option(name: &str, key: &str, value: &str, is_secure: boo
 
 pub async fn revoke_relay_access(name: &str, principal_kind: PrincipalKind, principal_name: &str) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
@@ -244,7 +244,7 @@ pub async fn revoke_relay_access(name: &str, principal_kind: PrincipalKind, prin
 
 pub async fn unset_relay_option(name: &str, key: &str) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
@@ -327,7 +327,7 @@ async fn fetch_and_optionally_store_hostkey(pool: &sqlx::SqlitePool, name: &str,
 
 pub async fn list_hosts() -> ServerResult<Vec<rb_types::RelayInfo>> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     let hosts = state_store::list_relay_hosts(&pool, None).await?;
     Ok(hosts)
@@ -335,7 +335,7 @@ pub async fn list_hosts() -> ServerResult<Vec<rb_types::RelayInfo>> {
 
 pub async fn list_options(name: &str) -> ServerResult<Vec<(String, String)>> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
@@ -356,7 +356,7 @@ pub async fn list_options(name: &str) -> ServerResult<Vec<(String, String)>> {
 
 pub async fn list_access(name: &str) -> ServerResult<Vec<RelayAccessPrincipal>> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
@@ -373,7 +373,7 @@ pub async fn list_access(name: &str) -> ServerResult<Vec<RelayAccessPrincipal>> 
 
 pub async fn delete_relay_host(name: &str) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     sqlx::query("DELETE FROM relay_hosts WHERE name = ?")
         .bind(name)
@@ -385,7 +385,7 @@ pub async fn delete_relay_host(name: &str) -> ServerResult<()> {
 
 pub async fn refresh_target_hostkey(name: &str) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
@@ -403,7 +403,7 @@ pub async fn refresh_target_hostkey(name: &str) -> ServerResult<()> {
 
 pub async fn add_user(user: &str, password: &str) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
 
     // Check if user already exists
@@ -460,7 +460,7 @@ async fn ensure_super_admin_privileges(pool: &SqlitePool, username: &str) -> Ser
 
 pub async fn remove_user(user: &str) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     // Revoke all ACLs for this user
     sqlx::query("DELETE FROM relay_host_acl WHERE principal_kind = 'user' AND principal_name = ?")
@@ -478,7 +478,7 @@ pub async fn remove_user(user: &str) -> ServerResult<()> {
 
 pub async fn add_group(name: &str) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
 
     if fetch_group_id_by_name(&pool, name).await?.is_some() {
@@ -492,7 +492,7 @@ pub async fn add_group(name: &str) -> ServerResult<()> {
 
 pub async fn remove_group(name: &str) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
 
     // Remove ACLs that reference this group
@@ -508,14 +508,14 @@ pub async fn remove_group(name: &str) -> ServerResult<()> {
 
 pub async fn list_groups() -> ServerResult<Vec<String>> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     Ok(list_groups_db(&pool).await?)
 }
 
 pub async fn add_user_to_group_server(username: &str, group: &str) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     add_user_to_group(&pool, username, group).await?;
     info!(user = username, group, "user added to group");
@@ -524,7 +524,7 @@ pub async fn add_user_to_group_server(username: &str, group: &str) -> ServerResu
 
 pub async fn remove_user_from_group_server(username: &str, group: &str) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     remove_user_from_group(&pool, username, group).await?;
     info!(user = username, group, "user removed from group");
@@ -533,21 +533,21 @@ pub async fn remove_user_from_group_server(username: &str, group: &str) -> Serve
 
 pub async fn list_user_groups_server(username: &str) -> ServerResult<Vec<String>> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     Ok(list_user_groups(&pool, username).await?)
 }
 
 pub async fn list_group_members_server(group: &str) -> ServerResult<Vec<String>> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     Ok(list_group_members(&pool, group).await?)
 }
 
 pub async fn list_users() -> ServerResult<Vec<String>> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     let users = state_store::list_usernames(&pool).await?;
     Ok(users)
@@ -555,7 +555,7 @@ pub async fn list_users() -> ServerResult<Vec<String>> {
 
 pub async fn update_user(username: &str, new_password: Option<&str>) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
 
     // Verify user exists
@@ -582,7 +582,7 @@ pub async fn update_user(username: &str, new_password: Option<&str>) -> ServerRe
 
 pub async fn create_role(name: &str, description: Option<&str>) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     state_store::create_role(&pool, name, description).await?;
     info!(role = name, "role created");
@@ -591,7 +591,7 @@ pub async fn create_role(name: &str, description: Option<&str>) -> ServerResult<
 
 pub async fn delete_role(name: &str) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     state_store::delete_role(&pool, name).await?;
     info!(role = name, "role deleted");
@@ -600,14 +600,14 @@ pub async fn delete_role(name: &str) -> ServerResult<()> {
 
 pub async fn list_roles() -> ServerResult<Vec<state_store::Role>> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     Ok(state_store::list_roles(&pool).await?)
 }
 
 pub async fn assign_role(username: &str, role_name: &str) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     state_store::assign_role_to_user(&pool, username, role_name).await?;
     info!(user = username, role = role_name, "role assigned to user");
@@ -616,7 +616,7 @@ pub async fn assign_role(username: &str, role_name: &str) -> ServerResult<()> {
 
 pub async fn revoke_role(username: &str, role_name: &str) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     state_store::revoke_role_from_user(&pool, username, role_name).await?;
     info!(user = username, role = role_name, "role revoked from user");
@@ -625,7 +625,7 @@ pub async fn revoke_role(username: &str, role_name: &str) -> ServerResult<()> {
 
 pub async fn add_role_claim(role_name: &str, claim: &ClaimType) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     state_store::add_claim_to_role(&pool, role_name, claim).await?;
     info!(role = role_name, claim = %claim, "claim added to role");
@@ -634,7 +634,7 @@ pub async fn add_role_claim(role_name: &str, claim: &ClaimType) -> ServerResult<
 
 pub async fn remove_role_claim(role_name: &str, claim: &ClaimType) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     state_store::remove_claim_from_role(&pool, role_name, claim).await?;
     info!(role = role_name, claim = %claim, "claim removed from role");
@@ -643,7 +643,7 @@ pub async fn remove_role_claim(role_name: &str, claim: &ClaimType) -> ServerResu
 
 pub async fn add_user_claim(username: &str, claim: &ClaimType) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     state_store::add_claim_to_user(&pool, username, claim).await?;
     info!(user = username, claim = %claim, "claim added to user");
@@ -652,7 +652,7 @@ pub async fn add_user_claim(username: &str, claim: &ClaimType) -> ServerResult<(
 
 pub async fn remove_user_claim(username: &str, claim: &ClaimType) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     state_store::remove_claim_from_user(&pool, username, claim).await?;
     info!(user = username, claim = %claim, "claim removed from user");
@@ -661,7 +661,7 @@ pub async fn remove_user_claim(username: &str, claim: &ClaimType) -> ServerResul
 
 pub async fn add_group_claim(group_name: &str, claim: &ClaimType) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     state_store::add_claim_to_group(&pool, group_name, claim).await?;
     info!(group = group_name, claim = %claim, "claim added to group");
@@ -670,7 +670,7 @@ pub async fn add_group_claim(group_name: &str, claim: &ClaimType) -> ServerResul
 
 pub async fn remove_group_claim(group_name: &str, claim: &ClaimType) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     state_store::remove_claim_from_group(&pool, group_name, claim).await?;
     info!(group = group_name, claim = %claim, "claim removed from group");
@@ -679,14 +679,14 @@ pub async fn remove_group_claim(group_name: &str, claim: &ClaimType) -> ServerRe
 
 pub async fn get_group_claims_server(group_name: &str) -> ServerResult<Vec<ClaimType>> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     Ok(state_store::get_group_claims(&pool, group_name).await?)
 }
 
 pub async fn create_password_credential(name: &str, username: Option<&str>, password: &str) -> ServerResult<i64> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     let blob = crate::secrets::encrypt_secret(password.as_bytes())?;
     let meta = username.map(|u| serde_json::json!({"username": u}).to_string());
@@ -704,7 +704,7 @@ pub async fn create_ssh_key_credential(
     passphrase: Option<&str>,
 ) -> ServerResult<i64> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     // Store key+cert in encrypted JSON payload
     let mut secret_obj = serde_json::Map::new();
@@ -727,7 +727,7 @@ pub async fn create_ssh_key_credential(
 pub async fn create_agent_credential(name: &str, username: Option<&str>, public_key_openssh: &str) -> ServerResult<i64> {
     use russh::keys::{HashAlg, PublicKey};
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
 
     // Validate and fingerprint
@@ -748,7 +748,7 @@ pub async fn create_agent_credential(name: &str, username: Option<&str>, public_
 
 pub async fn update_password_credential(id: i64, name: &str, username: Option<&str>, password: Option<&str>) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     let (salt, nonce, secret) = if let Some(pw) = password {
         let blob = crate::secrets::encrypt_secret(pw.as_bytes())?;
@@ -774,7 +774,7 @@ pub async fn update_ssh_key_credential(
     passphrase: Option<&str>,
 ) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     // Store key+cert in encrypted JSON payload
     let (salt, nonce, secret) = if let Some(key) = private_key_pem {
@@ -803,7 +803,7 @@ pub async fn update_ssh_key_credential(
 
 pub async fn update_agent_credential(id: i64, name: &str, username: Option<&str>, public_key: Option<&str>) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     // For agent, we just store the public key encrypted (though strictly it's public)
     let (salt, nonce, secret) = if let Some(pk) = public_key {
@@ -823,7 +823,7 @@ pub async fn update_agent_credential(id: i64, name: &str, username: Option<&str>
 
 pub async fn delete_credential(name: &str) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     // Resolve credential id
     let cred = state_store::get_relay_credential_by_name(&pool, name)
@@ -872,7 +872,7 @@ pub async fn delete_credential(name: &str) -> ServerResult<()> {
 
 pub async fn list_credentials() -> ServerResult<Vec<(i64, String, String, Option<String>)>> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     let rows = state_store::list_relay_credentials(&pool).await?;
     Ok(rows)
@@ -882,7 +882,7 @@ pub async fn list_credentials() -> ServerResult<Vec<(i64, String, String, Option
 /// Returns (id, name, kind, username, assigned_relays)
 pub async fn list_credentials_with_assignments() -> ServerResult<Vec<(i64, String, String, Option<String>, Vec<String>)>> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
 
     let creds = state_store::list_relay_credentials(&pool).await?;
@@ -945,7 +945,7 @@ pub async fn rotate_secrets_key(old_input: &str, new_input: &str) -> ServerResul
     let new_master = crate::secrets::normalize_master_input(new_input);
 
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
 
     // Rotate credentials
@@ -1021,7 +1021,7 @@ pub async fn rotate_secrets_key(old_input: &str, new_input: &str) -> ServerResul
 
 pub async fn assign_credential(hostname: &str, cred_name: &str) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     let cred = state_store::get_relay_credential_by_name(&pool, cred_name)
         .await?
@@ -1056,7 +1056,7 @@ pub async fn assign_credential(hostname: &str, cred_name: &str) -> ServerResult<
 
 pub async fn unassign_credential(hostname: &str) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, hostname)
         .await?
@@ -1146,7 +1146,7 @@ pub async fn set_custom_agent_auth(hostname: &str, username: Option<&str>, publi
 /// Clear all authentication settings from a relay
 pub async fn clear_all_auth(hostname: &str) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_name(&pool, hostname)
         .await?
@@ -1247,7 +1247,7 @@ pub async fn create_management_app_with_tab(
     review: Option<tui_core::apps::management::HostkeyReview>,
 ) -> ServerResult<tui_core::apps::ManagementApp> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
 
     // Admin sees all relay hosts (no filtering)
@@ -1421,20 +1421,20 @@ pub async fn handle_management_action(action: tui_core::AppAction) -> ServerResu
         tui_core::AppAction::AddRelay(item) => {
             let (ip, port) = parse_endpoint(&item.description)?;
             let db = server_db().await?;
-            migrate_server(&db).await?;
+
             let pool = db.into_pool();
             state_store::insert_relay_host(&pool, &item.name, &ip, port).await?;
         }
         tui_core::AppAction::UpdateRelay(item) => {
             let (ip, port) = parse_endpoint(&item.description)?;
             let db = server_db().await?;
-            migrate_server(&db).await?;
+
             let pool = db.into_pool();
             state_store::update_relay_host(&pool, item.id, &item.name, &ip, port).await?;
         }
         tui_core::AppAction::DeleteRelay(id) => {
             let db = server_db().await?;
-            migrate_server(&db).await?;
+
             let pool = db.into_pool();
             state_store::delete_relay_host_by_id(&pool, id).await?;
         }
@@ -1484,7 +1484,7 @@ pub async fn handle_management_action(action: tui_core::AppAction) -> ServerResu
             info!(relay = %name, relay_id = id, "refreshing relay host key");
             // Fetch and stage hostkey for review
             let db = server_db().await?;
-            migrate_server(&db).await?;
+
             let pool = db.into_pool();
 
             // Resolve host by id first to avoid stale name collisions
@@ -1584,7 +1584,7 @@ pub async fn handle_management_action(action: tui_core::AppAction) -> ServerResu
         }
         tui_core::AppAction::StoreHostkey { id, name: _name, key } => {
             let db = server_db().await?;
-            migrate_server(&db).await?;
+
             let pool = db.into_pool();
 
             // Resolve host strictly by id to avoid races when names change mid-review
@@ -1643,7 +1643,7 @@ pub fn format_action_error(action: &tui_core::AppAction, e: &ServerError) -> Str
 /// If username is Some, filters by access. If None (or "admin"), shows all relays with admin privileges.
 pub async fn create_relay_selector_app(username: Option<&str>) -> ServerResult<tui_core::apps::RelaySelectorApp> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
 
     let is_admin = username == Some("admin") || username.is_none();
@@ -1673,7 +1673,7 @@ pub async fn create_relay_selector_app(username: Option<&str>) -> ServerResult<t
 pub async fn fetch_relay_hostkey_for_web(id: i64) -> ServerResult<(i64, String, Option<String>, Option<String>, String, String, String)> {
     // Get host name first
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
     let host = state_store::fetch_relay_host_by_id(&pool, id)
         .await?
@@ -1709,7 +1709,7 @@ pub async fn store_relay_hostkey_from_web(id: i64, key_pem: String) -> ServerRes
 
 pub async fn delete_credential_by_id(id: i64) -> ServerResult<()> {
     let db = server_db().await?;
-    migrate_server(&db).await?;
+
     let pool = db.into_pool();
 
     // Guard: prevent deletion if in use by any relay host

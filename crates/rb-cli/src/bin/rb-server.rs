@@ -19,6 +19,11 @@ use tui_core::{AppAction, AppSession};
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
+
+    // Migrate server DB on Startup
+    let handle = state_store::server_db().await?;
+    state_store::migrate_server(&handle).await?;
+
     // Build command to intercept --help and append DB path dynamically
     let cmd = ServerArgs::command();
     let args = match cmd.try_get_matches() {
@@ -329,7 +334,6 @@ async fn handle_local_action(
             println!("Connecting via proxy to {}...", name);
             std::io::stdout().flush().ok();
             if let Ok(handle) = state_store::server_db().await {
-                let _ = state_store::migrate_server(&handle).await;
                 let pool = handle.into_pool();
                 if let Ok(Some(h)) = state_store::fetch_relay_host_by_name(&pool, &name).await {
                     println!("Endpoint: {}:{}", h.ip, h.port);

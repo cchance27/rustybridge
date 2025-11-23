@@ -17,10 +17,9 @@ pub async fn list_user_relays() -> Result<Vec<RelayInfo>> {
     let user = ensure_authenticated(&auth)?;
     let username = user.username;
 
-    use state_store::{list_relay_hosts, migrate_server, server_db};
+    use state_store::{list_relay_hosts, server_db};
 
     let db = server_db().await.context("Failed to connect to database")?;
-    migrate_server(&db).await.context("Failed to run migrations")?;
     let pool = db.into_pool();
 
     let relays = list_relay_hosts(&pool, Some(&username)).await.context("Failed to list relays")?;

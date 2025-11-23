@@ -154,9 +154,6 @@ async fn resolve_auth_username(options: &std::collections::HashMap<String, crate
             Ok(h) => h,
             Err(_) => return fallback.to_string(),
         };
-        if state_store::migrate_server(&db).await.is_err() {
-            return fallback.to_string();
-        }
         let pool = db.into_pool();
         if let Ok(Some(row)) = state_store::get_relay_credential_by_id(&pool, id).await
             && let Some(meta) = row.meta
@@ -188,7 +185,6 @@ async fn authenticate_relay_session<H: client::Handler>(
         "password" => {
             let password = if let Some(id) = cred_id {
                 let db = state_store::server_db().await?;
-                state_store::migrate_server(&db).await?;
                 let pool = db.into_pool();
                 let cred = state_store::get_relay_credential_by_id(&pool, id)
                     .await?
@@ -224,7 +220,6 @@ async fn authenticate_relay_session<H: client::Handler>(
         "publickey" | "ssh_key" => {
             if let Some(id) = cred_id {
                 let db = state_store::server_db().await?;
-                state_store::migrate_server(&db).await?;
                 let pool = db.into_pool();
                 let cred = state_store::get_relay_credential_by_id(&pool, id)
                     .await?
@@ -306,7 +301,6 @@ async fn authenticate_relay_session<H: client::Handler>(
                     .map_err(|e| crate::ServerError::Other(format!("failed to list identities from SSH agent: {e}")))?;
                 if let Some(id) = cred_id {
                     let db = state_store::server_db().await?;
-                    state_store::migrate_server(&db).await?;
                     let pool = db.into_pool();
                     if let Some(cred) = state_store::get_relay_credential_by_id(&pool, id).await?
                         && cred.kind == "agent"
@@ -397,7 +391,6 @@ pub async fn connect_to_relay_channel(
     term_size: (u32, u32),
 ) -> Result<russh::Channel<russh::client::Msg>> {
     let db = state_store::server_db().await?;
-    state_store::migrate_server(&db).await?;
     let pool = db.into_pool();
 
     let relay = state_store::fetch_relay_host_by_name(&pool, relay_name)
@@ -455,7 +448,6 @@ pub async fn connect_to_relay_channel(
 /// Connect to a relay host from the local machine (CLI) and bridge to stdio.
 pub async fn connect_to_relay_local(relay_name: &str, base_username: &str) -> Result<()> {
     let db = state_store::server_db().await?;
-    state_store::migrate_server(&db).await?;
     let pool = db.into_pool();
 
     let relay = state_store::fetch_relay_host_by_name(&pool, relay_name)
