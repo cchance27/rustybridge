@@ -6,14 +6,15 @@ edition.workspace = true
 [dependencies]
 ratatui.workspace = true
 russh.workspace = true
-sqlx.workspace = true
-ssh-core = { path = "../ssh-core" }
 state-store = { path = "../state-store" }
+ssh-core = { path = "../ssh-core" }
+rb-types = { path = "../rb-types", features = ["sqlx"] }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 argon2.workspace = true
 password-hash.workspace = true
+sqlx.workspace = true
 rand_core.workspace = true
 rand.workspace = true
 serde.workspace = true
@@ -29,5 +30,10 @@ async-trait.workspace = true
 [dev-dependencies]
 anyhow.workspace = true
 serial_test = "3"
-sqlx = { version = "0.8.6", features = ["chrono", "macros", "runtime-tokio", "sqlite"] }
+sqlx = { version = "0.8.6", features = [
+    "chrono",
+    "macros",
+    "runtime-tokio",
+    "sqlite",
+] }
 state-store = { path = "../state-store" }

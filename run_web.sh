@@ -11,6 +11,8 @@ fi
 ## FIXME: We currently always build dx bundle as release, because we don't know why the debug 
 ## mode causes our websockets to ssh to fail to try to connect after the browser has been running for a while, in release mode it seems to work fine.
 
+tailwindcss -i ./crates/rb-web/tailwind.css -o ./crates/rb-web/assets/tailwind.css
+
 # check for --release flag
 if [ "$1" != "--release" ]; then
     dx bundle --platform web --release --package rb-web --out-dir target/debug

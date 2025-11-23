@@ -6,10 +6,12 @@
 pub mod app;
 pub mod app_root;
 
-// Server module needs to be available for Dioxus RPC to generate client stubs
+// Server module is only compiled for server builds
+#[cfg(feature = "server")]
 pub mod server;
 
-pub use app::{components, pages, routes};
+pub use app::{components, pages};
+pub use app_root::Routes;
 #[cfg(feature = "server")]
 pub use server::config::{WebServerConfig, WebTlsConfig};
 #[cfg(feature = "server")]

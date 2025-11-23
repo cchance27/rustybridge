@@ -55,20 +55,20 @@ async fn assign_writes_encrypted_values_and_unassign_removes() -> Result<()> {
             .bind(host_id)
             .fetch_one(&pool)
             .await?;
-    assert_eq!(source_secure, false, "auth.source should have is_secure=false");
+    assert!(!source_secure, "auth.source should have is_secure=false");
 
     let id_secure: bool = sqlx::query_scalar("SELECT is_secure FROM relay_host_options WHERE relay_host_id = ? AND key = 'auth.id'")
         .bind(host_id)
         .fetch_one(&pool)
         .await?;
-    assert_eq!(id_secure, false, "auth.id should have is_secure=false");
+    assert!(!id_secure, "auth.id should have is_secure=false");
 
     let method_secure: bool =
         sqlx::query_scalar("SELECT is_secure FROM relay_host_options WHERE relay_host_id = ? AND key = 'auth.method'")
             .bind(host_id)
             .fetch_one(&pool)
             .await?;
-    assert_eq!(method_secure, false, "auth.method should have is_secure=false");
+    assert!(!method_secure, "auth.method should have is_secure=false");
 
     server_core::unassign_credential("h4").await?;
 

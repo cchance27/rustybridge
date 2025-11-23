@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use rb_types::auth::ClaimType;
 use rb_web::{WebServerConfig, WebTlsConfig};
 use server_core::ServerConfig;
 
@@ -124,6 +125,11 @@ pub enum ServerSubcommand {
         #[command(subcommand)]
         cmd: TuiCmd,
     },
+    /// Manage roles and claims
+    Roles {
+        #[command(subcommand)]
+        cmd: RolesCmd,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -207,6 +213,10 @@ pub enum UsersCmd {
     Remove { user: String },
     /// List users
     List,
+    /// Assign a role to a user
+    AssignRole { user: String, role: String },
+    /// Revoke a role from a user
+    RevokeRole { user: String, role: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -292,4 +302,22 @@ pub enum CredsCreateCmd {
 pub enum SecretsCmd {
     /// Rotate the server secrets key (re-encrypt credentials and options)
     RotateKey,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RolesCmd {
+    /// Create a new role
+    Create {
+        name: String,
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// Delete a role
+    Delete { name: String },
+    /// List roles
+    List,
+    /// Add a claim to a role
+    AddClaim { role: String, claim: ClaimType },
+    /// Remove a claim from a role
+    RemoveClaim { role: String, claim: ClaimType },
 }

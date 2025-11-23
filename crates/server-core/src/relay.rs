@@ -1,12 +1,12 @@
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 // Internal Result type alias
 type Result<T> = crate::ServerResult<T>;
+use rb_types::RelayInfo;
 use russh::{ChannelMsg, CryptoVec, client, keys, keys::HashAlg};
 use secrecy::ExposeSecret;
 use serde_json::Value as JsonValue;
 use ssh_core::crypto::default_preferred;
-use state_store::RelayHost;
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 
@@ -31,7 +31,7 @@ impl RelayHandle {
 pub async fn start_bridge(
     server_handle: russh::server::Handle,
     client_channel: russh::ChannelId,
-    relay: &RelayHost,
+    relay: &RelayInfo,
     base_username: &str,
     initial_size: (u16, u16),
     mut pty_size_rx: watch::Receiver<(u16, u16)>,
@@ -169,23 +169,6 @@ async fn resolve_auth_username(options: &std::collections::HashMap<String, crate
     fallback.to_string()
 }
 
-async fn load_private_key(path: PathBuf) -> Result<keys::PrivateKey> {
-    let data = tokio::fs::read_to_string(&path).await?;
-    match keys::PrivateKey::from_openssh(&data) {
-        Ok(key) => Ok(key),
-        Err(_openssh_err) => match keys::decode_secret_key(&data, None) {
-            Ok(key) => Ok(key),
-            Err(keys::Error::KeyIsEncrypted) => Err(crate::ServerError::Crypto(
-                "encrypted private keys are not supported for server-side relay yet".to_string(),
-            )),
-            Err(_) => Err(crate::ServerError::Crypto(format!(
-                "{} is not a valid OpenSSH or PEM private key",
-                path.display()
-            ))),
-        },
-    }
-}
-
 fn ensure_success(res: client::AuthResult, method: &str) -> Result<()> {
     match res {
         client::AuthResult::Success => Ok(()),
@@ -262,12 +245,20 @@ async fn authenticate_relay_session<H: client::Handler>(
                 };
                 ensure_success(auth_res, "publickey")?;
             } else {
-                let key_path = options.get("auth.identity").map(|s| s.expose_secret()).ok_or_else(|| {
+                let key_data = options.get("auth.identity").map(|s| s.expose_secret()).ok_or_else(|| {
                     crate::ServerError::Other("relay host requires 'auth.identity' or 'auth.id' for publickey/ssh_key auth".to_string())
                 })?;
-                let r#priv = load_private_key(PathBuf::from(key_path)).await?;
+                let passphrase = options.get("auth.passphrase").map(|s| s.expose_secret().as_str());
+
+                // Parse inline key material only; path-based keys are intentionally unsupported on the server.
+                let r#priv = ssh_core::keys::load_private_key_from_str(key_data, passphrase)
+                    .map_err(|e| crate::ServerError::Crypto(format!("failed to parse inline private key: {e}")))?;
+
+                // Pick best RSA hash if applicable (rsa-sha2-256/512 vs legacy ssh-rsa)
+                let rsa_hint = remote.best_supported_rsa_hash().await.unwrap_or(None).flatten();
+                let hash_alg = if r#priv.algorithm().is_rsa() { rsa_hint } else { None };
                 let key = Arc::new(r#priv);
-                let key = keys::PrivateKeyWithHashAlg::new(key, None::<HashAlg>);
+                let key = keys::PrivateKeyWithHashAlg::new(key, hash_alg);
                 let res = remote.authenticate_publickey(username.to_string(), key).await?;
                 ensure_success(res, "publickey")?;
             }

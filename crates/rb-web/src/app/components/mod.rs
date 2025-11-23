@@ -1,3 +1,4 @@
+pub mod auth;
 mod avatar_dropdown;
 mod credential_form;
 mod fab;
@@ -15,6 +16,7 @@ mod terminal;
 mod theme_toggle;
 mod toast;
 
+pub use auth::{Protected, RequireAuth};
 pub use avatar_dropdown::*;
 pub use credential_form::*;
 pub use fab::*;

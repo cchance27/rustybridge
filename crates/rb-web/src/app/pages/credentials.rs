@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
 use dioxus::prelude::*;
+use rb_types::{
+    auth::{ClaimLevel, ClaimType}, web::{CreateCredentialRequest, UpdateCredentialRequest}
+};
 
 use crate::{
-    app::{
-        api::credentials::*, models::{CreateCredentialRequest, UpdateCredentialRequest}
-    }, components::{
-        CredentialForm, Fab, Layout, Modal, StructuredTooltip, Table, TableActions, Toast, ToastMessage, ToastType, TooltipSection
+    app::api::credentials::*, components::{
+        CredentialForm, Fab, Layout, Modal, Protected, RequireAuth, StructuredTooltip, Table, TableActions, Toast, ToastMessage, ToastType, TooltipSection
     }
 };
 
@@ -246,178 +247,188 @@ pub fn CredentialsPage() -> Element {
     };
 
     rsx! {
-        Toast { message: toast }
-        Layout {
-            div { class: "card bg-base-200 shadow-xl",
-                div { class: "card-body",
-                    h2 { class: "card-title", "Credentials" }
-                    p { "Manage your SSH keys, passwords, and agent credentials." }
+        RequireAuth {
+            any_claims: vec![ClaimType::Credentials(ClaimLevel::View)],
+            Toast { message: toast }
+            Layout {
+                div { class: "card bg-base-200 shadow-xl",
+                    div { class: "card-body",
+                        h2 { class: "card-title", "Credentials" }
+                        p { "Manage your SSH keys, passwords, and agent credentials." }
 
-                    // Show loading state or data
-                    match credentials() {
-                        Some(Ok(creds)) => rsx! {
-                            Table {
-                                headers: vec!["ID", "Name", "Type", "Assigned", "Actions"],
-                                for cred in creds {
-                                    tr {
-                                        th { "{cred.id}" }
-                                        td { "{cred.name}" }
-                                        td {
-                                            span { class: "badge badge-primary", "{cred.kind}" }
-                                        }
-                                        td {
-                                            StructuredTooltip {
-                                                sections: vec![
-                                                    TooltipSection::new("Relays")
-                                                        .with_items(cred.assigned_relays.clone())
-                                                        .with_empty_message("No relays assigned")
-                                                ],
+                        // Show loading state or data
+                        match credentials() {
+                            Some(Ok(creds)) => rsx! {
+                                Table {
+                                    headers: vec!["ID", "Name", "Type", "Assigned", "Actions"],
+                                    for cred in creds {
+                                        tr {
+                                            th { "{cred.id}" }
+                                            td { "{cred.name}" }
+                                            td {
+                                                span { class: "badge badge-primary", "{cred.kind}" }
+                                            }
+                                            td {
+                                                StructuredTooltip {
+                                                    sections: vec![
+                                                        TooltipSection::new("Relays")
+                                                            .with_items(cred.assigned_relays.clone())
+                                                            .with_empty_message("No relays assigned")
+                                                    ],
 
-                                                div { class: if cred.assigned_relays.is_empty() { "badge badge-warning gap-2" } else { "badge badge-info gap-2" },
-                                                    "{cred.assigned_relays.len()} "
-                                                    {if cred.assigned_relays.len() == 1 { "relay" } else { "relays" }}
+                                                    div { class: if cred.assigned_relays.is_empty() { "badge badge-warning gap-2" } else { "badge badge-info gap-2" },
+                                                        "{cred.assigned_relays.len()} "
+                                                        {if cred.assigned_relays.len() == 1 { "relay" } else { "relays" }}
+                                                    }
                                                 }
                                             }
-                                        }
-                                        td {
-                                            class: "text-right",
-                                            TableActions {
-                                                on_edit: {
-                                                    let cred_name = cred.name.clone();
-                                                    let cred_kind = cred.kind.clone();
-                                                    let cred_username = cred.username.clone();
-                                                    let has_secret = cred.has_secret;
-                                                    move |_| open_edit(cred.id, cred_name.clone(), cred_kind.clone(), cred_username.clone(), has_secret)
-                                                },
-                                                on_delete: {
-                                                    let cred_name = cred.name.clone();
-                                                    move |_| open_delete_confirm(cred.id, cred_name.clone())
-                                                },
+                                            td {
+                                                class: "text-right",
+                                                Protected {
+                                                    any_claims: vec![ClaimType::Credentials(ClaimLevel::Edit), ClaimType::Credentials(ClaimLevel::Delete)],
+                                                    TableActions {
+                                                        on_edit: {
+                                                            let cred_name = cred.name.clone();
+                                                            let cred_kind = cred.kind.clone();
+                                                            let cred_username = cred.username.clone();
+                                                            let has_secret = cred.has_secret;
+                                                            move |_| open_edit(cred.id, cred_name.clone(), cred_kind.clone(), cred_username.clone(), has_secret)
+                                                        },
+                                                        on_delete: {
+                                                            let cred_name = cred.name.clone();
+                                                            move |_| open_delete_confirm(cred.id, cred_name.clone())
+                                                        },
+                                                    }
+                                                }
                                             }
                                         }
                                     }
                                 }
-                            }
-                        },
-                        Some(Err(e)) => rsx! {
-                            div { class: "alert alert-error",
-                                span { "Error loading credentials: {e}" }
-                            }
-                        },
-                        None => rsx! {
-                            div { class: "flex justify-center p-8",
-                                span { class: "loading loading-spinner loading-lg" }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Fab { onclick: open_add }
-
-            // Add/Edit Modal
-            Modal {
-                open: is_modal_open(),
-                on_close: move |_| is_modal_open.set(false),
-                title: if editing_id().is_some() { "Edit Credential" } else { "Add Credential" },
-                actions: rsx! {
-                    button { class: "btn btn-primary", onclick: on_save, "Save" }
-                },
-                div { class: "flex flex-col gap-4",
-                    if let Some(err) = error_message() {
-                        div { class: "alert alert-error",
-                            span { "{err}" }
-                        }
-                    }
-
-                    label { class: "form-control w-full",
-                        div { class: "label", span { class: "label-text", "Name" } }
-
-                        input {
-                            r#type: "text",
-                            class: if validation_errors().contains_key("name") { "input input-bordered w-full input-error" } else { "input input-bordered w-full" },
-                            placeholder: "my-credential",
-                            value: "{name}",
-                            readonly: editing_id().is_some(),
-                            oninput: move |e| {
-                                name.set(e.value());
-                                if validation_errors().contains_key("name") {
-                                    let mut errs = validation_errors();
-                                    errs.remove("name");
-                                    validation_errors.set(errs);
+                            },
+                            Some(Err(e)) => rsx! {
+                                div { class: "alert alert-error",
+                                    span { "Error loading credentials: {e}" }
+                                }
+                            },
+                            None => rsx! {
+                                div { class: "flex justify-center p-8",
+                                    span { class: "loading loading-spinner loading-lg" }
                                 }
                             }
                         }
-                        if let Some(err) = validation_errors().get("name") {
-                            div { class: "text-error text-sm mt-1", "{err}" }
-                        }
-                    }
-
-                    CredentialForm {
-                        cred_type: cred_type(),
-                        on_type_change: move |v| {
-                            cred_type.set(v);
-                            if validation_errors().contains_key("password") || validation_errors().contains_key("private_key") || validation_errors().contains_key("public_key") {
-                                let mut errs = validation_errors();
-                                errs.remove("password");
-                                errs.remove("private_key");
-                                errs.remove("public_key");
-                                validation_errors.set(errs);
-                            }
-                        },
-                        username: username(),
-                        on_username_change: move |v| username.set(v),
-                        password: password(),
-                        on_password_change: move |v| {
-                            password.set(v);
-                            if validation_errors().contains_key("password") {
-                                let mut errs = validation_errors();
-                                errs.remove("password");
-                                validation_errors.set(errs);
-                            }
-                        },
-                        private_key: private_key(),
-                        on_private_key_change: move |v| {
-                            private_key.set(v);
-                            if validation_errors().contains_key("private_key") {
-                                let mut errs = validation_errors();
-                                errs.remove("private_key");
-                                validation_errors.set(errs);
-                            }
-                        },
-                        public_key: public_key(),
-                        on_public_key_change: move |v| {
-                            public_key.set(v);
-                            if validation_errors().contains_key("public_key") {
-                                let mut errs = validation_errors();
-                                errs.remove("public_key");
-                                validation_errors.set(errs);
-                            }
-                        },
-                        passphrase: passphrase(),
-                        on_passphrase_change: move |v| passphrase.set(v),
-                        validation_errors: validation_errors(),
-                        show_hint: editing_id().is_some(),
-                        is_editing: editing_id().is_some(),
-                        has_existing_password: has_existing_password(),
-                        has_existing_private_key: has_existing_private_key(),
-                        has_existing_public_key: has_existing_public_key(),
-                        show_type_selector: true,
                     }
                 }
-            }
 
-            // Delete Confirmation Modal
-            Modal {
-                open: delete_confirm_open(),
-                on_close: move |_| delete_confirm_open.set(false),
-                title: "Delete Credential",
-                actions: rsx! {
-                    button { class: "btn btn-error", onclick: handle_delete, "Delete" }
-                },
-                div { class: "flex flex-col gap-4",
-                 p { class: "py-4", "Are you sure you want to delete credential '{delete_target().map(|(_, n)| n).unwrap_or_default()}'? This action cannot be undone." }                p { class: "text-sm text-gray-500",
-                        "This action cannot be undone. Make sure no relay hosts are using this credential."
+                Protected {
+                    claim: ClaimType::Credentials(ClaimLevel::Create),
+                    Fab { onclick: open_add }
+                }
+
+                // Add/Edit Modal
+                Modal {
+                    open: is_modal_open(),
+                    on_close: move |_| is_modal_open.set(false),
+                    title: if editing_id().is_some() { "Edit Credential" } else { "Add Credential" },
+                    actions: rsx! {
+                        button { class: "btn btn-primary", onclick: on_save, "Save" }
+                    },
+                    div { class: "flex flex-col gap-4",
+                        if let Some(err) = error_message() {
+                            div { class: "alert alert-error",
+                                span { "{err}" }
+                            }
+                        }
+
+                        label { class: "form-control w-full",
+                            div { class: "label", span { class: "label-text", "Name" } }
+
+                            input {
+                                r#type: "text",
+                                class: if validation_errors().contains_key("name") { "input input-bordered w-full input-error" } else { "input input-bordered w-full" },
+                                placeholder: "my-credential",
+                                value: "{name}",
+                                readonly: editing_id().is_some(),
+                                oninput: move |e| {
+                                    name.set(e.value());
+                                    if validation_errors().contains_key("name") {
+                                        let mut errs = validation_errors();
+                                        errs.remove("name");
+                                        validation_errors.set(errs);
+                                    }
+                                }
+                            }
+                            if let Some(err) = validation_errors().get("name") {
+                                div { class: "text-error text-sm mt-1", "{err}" }
+                            }
+                        }
+
+                        CredentialForm {
+                            cred_type: cred_type(),
+                            on_type_change: move |v| {
+                                cred_type.set(v);
+                                if validation_errors().contains_key("password") || validation_errors().contains_key("private_key") || validation_errors().contains_key("public_key") {
+                                    let mut errs = validation_errors();
+                                    errs.remove("password");
+                                    errs.remove("private_key");
+                                    errs.remove("public_key");
+                                    validation_errors.set(errs);
+                                }
+                            },
+                            username: username(),
+                            on_username_change: move |v| username.set(v),
+                            password: password(),
+                            on_password_change: move |v| {
+                                password.set(v);
+                                if validation_errors().contains_key("password") {
+                                    let mut errs = validation_errors();
+                                    errs.remove("password");
+                                    validation_errors.set(errs);
+                                }
+                            },
+                            private_key: private_key(),
+                            on_private_key_change: move |v| {
+                                private_key.set(v);
+                                if validation_errors().contains_key("private_key") {
+                                    let mut errs = validation_errors();
+                                    errs.remove("private_key");
+                                    validation_errors.set(errs);
+                                }
+                            },
+                            public_key: public_key(),
+                            on_public_key_change: move |v| {
+                                public_key.set(v);
+                                if validation_errors().contains_key("public_key") {
+                                    let mut errs = validation_errors();
+                                    errs.remove("public_key");
+                                    validation_errors.set(errs);
+                                }
+                            },
+                            passphrase: passphrase(),
+                            on_passphrase_change: move |v| passphrase.set(v),
+                            validation_errors: validation_errors(),
+                            show_hint: editing_id().is_some(),
+                            is_editing: editing_id().is_some(),
+                            has_existing_password: has_existing_password(),
+                            has_existing_private_key: has_existing_private_key(),
+                            has_existing_public_key: has_existing_public_key(),
+                            show_type_selector: true,
+                        }
+                    }
+                }
+
+                // Delete Confirmation Modal
+                Modal {
+                    open: delete_confirm_open(),
+                    on_close: move |_| delete_confirm_open.set(false),
+                    title: "Delete Credential",
+                    actions: rsx! {
+                        button { class: "btn btn-error", onclick: handle_delete, "Delete" }
+                    },
+                    div { class: "flex flex-col gap-4",
+                     p { class: "py-4", "Are you sure you want to delete credential '{delete_target().map(|(_, n)| n).unwrap_or_default()}'? This action cannot be undone." }
+                     p { class: "text-sm text-gray-500",
+                            "This action cannot be undone. Make sure no relay hosts are using this credential."
+                        }
                     }
                 }
             }

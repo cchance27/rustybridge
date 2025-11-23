@@ -6,12 +6,13 @@ use crossterm::{
 use ratatui::prelude::*;
 use rb_cli::{
     init_tracing, server_cli::{
-        CredsCmd, CredsCreateCmd, GroupMembersCmd, GroupsCmd, HostsAccessCmd, HostsCmd, HostsCredsCmd, HostsOptionsCmd, SecretsCmd, ServerArgs, ServerSubcommand, UsersCmd
+        CredsCmd, CredsCreateCmd, GroupMembersCmd, GroupsCmd, HostsAccessCmd, HostsCmd, HostsCredsCmd, HostsOptionsCmd, RolesCmd, SecretsCmd, ServerArgs, ServerSubcommand, UsersCmd
     }, tui_input
 };
+use rb_types::web::PrincipalKind;
 use rb_web::run_web_server;
 use server_core::{
-    PrincipalKind, add_group, add_relay_host, add_user, add_user_to_group_server, assign_credential, create_agent_credential, create_password_credential, delete_credential, grant_relay_access, list_access, list_credentials, list_group_members_server, list_groups, list_hosts, list_options, list_user_groups_server, list_users, refresh_target_hostkey, remove_group, remove_user, remove_user_from_group_server, revoke_relay_access, rotate_secrets_key, run_ssh_server, set_relay_option, unassign_credential, unset_relay_option
+    add_group, add_relay_host, add_role_claim, add_user, add_user_to_group_server, assign_credential, assign_role, create_agent_credential, create_password_credential, create_role, delete_credential, delete_role, grant_relay_access, list_access, list_credentials, list_group_members_server, list_groups, list_hosts, list_options, list_roles, list_user_groups_server, list_users, refresh_target_hostkey, remove_group, remove_role_claim, remove_user, remove_user_from_group_server, revoke_relay_access, revoke_role, rotate_secrets_key, run_ssh_server, set_relay_option, unassign_credential, unset_relay_option
 };
 use tui_core::{AppAction, AppSession};
 
@@ -100,6 +101,7 @@ async fn main() -> Result<()> {
                         let kind = match p.kind {
                             PrincipalKind::User => "user",
                             PrincipalKind::Group => "group",
+                            PrincipalKind::Other => "other",
                         };
                         println!("{} {}", kind, p.name);
                     }
@@ -126,6 +128,8 @@ async fn main() -> Result<()> {
                     println!("{}", u);
                 }
             }
+            UsersCmd::AssignRole { user, role } => assign_role(&user, &role).await?,
+            UsersCmd::RevokeRole { user, role } => revoke_role(&user, &role).await?,
         },
         Some(ServerSubcommand::Groups { cmd }) => match cmd {
             GroupsCmd::Add { group } => add_group(&group).await?,
@@ -245,6 +249,17 @@ async fn main() -> Result<()> {
 
             run_tui(app).await?;
         }
+        Some(ServerSubcommand::Roles { cmd }) => match cmd {
+            RolesCmd::Create { name, description } => create_role(&name, description.as_deref()).await?,
+            RolesCmd::Delete { name } => delete_role(&name).await?,
+            RolesCmd::List => {
+                for r in list_roles().await? {
+                    println!("{} ({})", r.name, r.description.unwrap_or_default());
+                }
+            }
+            RolesCmd::AddClaim { role, claim } => add_role_claim(&role, &claim).await?,
+            RolesCmd::RemoveClaim { role, claim } => remove_role_claim(&role, &claim).await?,
+        },
     }
     Ok(())
 }

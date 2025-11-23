@@ -1,17 +1,15 @@
 use dioxus::prelude::*;
 
-use crate::app::{
-    self, session::{SessionProvider, SessionState}
+use crate::{
+    app::auth::context::use_auth_provider, pages::{AccessPage, CredentialsPage, DashboardPage, LoginPage, LogoutPage, NotFoundPage, RelaysPage}
 };
 
 /// Root shell: wraps the router and global providers.
 #[component]
 pub fn app_root() -> Element {
-    let session = use_signal(|| SessionState::Unauthenticated);
-
-    use_effect(move || {
-        let _current = session();
-    });
+    // Initialize auth state and provide it to context
+    let auth = use_auth_provider();
+    use_context_provider(|| auth);
 
     rsx! {
         document::Title { "RustyBridge Web UI" }
@@ -19,9 +17,27 @@ pub fn app_root() -> Element {
         // FIXME: we also have to use `clean_asset_path` to strip the absolute path when running via cargo run
         document::Stylesheet { href: clean_asset_path(asset!("/assets/tailwind.css", AssetOptions::builder().with_hash_suffix(false)).to_string()) }
         div {
-            SessionProvider { session, children: rsx!( app::routes::AppRouter {} ) }
+             Router::<Routes> {}
         }
     }
+}
+
+#[derive(Clone, Routable, PartialEq)]
+pub enum Routes {
+    #[route("/")]
+    DashboardPage {},
+    #[route("/relays")]
+    RelaysPage {},
+    #[route("/credentials")]
+    CredentialsPage {},
+    #[route("/access")]
+    AccessPage {},
+    #[route("/login")]
+    LoginPage {},
+    #[route("/logout")]
+    LogoutPage {},
+    #[route("/:..route")]
+    NotFoundPage { route: Vec<String> },
 }
 
 pub fn clean_asset_path(path: String) -> String {

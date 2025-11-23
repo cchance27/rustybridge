@@ -1,7 +1,8 @@
 use dioxus::prelude::*;
 
+use crate::app::api::relay_list::list_user_relays;
+
 // Server function is available on both client and server through Dioxus RPC
-use crate::server::relay_list::list_user_relays;
 
 #[component]
 pub fn RelayDrawer(on_select: EventHandler<String>) -> Element {

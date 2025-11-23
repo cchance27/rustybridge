@@ -3,7 +3,7 @@
 //! This module intentionally keeps the public surface small: `run_server` wires up the russh
 //! configuration, while the heavy lifting lives in the submodules.
 
-mod auth;
+pub mod auth;
 pub mod error;
 mod handler;
 pub mod relay;
@@ -13,6 +13,9 @@ mod server_manager;
 
 use std::{sync::Arc, time::Duration};
 
+use rb_types::{
+    auth::ClaimType, web::{PrincipalKind, RelayAccessPrincipal}
+};
 use russh::{
     MethodKind, MethodSet, keys::{
         Algorithm, PrivateKey, ssh_key::{LineEnding, rand_core::OsRng}
@@ -25,28 +28,13 @@ use ssh_core::crypto::default_preferred;
 use state_store::{
     add_user_to_group, create_group, delete_group_by_name, fetch_group_id_by_name, fetch_relay_access_principals, grant_relay_access_principal, list_group_members, list_groups as list_groups_db, list_user_groups, migrate_server, remove_user_from_group, revoke_relay_access_principal, server_db
 };
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::error::{ServerError, ServerResult};
 
 const FETCH_HOSTKEY_TIMEOUT_ENV: &str = "RB_FETCH_TIMEOUT";
 const DEFAULT_FETCH_HOSTKEY_TIMEOUT_SECS: f64 = 2.0;
 const MAX_FETCH_HOSTKEY_TIMEOUT_SECS: f64 = 5.0;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PrincipalKind {
-    User,
-    Group,
-}
-
-impl PrincipalKind {
-    fn as_str(&self) -> &'static str {
-        match self {
-            PrincipalKind::User => "user",
-            PrincipalKind::Group => "group",
-        }
-    }
-}
 
 fn hostkey_fetch_timeout() -> ServerResult<Duration> {
     match std::env::var(FETCH_HOSTKEY_TIMEOUT_ENV) {
@@ -108,7 +96,7 @@ pub async fn run_ssh_server(config: ServerConfig) -> ServerResult<()> {
     let user_count = state_store::count_users(&pool).await?;
     if user_count == 0 {
         return Err(ServerError::InvalidConfig(
-            "no users configured; add one with: rb-server --add-user --user <name> --password <pass>".to_string(),
+            "no users configured; add one with: rb-server users add <name> --password <pass>".to_string(),
         ));
     }
 
@@ -116,7 +104,7 @@ pub async fn run_ssh_server(config: ServerConfig) -> ServerResult<()> {
         sqlx::query("DELETE FROM server_options WHERE key = 'server_hostkey'")
             .execute(&pool)
             .await?;
-        info!("rolled server host key per --roll-hostkey request");
+        info!("rolled server host key per rb-server secrets rotate-key request");
     }
 
     let host_key = load_or_create_host_key(&pool).await?;
@@ -144,6 +132,17 @@ pub async fn run_ssh_server(config: ServerConfig) -> ServerResult<()> {
 }
 
 pub async fn add_relay_host(endpoint: &str, name: &str) -> ServerResult<()> {
+    add_relay_host_inner(endpoint, name, true).await
+}
+
+/// Add a relay host without performing an immediate hostkey fetch/prompt.
+/// This is used by rb-web, which presents a non-interactive hostkey review modal
+/// after the host is created.
+pub async fn add_relay_host_without_hostkey(endpoint: &str, name: &str) -> ServerResult<()> {
+    add_relay_host_inner(endpoint, name, false).await
+}
+
+async fn add_relay_host_inner(endpoint: &str, name: &str, fetch_hostkey: bool) -> ServerResult<()> {
     let (ip, port) = parse_endpoint(endpoint)?;
     let db = server_db().await?;
     migrate_server(&db).await?;
@@ -163,7 +162,7 @@ pub async fn add_relay_host(endpoint: &str, name: &str) -> ServerResult<()> {
     info!(relay_host = name, ip, port, "relay host saved");
 
     // Attempt to fetch host key and optionally store it.
-    if let Err(err) = fetch_and_optionally_store_hostkey(&pool, name, &ip, port as u16).await {
+    if fetch_hostkey && let Err(err) = fetch_and_optionally_store_hostkey(&pool, name, &ip, port as u16).await {
         tracing::warn!(?err, relay_host = name, "failed to fetch/store host key during add-host");
     }
     Ok(())
@@ -232,7 +231,8 @@ pub async fn revoke_relay_access(name: &str, principal_kind: PrincipalKind, prin
     let host = state_store::fetch_relay_host_by_name(&pool, name)
         .await?
         .ok_or_else(|| ServerError::not_found("relay host", name))?;
-    revoke_relay_access_principal(&pool, host.id, principal_kind.as_str(), principal_name).await?;
+    revoke_relay_access_principal(&pool, host.id, &principal_kind, principal_name).await?;
+
     info!(
         relay_host = name,
         principal_kind = principal_kind.as_str(),
@@ -325,7 +325,7 @@ async fn fetch_and_optionally_store_hostkey(pool: &sqlx::SqlitePool, name: &str,
     Ok(())
 }
 
-pub async fn list_hosts() -> ServerResult<Vec<state_store::RelayHost>> {
+pub async fn list_hosts() -> ServerResult<Vec<rb_types::RelayInfo>> {
     let db = server_db().await?;
     migrate_server(&db).await?;
     let pool = db.into_pool();
@@ -354,12 +354,6 @@ pub async fn list_options(name: &str) -> ServerResult<Vec<(String, String)>> {
     Ok(items)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RelayAccessPrincipal {
-    pub kind: PrincipalKind,
-    pub name: String,
-}
-
 pub async fn list_access(name: &str) -> ServerResult<Vec<RelayAccessPrincipal>> {
     let db = server_db().await?;
     migrate_server(&db).await?;
@@ -371,11 +365,7 @@ pub async fn list_access(name: &str) -> ServerResult<Vec<RelayAccessPrincipal>> 
     Ok(principals
         .into_iter()
         .map(|p| RelayAccessPrincipal {
-            kind: if p.kind == "group" {
-                PrincipalKind::Group
-            } else {
-                PrincipalKind::User
-            },
+            kind: p.kind,
             name: p.name,
         })
         .collect())
@@ -422,13 +412,50 @@ pub async fn add_user(user: &str, password: &str) -> ServerResult<()> {
     }
 
     let hash = crate::auth::hash_password(password)?;
-    sqlx::query("INSERT INTO users (username, password_hash) VALUES (?, ?)")
+    let result = sqlx::query("INSERT INTO users (username, password_hash) VALUES (?, ?)")
         .bind(user)
         .bind(hash)
         .execute(&pool)
         .await?;
-    info!(user, "user added");
+    let user_id = result.last_insert_rowid();
+    let promoted = maybe_promote_first_user(&pool, user, user_id).await?;
+    info!(user, first_user = promoted, "user added");
     Ok(())
+}
+
+/// Grant elevated access if this is the first persisted user record.
+async fn maybe_promote_first_user(pool: &SqlitePool, username: &str, user_id: i64) -> ServerResult<bool> {
+    let earliest_id: i64 = sqlx::query_scalar("SELECT id FROM users ORDER BY id ASC LIMIT 1")
+        .fetch_one(pool)
+        .await?;
+    if earliest_id != user_id {
+        return Ok(false);
+    }
+
+    ensure_super_admin_privileges(pool, username).await?;
+    Ok(true)
+}
+
+/// Best-effort helper that attaches the Super Admin role (or wildcard claim if the role hasn't been seeded yet).
+async fn ensure_super_admin_privileges(pool: &SqlitePool, username: &str) -> ServerResult<()> {
+    const SUPER_ADMIN_ROLE: &str = "Super Admin";
+    match state_store::assign_role_to_user(pool, username, SUPER_ADMIN_ROLE).await {
+        Ok(_) => {
+            info!(user = username, role = SUPER_ADMIN_ROLE, "granted Super Admin role to first user");
+            Ok(())
+        }
+        Err(state_store::DbError::GroupNotFound { .. }) => {
+            warn!(
+                user = username,
+                role = SUPER_ADMIN_ROLE,
+                "Super Admin role missing; granting wildcard claim directly"
+            );
+            let wildcard = ClaimType::Custom("*".to_string());
+            state_store::add_claim_to_user(pool, username, &wildcard).await?;
+            Ok(())
+        }
+        Err(err) => Err(err.into()),
+    }
 }
 
 pub async fn remove_user(user: &str) -> ServerResult<()> {
@@ -547,6 +574,114 @@ pub async fn update_user(username: &str, new_password: Option<&str>) -> ServerRe
 
     info!(user = username, "user updated");
     Ok(())
+}
+
+// -----------------------------
+// RBAC: Roles & Claims
+// -----------------------------
+
+pub async fn create_role(name: &str, description: Option<&str>) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    state_store::create_role(&pool, name, description).await?;
+    info!(role = name, "role created");
+    Ok(())
+}
+
+pub async fn delete_role(name: &str) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    state_store::delete_role(&pool, name).await?;
+    info!(role = name, "role deleted");
+    Ok(())
+}
+
+pub async fn list_roles() -> ServerResult<Vec<state_store::Role>> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    Ok(state_store::list_roles(&pool).await?)
+}
+
+pub async fn assign_role(username: &str, role_name: &str) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    state_store::assign_role_to_user(&pool, username, role_name).await?;
+    info!(user = username, role = role_name, "role assigned to user");
+    Ok(())
+}
+
+pub async fn revoke_role(username: &str, role_name: &str) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    state_store::revoke_role_from_user(&pool, username, role_name).await?;
+    info!(user = username, role = role_name, "role revoked from user");
+    Ok(())
+}
+
+pub async fn add_role_claim(role_name: &str, claim: &ClaimType) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    state_store::add_claim_to_role(&pool, role_name, claim).await?;
+    info!(role = role_name, claim = %claim, "claim added to role");
+    Ok(())
+}
+
+pub async fn remove_role_claim(role_name: &str, claim: &ClaimType) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    state_store::remove_claim_from_role(&pool, role_name, claim).await?;
+    info!(role = role_name, claim = %claim, "claim removed from role");
+    Ok(())
+}
+
+pub async fn add_user_claim(username: &str, claim: &ClaimType) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    state_store::add_claim_to_user(&pool, username, claim).await?;
+    info!(user = username, claim = %claim, "claim added to user");
+    Ok(())
+}
+
+pub async fn remove_user_claim(username: &str, claim: &ClaimType) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    state_store::remove_claim_from_user(&pool, username, claim).await?;
+    info!(user = username, claim = %claim, "claim removed from user");
+    Ok(())
+}
+
+pub async fn add_group_claim(group_name: &str, claim: &ClaimType) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    state_store::add_claim_to_group(&pool, group_name, claim).await?;
+    info!(group = group_name, claim = %claim, "claim added to group");
+    Ok(())
+}
+
+pub async fn remove_group_claim(group_name: &str, claim: &ClaimType) -> ServerResult<()> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    state_store::remove_claim_from_group(&pool, group_name, claim).await?;
+    info!(group = group_name, claim = %claim, "claim removed from group");
+    Ok(())
+}
+
+pub async fn get_group_claims_server(group_name: &str) -> ServerResult<Vec<ClaimType>> {
+    let db = server_db().await?;
+    migrate_server(&db).await?;
+    let pool = db.into_pool();
+    Ok(state_store::get_group_claims(&pool, group_name).await?)
 }
 
 pub async fn create_password_credential(name: &str, username: Option<&str>, password: &str) -> ServerResult<i64> {

@@ -43,36 +43,45 @@ pub fn Terminal(props: TerminalProps) -> Element {
 
         let opts_json = serde_json::to_string(&props).expect("TerminalOptions should always serialize");
 
-        // Initialize terminal
-        use_effect(move || {
-            // Only run once the element is mounted
-            if mounted() && !script_started() {
-                web_sys::console::log_1(&"Terminal component: Initializing xterm script".into());
-                script_started.set(true);
+        use_effect({
+            let mounted = mounted.clone();
+            let mut script_started = script_started.clone();
+            let id = id.clone();
+            let opts_json = opts_json.clone();
 
-                let terminal_id = id.clone();
-                let options = opts_json.clone();
+            move || {
+                if mounted() && !script_started() {
+                    // Trigger only once
+                    script_started.set(true);
 
-                spawn(async move {
-                    let script = format!(
-                        r#"
-                        (async () => {{
-                            if (!window.initRustyBridgeTerminal) {{
-                                await new Promise((resolve, reject) => {{
-                                    const s = document.createElement('script');
-                                    s.src = '/xterm/xterm-init.js';
-                                    s.onload = resolve;
-                                    s.onerror = reject;
-                                    document.head.appendChild(s);
-                                }});
-                            }}
-                            await window.initRustyBridgeTerminal("{terminal_id}", {options});
-                        }})();
-                        "#
-                    );
+                    // Clone inside the effect so the outer closure is not consumed
+                    let terminal_id = id.clone();
+                    let options_json = opts_json.clone();
 
-                    let _ = dioxus::document::eval(&script).await;
-                });
+                    // Serialize terminal_id to JSON to prevent XSS
+                    let terminal_id_json = serde_json::to_string(&terminal_id).unwrap_or_else(|_| "\"\"".to_string());
+
+                    spawn(async move {
+                        let script = format!(
+                            r#"
+                    (async () => {{
+                        if (!window.initRustyBridgeTerminal) {{
+                            await new Promise((resolve, reject) => {{
+                                const s = document.createElement('script');
+                                s.src = '/xterm/xterm-init.js';
+                                s.onload = resolve;
+                                s.onerror = reject;
+                                document.head.appendChild(s);
+                            }});
+                        }}
+                        await window.initRustyBridgeTerminal({terminal_id_json}, {options_json});
+                    }})();
+                    "#
+                        );
+
+                        let _ = dioxus::document::eval(&script).await;
+                    });
+                }
             }
         });
 
@@ -166,6 +175,18 @@ pub fn Terminal(props: TerminalProps) -> Element {
 
                     let ws_url = format!("{}://{}/api/ssh/{}", protocol, host, relay_name);
 
+                    let http_protocol = if web_sys::window()
+                        .and_then(|w| w.location().protocol().ok())
+                        .map(|p| p == "https:")
+                        .unwrap_or(false)
+                    {
+                        "https"
+                    } else {
+                        "http"
+                    };
+
+                    let status_url = format!("{}://{}/api/ssh/{}/status", http_protocol, host, relay_name);
+
                     if cancel_flag_task.get() {
                         web_sys::console::log_1(&"[rb-web] cancelled before JS attach".into());
                         return;
@@ -178,6 +199,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
                     let relay_name_json = serde_json::to_string(&relay_name).unwrap_or_else(|_| "\"unknown\"".to_string());
                     let terminal_id_json = serde_json::to_string(&terminal_id).unwrap_or_else(|_| "\"\"".to_string());
                     let ws_url_json = serde_json::to_string(&ws_url).unwrap_or_else(|_| "\"\"".to_string());
+                    let status_url_json = serde_json::to_string(&status_url).unwrap_or_else(|_| "\"\"".to_string());
 
                     let script = format!(
                         r#"
@@ -190,6 +212,32 @@ pub fn Terminal(props: TerminalProps) -> Element {
                             }}
                             term.activeSshToken = connectToken;
                             console.log("Starting WebSocket attachment for terminal:", {relay_name_json}, "token", connectToken);
+
+                            const statusUrl = {status_url_json};
+                            let statusAllowed = false;
+                            try {{
+                                const statusResponse = await fetch(statusUrl, {{ method: 'GET', credentials: 'include' }});
+                                let payload = null;
+                                try {{
+                                    payload = await statusResponse.json();
+                                }} catch (err) {{
+                                    payload = null;
+                                }}
+                                if (statusResponse.ok && payload && payload.ok) {{
+                                    statusAllowed = true;
+                                }} else {{
+                                    const message = (payload && payload.message) ? payload.message : `SSH access denied (${{statusResponse.status}})`;
+                                    term.write(`\r\n\x1b[31m${{message}}\x1b[0m\r\n`);
+                                }}
+                            }} catch (err) {{
+                                console.error('SSH status check failed', err);
+                                term.write('\r\n\x1b[31mFailed to verify SSH access.\x1b[0m\r\n');
+                            }}
+
+                            if (!statusAllowed || term.activeSshToken !== connectToken) {{
+                                return;
+                            }}
+
                             const connection = await window.attachWebSocketToTerminal({terminal_id_json}, {ws_url_json}, connectToken, () => {{
                                 if (term.activeSshToken !== connectToken) {{
                                     return;
@@ -242,7 +290,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
     rsx! {
         div {
             id: "{props.id}",
-            class: "w-full h-full min-h-[400px] bg-[#1e1e1e] rounded-lg overflow-hidden shadow-lg border border-gray-700 flex items-center justify-center",
+            class: "w-full relative overflow-hidden h-full max-w-full min-h-[400px] bg-[#1e1e1e] rounded-lg overflow-hidden shadow-lg border border-gray-700 block",
             onmounted: move |_| mounted.set(true),
             if !script_started() {
                 span { class: "text-gray-500", "Loading Terminal..." }

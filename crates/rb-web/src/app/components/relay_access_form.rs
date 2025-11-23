@@ -1,8 +1,7 @@
 use dioxus::prelude::*;
+use rb_types::web::{GrantAccessRequest, PrincipalKind};
 
-use crate::app::{
-    api::{access::*, groups::list_groups, users::list_users}, models::GrantAccessRequest
-};
+use crate::app::api::{access::*, groups::list_groups, users::list_users};
 
 #[component]
 pub fn RelayAccessForm(relay_id: i64, on_change: Option<EventHandler<()>>) -> Element {
@@ -30,7 +29,7 @@ pub fn RelayAccessForm(relay_id: i64, on_change: Option<EventHandler<()>>) -> El
                 principal_name: user.clone(),
             };
 
-            if let Ok(_) = grant_relay_access(relay_id, req).await {
+            if grant_relay_access(relay_id, req).await.is_ok() {
                 selected_user.set(String::new());
                 access_principals.restart();
                 if let Some(handler) = on_change {
@@ -53,7 +52,7 @@ pub fn RelayAccessForm(relay_id: i64, on_change: Option<EventHandler<()>>) -> El
                 principal_name: group.clone(),
             };
 
-            if let Ok(_) = grant_relay_access(relay_id, req).await {
+            if grant_relay_access(relay_id, req).await.is_ok() {
                 selected_group.set(String::new());
                 access_principals.restart();
                 if let Some(handler) = on_change {
@@ -64,9 +63,9 @@ pub fn RelayAccessForm(relay_id: i64, on_change: Option<EventHandler<()>>) -> El
     };
 
     // Remove principal from access list
-    let remove_principal = move |kind: String, name: String| {
+    let remove_principal = move |kind: PrincipalKind, name: String| {
         spawn(async move {
-            if let Ok(_) = revoke_relay_access(relay_id, kind, name).await {
+            if revoke_relay_access(relay_id, kind, name).await.is_ok() {
                 access_principals.restart();
                 if let Some(handler) = on_change {
                     handler.call(());
@@ -80,8 +79,8 @@ pub fn RelayAccessForm(relay_id: i64, on_change: Option<EventHandler<()>>) -> El
             // Current access principals
             match access_principals() {
                 Some(Ok(principals)) => {
-                    let user_principals: Vec<_> = principals.iter().filter(|p| p.kind == "user").cloned().collect();
-                    let group_principals: Vec<_> = principals.iter().filter(|p| p.kind == "group").cloned().collect();
+                    let user_principals: Vec<_> = principals.iter().filter(|p| p.kind == PrincipalKind::User).cloned().collect();
+                    let group_principals: Vec<_> = principals.iter().filter(|p| p.kind == PrincipalKind::Group).cloned().collect();
 
                     rsx! {
                         div { class: "grid grid-cols-2 gap-4",
@@ -98,9 +97,9 @@ pub fn RelayAccessForm(relay_id: i64, on_change: Option<EventHandler<()>>) -> El
                                                 button {
                                                     class: "btn btn-xs btn-ghost",
                                                     onclick: {
-                                                        let kind = principal.kind.clone();
+                                                        let kind = principal.kind;
                                                         let name = principal.name.clone();
-                                                        move |_| remove_principal(kind.clone(), name.clone())
+                                                        move |_| remove_principal(kind, name.clone())
                                                     },
                                                     "✕"
                                                 }
@@ -154,9 +153,9 @@ pub fn RelayAccessForm(relay_id: i64, on_change: Option<EventHandler<()>>) -> El
                                                 button {
                                                     class: "btn btn-xs btn-ghost",
                                                     onclick: {
-                                                        let kind = principal.kind.clone();
+                                                        let kind = principal.kind;
                                                         let name = principal.name.clone();
-                                                        move |_| remove_principal(kind.clone(), name.clone())
+                                                        move |_| remove_principal(kind, name.clone())
                                                     },
                                                     "✕"
                                                 }

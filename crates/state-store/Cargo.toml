@@ -4,9 +4,11 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-dirs.workspace = true
-sqlx.workspace = true
-thiserror.workspace = true
-tokio.workspace = true
-tracing.workspace = true
-url.workspace = true
+sqlx = { workspace = true, features = ["runtime-tokio", "sqlite", "macros"] }
+tokio = { workspace = true, features = ["fs"] }
+tracing = { workspace = true }
+url = { workspace = true }
+dirs = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+rb-types = { path = "../rb-types", features = ["sqlx"] }

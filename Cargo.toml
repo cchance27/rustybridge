@@ -7,6 +7,7 @@ members = [
     "crates/state-store",
     "crates/tui-core",
     "crates/rb-web",
+    "crates/rb-types",
 ]
 resolver = "2"
 
@@ -42,11 +43,12 @@ rpassword = "7"
 whoami = "1"
 rand_core = { version = "0.9.3", features = ["os_rng"] }
 ratatui = "0.29.0"
-sqlx = { version = "0.8.6", features = [
+sqlx = { version = "0.8.6", default-features = false, features = [
     "chrono",
     "macros",
     "runtime-tokio",
     "sqlite",
+    "migrate",
 ] }
 dirs = "6.0.0"
 url = "2.5"

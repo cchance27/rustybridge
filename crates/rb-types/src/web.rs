@@ -1,20 +1,12 @@
-// Shared data models for rb_web
-// These models are used by both client and server, so they cannot depend on server-only crates
+use std::{convert::Infallible, fmt::Display, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
-// Define RelayHost locally to avoid dependency on state_store (server-only)
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct RelayHost {
-    pub id: i64,
-    pub name: String,
-    pub ip: String,
-    pub port: i64,
-}
+use crate::auth::ClaimType;
 
 /// Authentication configuration for UI editing
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AuthConfig {
+pub struct AuthWebConfig {
     pub mode: String, // "none", "saved", "custom"
     pub saved_credential_id: Option<i64>,
     pub custom_type: Option<String>, // "password", "ssh_key", "agent"
@@ -35,7 +27,7 @@ pub struct RelayHostInfo {
     pub port: i64,
     pub credential: Option<String>, // credential name if assigned (display only)
     pub has_hostkey: bool,
-    pub auth_config: Option<AuthConfig>,              // Full auth config for editing
+    pub auth_config: Option<AuthWebConfig>,           // Full auth config for editing
     pub access_principals: Vec<RelayAccessPrincipal>, // Users and groups with access
 }
 
@@ -62,6 +54,7 @@ pub struct UserGroupInfo {
     pub username: String,
     pub groups: Vec<String>,          // List of group names the user belongs to
     pub relays: Vec<UserRelayAccess>, // List of relays the user can access
+    pub claims: Vec<ClaimType>,       // List of claims the user has
 }
 
 /// Relay access info for a user
@@ -85,15 +78,55 @@ pub enum RelayAccessSource {
 pub struct GroupInfo {
     pub name: String,
     pub member_count: i64,
-    pub relay_count: i64,     // Number of relays this group has access to
-    pub members: Vec<String>, // List of member usernames
-    pub relays: Vec<String>,  // List of relay names (host:port)
+    pub relay_count: i64,       // Number of relays this group has access to
+    pub members: Vec<String>,   // List of member usernames
+    pub relays: Vec<String>,    // List of relay names (host:port)
+    pub claims: Vec<ClaimType>, // List of claims the group has
 }
 
-/// Principal for relay ACL (user or group)
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PrincipalKind {
+    User,
+    Group,
+    Other,
+}
+
+impl PrincipalKind {
+    pub fn as_str(&self) -> &str {
+        match self {
+            PrincipalKind::User => "user",
+            PrincipalKind::Group => "group",
+            PrincipalKind::Other => "other",
+        }
+    }
+}
+
+impl Display for PrincipalKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for PrincipalKind {
+    type Err = Infallible;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "user" => Ok(PrincipalKind::User),
+            "group" => Ok(PrincipalKind::Group),
+            _ => Ok(PrincipalKind::Other),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayAclPrincipal {
+    pub kind: PrincipalKind,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelayAccessPrincipal {
-    pub kind: String, // "user" or "group"
+    pub kind: PrincipalKind,
     pub name: String,
 }
 

@@ -1,0 +1,13 @@
+[package]
+name = "rb-types"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+sqlx = ["dep:sqlx"]
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+sqlx = { workspace = true, default-features = false, features = [
+    "macros",
+], optional = true }

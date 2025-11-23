@@ -1,54 +1,44 @@
 use dioxus::prelude::*;
+use rb_types::auth::{ClaimLevel, ClaimType};
 
-use crate::components::{AvatarDropDown, ThemeToggle};
+use crate::{
+    app::auth::hooks::use_auth, components::{AvatarDropDown, Protected, ThemeToggle}
+};
 
 #[component]
 pub fn NavBar() -> Element {
+    let auth = use_auth();
+    let logged_in = auth.read().user.is_some();
+
     rsx! {
         div { class: "navbar bg-base-200 shadow-sm",
             div { class: "flex-1",
                 a { class: "btn btn-ghost text-xl", href: "/", "RustyBridge" }
                 ul { class: "menu menu-horizontal px-1",
-                    li { Link { to: crate::routes::Routes::DashboardPage {}, "Dashboard" } }
-                    li { Link { to: crate::routes::Routes::RelaysPage {}, "Relays" } }
-                    li { Link { to: crate::routes::Routes::CredentialsPage {}, "Credentials" } }
-                    li { Link { to: crate::routes::Routes::AccessPage {}, "Access" } }
+                    if logged_in {
+                        li { Link { to: crate::Routes::DashboardPage {}, "Dashboard" } }
+
+                        Protected {
+                            any_claims: vec![ClaimType::Relays(ClaimLevel::View)],
+                            li { Link { to: crate::Routes::RelaysPage {}, "Relays" } }
+                        }
+                        Protected {
+                            any_claims: vec![ClaimType::Credentials(ClaimLevel::View)],
+                            li { Link { to: crate::Routes::CredentialsPage {}, "Credentials" } }
+                        }
+                        Protected {
+                            any_claims: vec![ClaimType::Users(ClaimLevel::View), ClaimType::Groups(ClaimLevel::View)],
+                            li { Link { to: crate::Routes::AccessPage {}, "Access" } }
+                        }
+                    }
                 }
             }
 
             div { class: "flex-none",
-
-                // CART DROPDOWN
-                div { class: "dropdown dropdown-end",
-                    div {
-                        tabindex: "0",
-                        role: "button",
-                        class: "btn btn-ghost btn-circle",
-                        div { class: "indicator",
-                            svg {
-                                xmlns: "http://www.w3.org/2000/svg",
-                                class: "h-5 w-5",
-                                fill: "none",
-                                view_box: "0 0 24 24",
-                                stroke: "currentColor",
-
-                                path {
-                                    stroke_linecap: "round",
-                                    stroke_linejoin: "round",
-                                    stroke_width: "2",
-                                    d: "M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293
-                                    2.293c-.63.63-.184 1.707.707 1.707H17m0
-                                    0a2 2 0 100 4 2 2 0 000-4zm-8
-                                    2a2 2 0 11-4 0 2 2 0 014 0z"
-                                }
-                            }
-                        }
-                    }
-                }
-
                 ThemeToggle {}
-
-                AvatarDropDown {}
+                if logged_in {
+                    AvatarDropDown {}
+                }
             }
         }
     }

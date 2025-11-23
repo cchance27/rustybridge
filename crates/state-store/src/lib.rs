@@ -1,13 +1,21 @@
 use std::{
-    env, fs::OpenOptions, path::{Path, PathBuf}
+    env, fs::OpenOptions, io::ErrorKind, path::{Path, PathBuf}, str::FromStr as _
 };
 
+use rb_types::{
+    RelayInfo, web::{PrincipalKind, RelayAclPrincipal}
+};
 use sqlx::{Row, SqlitePool, migrate::Migrator, prelude::FromRow, sqlite::SqlitePoolOptions};
 use tracing::warn;
 use url::Url;
 
 mod error;
 pub use error::{DbError, DbResult};
+// Re-export claim types from rb-types
+use rb_types::auth::ClaimType;
+
+#[cfg(test)]
+mod tests_rbac;
 
 static CLIENT_MIGRATOR: Migrator = sqlx::migrate!("./migrations/client");
 static SERVER_MIGRATOR: Migrator = sqlx::migrate!("./migrations/server");
@@ -50,21 +58,13 @@ impl DbHandle {
 // Server-side relay host access
 // -----------------------------
 
-#[derive(Debug, Clone, FromRow)]
-pub struct RelayHost {
-    pub id: i64,
-    pub name: String,
-    pub ip: String,
-    pub port: i64,
-}
-
-pub async fn fetch_relay_host_by_name(pool: &SqlitePool, name: &str) -> DbResult<Option<RelayHost>> {
-    if let Some(row) = sqlx::query_as::<_, RelayHost>("SELECT id, name, ip, port FROM relay_hosts WHERE name = ?")
+pub async fn fetch_relay_host_by_name(pool: &SqlitePool, name: &str) -> DbResult<Option<RelayInfo>> {
+    if let Some(row) = sqlx::query_as::<_, RelayInfo>("SELECT id, name, ip, port FROM relay_hosts WHERE name = ?")
         .bind(name)
         .fetch_optional(pool)
         .await?
     {
-        Ok(Some(RelayHost {
+        Ok(Some(RelayInfo {
             id: row.id,
             name: row.name,
             ip: row.ip,
@@ -75,13 +75,13 @@ pub async fn fetch_relay_host_by_name(pool: &SqlitePool, name: &str) -> DbResult
     }
 }
 
-pub async fn fetch_relay_host_by_id(pool: &SqlitePool, id: i64) -> DbResult<Option<RelayHost>> {
-    if let Some(row) = sqlx::query_as::<_, RelayHost>("SELECT id, name, ip, port FROM relay_hosts WHERE id = ?")
+pub async fn fetch_relay_host_by_id(pool: &SqlitePool, id: i64) -> DbResult<Option<RelayInfo>> {
+    if let Some(row) = sqlx::query_as::<_, RelayInfo>("SELECT id, name, ip, port FROM relay_hosts WHERE id = ?")
         .bind(id)
         .fetch_optional(pool)
         .await?
     {
-        Ok(Some(RelayHost {
+        Ok(Some(RelayInfo {
             id: row.id,
             name: row.name,
             ip: row.ip,
@@ -142,10 +142,10 @@ pub async fn user_has_relay_access(pool: &SqlitePool, username: &str, relay_host
 }
 
 /// List all relay hosts, optionally filtered by username access
-pub async fn list_relay_hosts(pool: &SqlitePool, username: Option<&str>) -> DbResult<Vec<RelayHost>> {
+pub async fn list_relay_hosts(pool: &SqlitePool, username: Option<&str>) -> DbResult<Vec<RelayInfo>> {
     let rows = match username {
         Some(user) => {
-            sqlx::query_as::<_, RelayHost>(
+            sqlx::query_as::<_, RelayInfo>(
                 r#"
                 SELECT DISTINCT h.id, h.name, h.ip, h.port
                 FROM relay_hosts h
@@ -164,7 +164,7 @@ pub async fn list_relay_hosts(pool: &SqlitePool, username: Option<&str>) -> DbRe
             .await?
         }
         None => {
-            sqlx::query_as::<_, RelayHost>("SELECT id, name, ip, port FROM relay_hosts ORDER BY name")
+            sqlx::query_as::<_, RelayInfo>("SELECT id, name, ip, port FROM relay_hosts ORDER BY name")
                 .fetch_all(pool)
                 .await?
         }
@@ -172,7 +172,7 @@ pub async fn list_relay_hosts(pool: &SqlitePool, username: Option<&str>) -> DbRe
 
     Ok(rows
         .into_iter()
-        .map(|row| RelayHost {
+        .map(|row| RelayInfo {
             id: row.id,
             name: row.name,
             ip: row.ip,
@@ -211,12 +211,6 @@ pub async fn delete_relay_host_by_id(pool: &SqlitePool, id: i64) -> DbResult<()>
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RelayAclPrincipal {
-    pub kind: String,
-    pub name: String,
-}
-
 pub async fn fetch_relay_access_principals(pool: &SqlitePool, relay_host_id: i64) -> DbResult<Vec<RelayAclPrincipal>> {
     let rows = sqlx::query(
         "SELECT principal_kind, principal_name FROM relay_host_acl WHERE relay_host_id = ? ORDER BY principal_kind, principal_name",
@@ -227,7 +221,7 @@ pub async fn fetch_relay_access_principals(pool: &SqlitePool, relay_host_id: i64
     Ok(rows
         .into_iter()
         .map(|r| RelayAclPrincipal {
-            kind: r.get::<String, _>("principal_kind"),
+            kind: r.get::<String, _>("principal_kind").parse::<PrincipalKind>().unwrap(),
             name: r.get::<String, _>("principal_name"),
         })
         .collect())
@@ -356,12 +350,12 @@ pub async fn grant_relay_access_principal(
 pub async fn revoke_relay_access_principal(
     pool: &SqlitePool,
     relay_host_id: i64,
-    principal_kind: &str,
+    principal_kind: &PrincipalKind,
     principal_name: &str,
 ) -> DbResult<()> {
     sqlx::query("DELETE FROM relay_host_acl WHERE relay_host_id = ? AND principal_kind = ? AND principal_name = ?")
         .bind(relay_host_id)
-        .bind(principal_kind)
+        .bind(principal_kind.to_string())
         .bind(principal_name)
         .execute(pool)
         .await?;
@@ -524,6 +518,216 @@ pub async fn delete_relay_credential_by_id(pool: &SqlitePool, id: i64) -> DbResu
     Ok(())
 }
 
+// -----------------------------
+// RBAC: Roles & Claims
+// -----------------------------
+
+#[derive(Debug, Clone, FromRow)]
+pub struct Role {
+    pub id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub created_at: i64,
+}
+
+pub async fn create_role(pool: &SqlitePool, name: &str, description: Option<&str>) -> DbResult<i64> {
+    let now = current_ts();
+    sqlx::query("INSERT INTO roles (name, description, created_at) VALUES (?, ?, ?)")
+        .bind(name)
+        .bind(description)
+        .bind(now)
+        .execute(pool)
+        .await?;
+    let row = sqlx::query("SELECT id FROM roles WHERE name = ?")
+        .bind(name)
+        .fetch_one(pool)
+        .await?;
+    Ok(row.get::<i64, _>("id"))
+}
+
+pub async fn delete_role(pool: &SqlitePool, name: &str) -> DbResult<()> {
+    sqlx::query("DELETE FROM roles WHERE name = ?").bind(name).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn list_roles(pool: &SqlitePool) -> DbResult<Vec<Role>> {
+    let rows = sqlx::query_as::<_, Role>("SELECT id, name, description, created_at FROM roles ORDER BY name")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows)
+}
+
+pub async fn assign_role_to_user(pool: &SqlitePool, username: &str, role_name: &str) -> DbResult<()> {
+    let user_id = fetch_user_id_by_name(pool, username).await?.ok_or(DbError::UserNotFound {
+        username: username.to_string(),
+    })?;
+    let role_id = fetch_role_id_by_name(pool, role_name).await?.ok_or(DbError::GroupNotFound {
+        group: role_name.to_string(), // Reusing GroupNotFound for generic "not found" or add RoleNotFound
+    })?;
+    sqlx::query("INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)")
+        .bind(user_id)
+        .bind(role_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn revoke_role_from_user(pool: &SqlitePool, username: &str, role_name: &str) -> DbResult<()> {
+    let user_id = fetch_user_id_by_name(pool, username).await?.ok_or(DbError::UserNotFound {
+        username: username.to_string(),
+    })?;
+    let role_id = fetch_role_id_by_name(pool, role_name).await?.ok_or(DbError::GroupNotFound {
+        group: role_name.to_string(),
+    })?;
+    sqlx::query("DELETE FROM user_roles WHERE user_id = ? AND role_id = ?")
+        .bind(user_id)
+        .bind(role_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn add_claim_to_role(pool: &SqlitePool, role_name: &str, claim: &ClaimType) -> DbResult<()> {
+    let role_id = fetch_role_id_by_name(pool, role_name).await?.ok_or(DbError::GroupNotFound {
+        group: role_name.to_string(),
+    })?;
+    sqlx::query("INSERT OR IGNORE INTO role_claims (role_id, claim_key) VALUES (?, ?)")
+        .bind(role_id)
+        .bind(claim.to_string())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn remove_claim_from_role(pool: &SqlitePool, role_name: &str, claim: &ClaimType) -> DbResult<()> {
+    let role_id = fetch_role_id_by_name(pool, role_name).await?.ok_or(DbError::GroupNotFound {
+        group: role_name.to_string(),
+    })?;
+    sqlx::query("DELETE FROM role_claims WHERE role_id = ? AND claim_key = ?")
+        .bind(role_id)
+        .bind(claim.to_string())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+pub async fn get_user_claims(pool: &SqlitePool, username: &str) -> DbResult<Vec<ClaimType>> {
+    let user_id = fetch_user_id_by_name(pool, username).await?.ok_or(DbError::UserNotFound {
+        username: username.to_string(),
+    })?;
+
+    // Fetch direct user claims
+    let user_claims = sqlx::query_scalar::<_, String>("SELECT claim_key FROM user_claims WHERE user_id = ?")
+        .bind(user_id)
+        .fetch_all(pool)
+        .await?;
+
+    // Fetch claims via roles
+    let role_claims = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT rc.claim_key 
+        FROM role_claims rc
+        JOIN user_roles ur ON rc.role_id = ur.role_id
+        WHERE ur.user_id = ?
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    // Fetch claims via groups
+    let group_claims = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT gc.claim_key 
+        FROM group_claims gc
+        JOIN user_groups ug ON gc.group_id = ug.group_id
+        WHERE ug.user_id = ?
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut all_claims = Vec::new();
+    all_claims.extend(user_claims);
+    all_claims.extend(role_claims);
+    all_claims.extend(group_claims);
+
+    // Dedup strings first
+    all_claims.sort();
+    all_claims.dedup();
+
+    // Convert to ClaimType
+    Ok(all_claims.into_iter().filter_map(|s| ClaimType::from_str(&s).ok()).collect())
+}
+
+pub async fn add_claim_to_user(pool: &SqlitePool, username: &str, claim: &ClaimType) -> DbResult<()> {
+    let user_id = fetch_user_id_by_name(pool, username).await?.ok_or(DbError::UserNotFound {
+        username: username.to_string(),
+    })?;
+    sqlx::query("INSERT OR IGNORE INTO user_claims (user_id, claim_key) VALUES (?, ?)")
+        .bind(user_id)
+        .bind(claim.to_string())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn remove_claim_from_user(pool: &SqlitePool, username: &str, claim: &ClaimType) -> DbResult<()> {
+    let user_id = fetch_user_id_by_name(pool, username).await?.ok_or(DbError::UserNotFound {
+        username: username.to_string(),
+    })?;
+    sqlx::query("DELETE FROM user_claims WHERE user_id = ? AND claim_key = ?")
+        .bind(user_id)
+        .bind(claim.to_string())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn add_claim_to_group(pool: &SqlitePool, group_name: &str, claim: &ClaimType) -> DbResult<()> {
+    let group_id = fetch_group_id_by_name(pool, group_name).await?.ok_or(DbError::GroupNotFound {
+        group: group_name.to_string(),
+    })?;
+    sqlx::query("INSERT OR IGNORE INTO group_claims (group_id, claim_key) VALUES (?, ?)")
+        .bind(group_id)
+        .bind(claim.to_string())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn remove_claim_from_group(pool: &SqlitePool, group_name: &str, claim: &ClaimType) -> DbResult<()> {
+    let group_id = fetch_group_id_by_name(pool, group_name).await?.ok_or(DbError::GroupNotFound {
+        group: group_name.to_string(),
+    })?;
+    sqlx::query("DELETE FROM group_claims WHERE group_id = ? AND claim_key = ?")
+        .bind(group_id)
+        .bind(claim.to_string())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn get_group_claims(pool: &SqlitePool, group_name: &str) -> DbResult<Vec<ClaimType>> {
+    let group_id = fetch_group_id_by_name(pool, group_name).await?.ok_or(DbError::GroupNotFound {
+        group: group_name.to_string(),
+    })?;
+    let claims = sqlx::query_scalar::<_, String>("SELECT claim_key FROM group_claims WHERE group_id = ?")
+        .bind(group_id)
+        .fetch_all(pool)
+        .await?;
+
+    Ok(claims.into_iter().filter_map(|s| ClaimType::from_str(&s).ok()).collect())
+}
+
+pub async fn fetch_role_id_by_name(pool: &SqlitePool, name: &str) -> DbResult<Option<i64>> {
+    let row = sqlx::query("SELECT id FROM roles WHERE name = ?")
+        .bind(name)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|r| r.get::<i64, _>("id")))
+}
+
 /// Establish a pooled SQLite connection for client-side state (host keys, etc.).
 pub async fn client_db() -> DbResult<DbHandle> {
     let location = resolve_client_location().await?;
@@ -598,27 +802,36 @@ async fn build_location_from_path(path: PathBuf) -> DbResult<DbLocation> {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::OpenOptionsExt;
-                OpenOptions::new()
-                    .create_new(true)
-                    .write(true)
-                    .mode(0o600)
-                    .open(&path_clone)
-                    .map_err(|e| DbError::FileCreationFailed {
+                let mut options = OpenOptions::new();
+                options.create_new(true).write(true).mode(0o600);
+                match options.open(&path_clone) {
+                    Ok(_) => {
+                        warn!("Creating file with 600 permissions: {}", path_clone.display());
+                        Ok(())
+                    }
+                    Err(err) if err.kind() == ErrorKind::AlreadyExists => Ok(()),
+                    Err(err) => Err(DbError::FileCreationFailed {
                         path: path_clone.clone(),
-                        source: e,
-                    })
+                        source: err,
+                    }),
+                }
             }
             #[cfg(not(unix))]
             {
                 // Best-effort fallback on non-Unix platforms.
-                OpenOptions::new()
-                    .create_new(true)
-                    .write(true)
-                    .open(&path_clone)
-                    .map_err(|e| DbError::FileCreationFailed {
+                let mut options = OpenOptions::new();
+                options.create_new(true).write(true);
+                match options.open(&path_clone) {
+                    Ok(_) => {
+                        warn!("Creating file with 600 permissions: {}", path_clone.display());
+                        Ok(())
+                    }
+                    Err(err) if err.kind() == ErrorKind::AlreadyExists => Ok(()),
+                    Err(err) => Err(DbError::FileCreationFailed {
                         path: path_clone.clone(),
-                        source: e,
-                    })
+                        source: err,
+                    }),
+                }
             }
         })
         .await

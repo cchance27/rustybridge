@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-use crate::app::components::{Layout, RelayDrawer, Terminal};
+use crate::app::components::{Layout, RelayDrawer, RequireAuth, Terminal};
 
 #[component]
 pub fn DashboardPage() -> Element {
@@ -33,50 +33,52 @@ pub fn DashboardPage() -> Element {
     }
 
     rsx! {
-        Layout {
-            div { class: "flex flex-col h-full p-4 gap-4",
-                // Header with relay selection button
-                div { class: "flex justify-between items-center",
-                    h1 { class: "text-3xl font-bold", "SSH Terminal" }
+        RequireAuth {
+            Layout {
+                div { class: "flex flex-col h-full p-4 gap-4",
+                    // Header with relay selection button
+                    div { class: "flex justify-between items-center",
+                        h1 { class: "text-3xl font-bold", "SSH Terminal" }
 
-                    if active_relay().is_none() {
-                        label {
-                            r#for: "relay-drawer",
-                            class: "btn btn-primary",
-                            "Select Relay"
-                        }
-                    } else {
-                        div { class: "flex gap-2 items-center",
-                            span { class: "text-sm text-gray-600",
-                                "Connected to: "
-                                span { class: "font-semibold", "{active_relay().as_ref().unwrap()}" }
+                        if active_relay().is_none() {
+                            label {
+                                r#for: "relay-drawer",
+                                class: "btn btn-primary",
+                                "Select Relay"
                             }
-                            button {
-                                class: "btn btn-sm btn-ghost",
-                                onclick: move |_| active_relay.set(None),
-                                "Disconnect"
+                        } else {
+                            div { class: "flex gap-2 items-center",
+                                span { class: "text-sm text-gray-600",
+                                    "Connected to: "
+                                    span { class: "font-semibold", "{active_relay().as_ref().unwrap()}" }
+                                }
+                                button {
+                                    class: "btn btn-sm btn-ghost",
+                                    onclick: move |_| active_relay.set(None),
+                                    "Disconnect"
+                                }
                             }
                         }
                     }
-                }
 
-                // Terminal
-                div { class: "flex-1 min-h-0",
-                    Terminal {
-                        id: "main-terminal",
-                        fit: true,
-                        web_links: true,
-                        webgl: true,
-                        relay_name: active_relay(),
+                    // Terminal
+                    div { class: "flex-1 min-h-0 max-w-full",
+                        Terminal {
+                            id: "main-terminal",
+                            fit: true,
+                            web_links: true,
+                            webgl: true,
+                            relay_name: active_relay(),
+                        }
                     }
-                }
 
-                // Relay Drawer
-                RelayDrawer {
-                    on_select: move |relay_name: String| {
-                        #[cfg(feature = "web")]
-                        web_sys::console::log_1(&format!("Dashboard: Selected relay: {}", relay_name).into());
-                        active_relay.set(Some(relay_name));
+                    // Relay Drawer
+                    RelayDrawer {
+                        on_select: move |relay_name: String| {
+                            #[cfg(feature = "web")]
+                            web_sys::console::log_1(&format!("Dashboard: Selected relay: {}", relay_name).into());
+                            active_relay.set(Some(relay_name));
+                        }
                     }
                 }
             }

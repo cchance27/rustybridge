@@ -100,9 +100,28 @@ impl ServerHandler {
         Ok(())
     }
 
-    /// Initialise the echo shell, including a fresh TUI instance and remote terminal.
+    /// Initialise the shell, including a fresh TUI instance and remote terminal.
     async fn init_shell(&mut self) -> Result<(), russh::Error> {
-        let (app, app_name): (Box<dyn tui_core::TuiApp>, &str) = if self.username.as_deref() == Some("admin") {
+        let username = self.username.as_deref().unwrap_or("unknown");
+
+        // FIXME: this feels like it should be a helper  that we can call from anywhere since its useful for TUI and Web, etc
+        // Check for management access via claims
+        // Users with any *:view claim or wildcard get management access
+        let can_manage = if let Ok(handle) = state_store::server_db().await {
+            let pool = handle.into_pool();
+            if let Ok(claims) = state_store::get_user_claims(&pool, username).await {
+                claims.iter().any(|c| {
+                    let claim_str = c.to_string();
+                    claim_str == "*" || claim_str.ends_with(":view")
+                })
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        let (app, app_name): (Box<dyn tui_core::TuiApp>, &str) = if can_manage {
             (
                 Box::new(
                     crate::create_management_app(None)
