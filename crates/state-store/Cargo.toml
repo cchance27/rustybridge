@@ -5,7 +5,7 @@ edition.workspace = true
 
 [dependencies]
 sqlx = { workspace = true, features = ["runtime-tokio", "sqlite", "macros"] }
-tokio = { workspace = true, features = ["fs"] }
+tokio = { workspace = true, features = ["fs", "sync"] }
 tracing = { workspace = true }
 url = { workspace = true }
 dirs = { workspace = true }

@@ -6,6 +6,7 @@ use rb_types::{
     RelayInfo, web::{PrincipalKind, RelayAclPrincipal}
 };
 use sqlx::{Row, SqlitePool, migrate::Migrator, prelude::FromRow, sqlite::SqlitePoolOptions};
+use tokio::sync::OnceCell;
 use tracing::warn;
 use url::Url;
 
@@ -22,6 +23,9 @@ static SERVER_MIGRATOR: Migrator = sqlx::migrate!("./migrations/server");
 
 const CLIENT_DB_ENV: &str = "RB_CLIENT_DB_URL";
 const SERVER_DB_ENV: &str = "RB_SERVER_DB_URL";
+
+static CLIENT_DB: OnceCell<DbHandle> = OnceCell::const_new();
+static SERVER_DB: OnceCell<DbHandle> = OnceCell::const_new();
 
 /// Return a human-friendly string describing where the client DB will live.
 /// Prefers a filesystem path when available, otherwise returns the configured URL.
@@ -46,6 +50,7 @@ pub fn server_db_dir() -> PathBuf {
     default_server_path().parent().unwrap_or(Path::new(".")).to_path_buf()
 }
 
+#[derive(Clone)]
 pub struct DbHandle {
     pub pool: SqlitePool,
     pub url: String,
@@ -735,14 +740,24 @@ pub async fn fetch_role_id_by_name(pool: &SqlitePool, name: &str) -> DbResult<Op
 
 /// Establish a pooled SQLite connection for client-side state (host keys, etc.).
 pub async fn client_db() -> DbResult<DbHandle> {
-    let location = resolve_client_location().await?;
-    init_pool(location).await
+    let handle = CLIENT_DB
+        .get_or_try_init(|| async {
+            let location = resolve_client_location().await?;
+            init_pool(location).await
+        })
+        .await?;
+    Ok(handle.clone())
 }
 
 /// Establish a pooled SQLite connection for server-side state (relay hosts, server options, etc.).
 pub async fn server_db() -> DbResult<DbHandle> {
-    let location = resolve_server_location().await?;
-    init_pool(location).await
+    let handle = SERVER_DB
+        .get_or_try_init(|| async {
+            let location = resolve_server_location().await?;
+            init_pool(location).await
+        })
+        .await?;
+    Ok(handle.clone())
 }
 
 /// Apply the client migrations to the provided pool.
