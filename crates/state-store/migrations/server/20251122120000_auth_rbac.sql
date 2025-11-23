@@ -57,5 +57,6 @@ SELECT u.id, r.id
 FROM users u, roles r
 WHERE r.name = 'Super Admin'
 AND (u.username = 'admin' OR u.id = (SELECT min(id) FROM users))
+ORDER BY CASE WHEN u.username = 'admin' THEN 0 ELSE 1 END
 LIMIT 1;
 

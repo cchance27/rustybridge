@@ -5,6 +5,7 @@ use std::{net::SocketAddr, time::Instant};
 use russh::{
     Channel, ChannelId, CryptoVec, Pty, server::{self as ssh_server, Auth, Session}
 };
+use secrecy::ExposeSecret;
 use tokio::sync::watch;
 use tracing::{info, warn};
 use tui_core::{AppAction, AppSession, backend::RemoteBackend, utils::desired_rect};
@@ -318,7 +319,22 @@ impl ServerHandler {
                                         for (k, (v, is_secure)) in raw.into_iter() {
                                             if is_secure {
                                                 match crate::secrets::decrypt_string_if_encrypted(&v) {
-                                                    Ok(val) => {
+                                                    Ok((val, is_legacy)) => {
+                                                        if is_legacy {
+                                                            warn!("Upgrading legacy v1 secret for relay option '{}'", k);
+                                                            if let Ok(new_enc) =
+                                                                crate::secrets::encrypt_string(crate::secrets::SecretString::new(Box::new(
+                                                                    val.expose_secret().to_string(),
+                                                                )))
+                                                            {
+                                                                let _ = sqlx::query("UPDATE relay_host_options SET value = ? WHERE relay_host_id = ? AND key = ?")
+                                                                    .bind(new_enc)
+                                                                    .bind(host.id)
+                                                                    .bind(&k)
+                                                                    .execute(&pool)
+                                                                    .await;
+                                                            }
+                                                        }
                                                         out.insert(k, val);
                                                     }
                                                     Err(err) => {

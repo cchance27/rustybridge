@@ -5,8 +5,9 @@ use server_core::secrets;
 #[test]
 fn decrypt_passthrough_for_plain_value() {
     let s = "plain-value";
-    let out = secrets::decrypt_string_if_encrypted(s).expect("ok");
+    let (out, is_legacy) = secrets::decrypt_string_if_encrypted(s).expect("ok");
     assert_eq!(&**out.expose_secret(), s);
+    assert!(!is_legacy); // Plain values should not be marked as legacy
 }
 
 #[test]

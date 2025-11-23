@@ -41,6 +41,11 @@ pub fn display_server_db_path() -> String {
     default_server_path().display().to_string()
 }
 
+/// Return the directory where the server database is stored
+pub fn server_db_dir() -> PathBuf {
+    default_server_path().parent().unwrap_or(Path::new(".")).to_path_buf()
+}
+
 pub struct DbHandle {
     pub pool: SqlitePool,
     pub url: String,
@@ -867,12 +872,52 @@ async fn init_pool(location: DbLocation) -> DbResult<DbHandle> {
             source: e,
         })?;
 
+    // Check and fix permissions on existing database files
+    if let Some(ref path) = location.path {
+        if !location.freshly_created {
+            if let Ok(changed) = ensure_secure_permissions(path) {
+                if changed {
+                    warn!(
+                        db = %path.display(),
+                        "Fixed insecure database file permissions to 0600"
+                    );
+                }
+            }
+        }
+    }
+
     Ok(DbHandle {
         pool,
         url: location.url,
-        path: location.path,
+        path: location.path.clone(),
         freshly_created: location.freshly_created,
     })
+}
+
+/// Ensure a file has secure permissions (0600 on Unix)
+/// Returns true if permissions were changed
+fn ensure_secure_permissions(path: &Path) -> DbResult<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let metadata = std::fs::metadata(path).map_err(|e| DbError::Io(e))?;
+        let current_mode = metadata.permissions().mode() & 0o777;
+
+        if current_mode != 0o600 {
+            let mut perms = metadata.permissions();
+            perms.set_mode(0o600);
+            std::fs::set_permissions(path, perms).map_err(|e| DbError::Io(e))?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    #[cfg(not(unix))]
+    {
+        // On non-Unix platforms, we can't check/set permissions
+        Ok(false)
+    }
 }
 
 fn default_client_path() -> PathBuf {

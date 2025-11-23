@@ -40,7 +40,7 @@ pub async fn list_relay_hosts() -> Result<Vec<RelayHostInfo>> {
 
         let decode_non_secret = |raw: &str| {
             server_core::secrets::decrypt_string_if_encrypted(raw)
-                .map(|s| s.expose_secret().to_string())
+                .map(|s| s.0.expose_secret().to_string())
                 .unwrap_or_else(|_| raw.to_string())
         };
 
@@ -50,7 +50,7 @@ pub async fn list_relay_hosts() -> Result<Vec<RelayHostInfo>> {
             if *is_secure {
                 server_core::secrets::decrypt_string_if_encrypted(auth_id)
                     .ok()
-                    .and_then(|s| s.expose_secret().parse::<i64>().ok())
+                    .and_then(|s| s.0.expose_secret().parse::<i64>().ok())
             } else {
                 auth_id.parse::<i64>().ok()
             }

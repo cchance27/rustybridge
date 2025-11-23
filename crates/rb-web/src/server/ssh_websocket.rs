@@ -109,7 +109,7 @@ async fn ensure_relay_websocket_permissions(relay_name: &str, auth: &WebAuthSess
 // This is a plain axum handler, not a Dioxus server function
 #[cfg(feature = "server")]
 pub async fn ssh_terminal_ws(Path(relay_name): Path<String>, auth: WebAuthSession, ws: WebSocketUpgrade) -> Response {
-    tracing::info!("SERVER: WebSocket SSH connection requested for relay: {}", relay_name);
+    tracing::info!("WebSocket SSH connection requested for relay: {}", relay_name);
 
     let username = match ensure_relay_websocket_permissions(&relay_name, &auth).await {
         Ok(username) => username,
@@ -119,7 +119,7 @@ pub async fn ssh_terminal_ws(Path(relay_name): Path<String>, auth: WebAuthSessio
     let relay_for_upgrade = relay_name.clone();
 
     ws.on_upgrade(move |socket| async move {
-        tracing::info!(relay = %relay_for_upgrade, user = %username, "SERVER: WebSocket upgrade callback started");
+        tracing::info!(relay = %relay_for_upgrade, user = %username, "WebSocket upgrade callback started");
         handle_socket(socket, relay_for_upgrade, username).await
     })
 }
@@ -140,7 +140,7 @@ pub async fn ssh_terminal_status(Path(relay_name): Path<String>, auth: WebAuthSe
 
 #[cfg(feature = "server")]
 async fn handle_socket(socket: WebSocket, relay_name: String, username: String) {
-    tracing::info!("SERVER: handle_socket started for relay: {} user: {}", relay_name, username);
+    tracing::info!("handle_socket started for relay: {} user: {}", relay_name, username);
 
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
@@ -220,7 +220,7 @@ async fn handle_socket(socket: WebSocket, relay_name: String, username: String) 
                 break;
             }
         }
-        tracing::info!("SERVER: WebSocket sender task exiting for relay: {}", relay_name_for_sender);
+        tracing::info!("WebSocket sender task exiting for relay: {}", relay_name_for_sender);
         let _ = ws_sender.close().await;
     });
 

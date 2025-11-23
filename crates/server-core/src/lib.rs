@@ -836,14 +836,28 @@ pub async fn delete_credential(name: &str) -> ServerResult<()> {
     let target_id_str = cred.id.to_string();
     for row in rows {
         let value: String = row.get("value");
-        let resolved = if crate::secrets::is_encrypted_marker(&value) {
+        let (resolved, is_legacy) = if crate::secrets::is_encrypted_marker(&value) {
             match crate::secrets::decrypt_string_if_encrypted(&value) {
-                Ok(s) => s,
+                Ok((s, legacy)) => (s, legacy),
                 Err(_) => continue,
             }
         } else {
-            crate::secrets::SecretString::new(Box::new(value))
+            (crate::secrets::SecretString::new(Box::new(value)), false)
         };
+
+        if is_legacy {
+            warn!("Upgrading legacy v1 secret for relay option 'auth.id' (credential check)");
+            let s: String = resolved.expose_secret().to_string();
+            let b: Box<String> = Box::new(s);
+            let ss: crate::secrets::SecretString = crate::secrets::SecretString::new(b);
+            if let Ok(new_enc) = crate::secrets::encrypt_string(ss) {
+                let _ = sqlx::query("UPDATE relay_host_options SET value = ? WHERE relay_host_id = ? AND key = 'auth.id'")
+                    .bind(new_enc)
+                    .bind(row.get::<i64, _>("relay_host_id"))
+                    .execute(&pool)
+                    .await;
+            }
+        }
         if resolved.expose_secret() == &target_id_str {
             return Err(ServerError::not_permitted(
                 format!("delete credential '{name}'"),
@@ -882,14 +896,27 @@ pub async fn list_credentials_with_assignments() -> ServerResult<Vec<(i64, Strin
     let mut assignments: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
 
     for (host_id, value) in opts_rows {
-        let resolved = if crate::secrets::is_encrypted_marker(&value) {
+        let (resolved, is_legacy) = if crate::secrets::is_encrypted_marker(&value) {
             match crate::secrets::decrypt_string_if_encrypted(&value) {
-                Ok(s) => s,
+                Ok((s, legacy)) => (s, legacy),
                 Err(_) => continue,
             }
         } else {
-            crate::secrets::SecretString::new(Box::new(value))
+            (crate::secrets::SecretString::new(Box::new(value)), false)
         };
+
+        if is_legacy {
+            warn!("Upgrading legacy v1 secret for relay option 'auth.id' (list assignments)");
+            if let Ok(new_enc) =
+                crate::secrets::encrypt_string(secrecy::SecretBox::<String>::new(Box::new(resolved.expose_secret().to_string())))
+            {
+                let _ = sqlx::query("UPDATE relay_host_options SET value = ? WHERE relay_host_id = ? AND key = 'auth.id'")
+                    .bind(new_enc)
+                    .bind(host_id)
+                    .execute(&pool)
+                    .await;
+            }
+        }
 
         let cred_id_str = resolved.expose_secret().clone();
         if let Some(host_name) = host_map.get(&host_id) {
@@ -1141,7 +1168,20 @@ async fn load_or_create_host_key(pool: &SqlitePool) -> ServerResult<PrivateKey> 
     {
         let raw: String = row.get("value");
         // Host key may be stored encrypted; decrypt if needed
-        let pem = crate::secrets::decrypt_string_if_encrypted(&raw)?;
+        let (pem, is_legacy) = crate::secrets::decrypt_string_if_encrypted(&raw)?;
+        if is_legacy {
+            warn!("Upgrading legacy v1 server host key");
+            let s: String = pem.expose_secret().to_string();
+            let b: Box<String> = Box::new(s);
+            let ss: secrecy::SecretBox<String> = secrecy::SecretBox::new(b);
+            if let Ok(new_enc) = crate::secrets::encrypt_string(ss) {
+                let _ = sqlx::query("INSERT OR REPLACE INTO server_options (key, value) VALUES (?, ?)")
+                    .bind(KEY_NAME)
+                    .bind(new_enc)
+                    .execute(pool)
+                    .await;
+            }
+        }
         // If it wasn't encrypted before and a master secret is configured, upgrade to encrypted at rest
         if !crate::secrets::is_encrypted_marker(&raw) {
             if let Ok(()) = crate::secrets::require_master_secret() {
@@ -1227,19 +1267,32 @@ pub async fn create_management_app_with_tab(
     // Build assigned counts by scanning relay_host_options auth.id
     use secrecy::ExposeSecret as _;
     let mut counts: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
-    let rows = sqlx::query("SELECT value FROM relay_host_options WHERE key = 'auth.id'")
+    let rows = sqlx::query("SELECT relay_host_id, value FROM relay_host_options WHERE key = 'auth.id'")
         .fetch_all(&pool)
         .await?;
     for row in rows {
         let value: String = row.get("value");
-        let id_str = if crate::secrets::is_encrypted_marker(&value) {
+        let (id_str, is_legacy) = if crate::secrets::is_encrypted_marker(&value) {
             match crate::secrets::decrypt_string_if_encrypted(&value) {
-                Ok(s) => s,
+                Ok((s, legacy)) => (s, legacy),
                 Err(_) => continue,
             }
         } else {
-            crate::secrets::SecretString::new(Box::new(value))
+            (crate::secrets::SecretString::new(Box::new(value)), false)
         };
+
+        if is_legacy {
+            warn!("Upgrading legacy v1 secret for relay option 'auth.id' (management app)");
+            if let Ok(new_enc) =
+                crate::secrets::encrypt_string(secrecy::SecretBox::<String>::new(Box::new(id_str.expose_secret().to_string())))
+            {
+                let _ = sqlx::query("UPDATE relay_host_options SET value = ? WHERE relay_host_id = ? AND key = 'auth.id'")
+                    .bind(new_enc)
+                    .bind(row.get::<i64, _>("relay_host_id"))
+                    .execute(&pool)
+                    .await;
+            }
+        }
         if let Ok(id) = id_str.expose_secret().parse::<i64>() {
             *counts.entry(id).or_insert(0) += 1;
         }
@@ -1271,7 +1324,7 @@ pub async fn create_management_app_with_tab(
         let raw: String = row.get("value");
         let resolved = if crate::secrets::is_encrypted_marker(&raw) {
             match crate::secrets::decrypt_string_if_encrypted(&raw) {
-                Ok(s) => s,
+                Ok((s, _)) => s, // Skip upgrade - complex context without direct ID access
                 Err(_) => continue,
             }
         } else {
@@ -1502,7 +1555,7 @@ pub async fn handle_management_action(action: tui_core::AppAction) -> ServerResu
                 let raw: String = row.get("value");
                 let dec = if crate::secrets::is_encrypted_marker(&raw) {
                     match crate::secrets::decrypt_string_if_encrypted(&raw) {
-                        Ok(s) => s,
+                        Ok((s, _)) => s,
                         Err(_) => crate::secrets::SecretString::new(Box::new("".to_string())),
                     }
                 } else {
@@ -1666,14 +1719,28 @@ pub async fn delete_credential_by_id(id: i64) -> ServerResult<()> {
     let target_id_str = id.to_string();
     for row in rows {
         let value: String = row.get("value");
-        let resolved = if crate::secrets::is_encrypted_marker(&value) {
+        let (resolved, is_legacy) = if crate::secrets::is_encrypted_marker(&value) {
             match crate::secrets::decrypt_string_if_encrypted(&value) {
-                Ok(s) => s,
+                Ok((s, legacy)) => (s, legacy),
                 Err(_) => continue,
             }
         } else {
-            crate::secrets::SecretString::new(Box::new(value))
+            (crate::secrets::SecretString::new(Box::new(value)), false)
         };
+
+        if is_legacy {
+            warn!("Upgrading legacy v1 secret for relay option 'auth.id' (credential check)");
+            let s: String = resolved.expose_secret().to_string();
+            let b: Box<String> = Box::new(s);
+            let ss: crate::secrets::SecretString = crate::secrets::SecretString::new(b);
+            if let Ok(new_enc) = crate::secrets::encrypt_string(ss) {
+                let _ = sqlx::query("UPDATE relay_host_options SET value = ? WHERE relay_host_id = ? AND key = 'auth.id'")
+                    .bind(new_enc)
+                    .bind(row.get::<i64, _>("relay_host_id"))
+                    .execute(&pool)
+                    .await;
+            }
+        }
         if resolved.expose_secret() == &target_id_str {
             let host_id: i64 = row.get("relay_host_id");
             let host = state_store::fetch_relay_host_by_id(&pool, host_id).await?;

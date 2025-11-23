@@ -196,7 +196,19 @@ async fn authenticate_relay_session<H: client::Handler>(
                 if cred.kind != "password" {
                     return Err(crate::ServerError::Other("credential is not of kind password".to_string()));
                 }
-                let pt = crate::secrets::decrypt_secret(&cred.salt, &cred.nonce, &cred.secret)?;
+                let (pt, is_legacy) = crate::secrets::decrypt_secret(&cred.salt, &cred.nonce, &cred.secret)?;
+                if is_legacy {
+                    warn!("Upgrading legacy v1 credential '{}' (password)", id);
+                    if let Ok(blob) = crate::secrets::encrypt_secret(pt.expose_secret()) {
+                        let _ = sqlx::query("UPDATE relay_credentials SET salt = ?, nonce = ?, secret = ? WHERE id = ?")
+                            .bind(blob.salt)
+                            .bind(blob.nonce)
+                            .bind(blob.ciphertext)
+                            .bind(id)
+                            .execute(&pool)
+                            .await;
+                    }
+                }
                 String::from_utf8(pt.expose_secret().clone())
                     .map_err(|_| crate::ServerError::Crypto("credential secret is not valid UTF-8".to_string()))?
             } else {
@@ -220,7 +232,19 @@ async fn authenticate_relay_session<H: client::Handler>(
                 if cred.kind != "ssh_key" {
                     return Err(crate::ServerError::Other("credential is not of kind ssh_key".to_string()));
                 }
-                let pt = crate::secrets::decrypt_secret(&cred.salt, &cred.nonce, &cred.secret)?;
+                let (pt, is_legacy) = crate::secrets::decrypt_secret(&cred.salt, &cred.nonce, &cred.secret)?;
+                if is_legacy {
+                    warn!("Upgrading legacy v1 credential '{}' (ssh_key)", id);
+                    if let Ok(blob) = crate::secrets::encrypt_secret(pt.expose_secret()) {
+                        let _ = sqlx::query("UPDATE relay_credentials SET salt = ?, nonce = ?, secret = ? WHERE id = ?")
+                            .bind(blob.salt)
+                            .bind(blob.nonce)
+                            .bind(blob.ciphertext)
+                            .bind(id)
+                            .execute(&pool)
+                            .await;
+                    }
+                }
                 let json: serde_json::Value = serde_json::from_slice(pt.expose_secret()).map_err(crate::ServerError::Json)?;
                 let pk_str = json
                     .get("private_key")
@@ -287,7 +311,19 @@ async fn authenticate_relay_session<H: client::Handler>(
                     if let Some(cred) = state_store::get_relay_credential_by_id(&pool, id).await?
                         && cred.kind == "agent"
                     {
-                        let pt = crate::secrets::decrypt_secret(&cred.salt, &cred.nonce, &cred.secret)?;
+                        let (pt, is_legacy) = crate::secrets::decrypt_secret(&cred.salt, &cred.nonce, &cred.secret)?;
+                        if is_legacy {
+                            warn!("Upgrading legacy v1 credential '{}' (agent)", id);
+                            if let Ok(blob) = crate::secrets::encrypt_secret(pt.expose_secret()) {
+                                let _ = sqlx::query("UPDATE relay_credentials SET salt = ?, nonce = ?, secret = ? WHERE id = ?")
+                                    .bind(blob.salt)
+                                    .bind(blob.nonce)
+                                    .bind(blob.ciphertext)
+                                    .bind(id)
+                                    .execute(&pool)
+                                    .await;
+                            }
+                        }
                         let json: serde_json::Value = serde_json::from_slice(pt.expose_secret())?;
                         let target_fp = json.get("fingerprint").and_then(|v| v.as_str()).map(|s| s.to_string());
                         let target_pk = json.get("public_key").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -372,7 +408,20 @@ pub async fn connect_to_relay_channel(
     let mut options = std::collections::HashMap::new();
     for (k, (v, is_secure)) in options_map {
         if is_secure {
-            if let Ok(decrypted) = crate::secrets::decrypt_string_if_encrypted(&v) {
+            if let Ok((decrypted, is_legacy)) = crate::secrets::decrypt_string_if_encrypted(&v) {
+                if is_legacy {
+                    warn!("Upgrading legacy v1 secret for relay option '{}'", k);
+                    if let Ok(new_enc) =
+                        crate::secrets::encrypt_string(secrecy::SecretBox::<String>::new(Box::new(decrypted.expose_secret().to_string())))
+                    {
+                        let _ = sqlx::query("UPDATE relay_host_options SET value = ? WHERE relay_host_id = ? AND key = ?")
+                            .bind(new_enc)
+                            .bind(relay.id)
+                            .bind(&k)
+                            .execute(&pool)
+                            .await;
+                    }
+                }
                 options.insert(k, decrypted);
             } else {
                 options.insert(k, crate::secrets::SecretString::new(Box::new(v)));
@@ -417,7 +466,20 @@ pub async fn connect_to_relay_local(relay_name: &str, base_username: &str) -> Re
     let mut options = std::collections::HashMap::new();
     for (k, (v, is_secure)) in options_map {
         if is_secure {
-            if let Ok(decrypted) = crate::secrets::decrypt_string_if_encrypted(&v) {
+            if let Ok((decrypted, is_legacy)) = crate::secrets::decrypt_string_if_encrypted(&v) {
+                if is_legacy {
+                    warn!("Upgrading legacy v1 secret for relay option '{}'", k);
+                    if let Ok(new_enc) =
+                        crate::secrets::encrypt_string(secrecy::SecretBox::<String>::new(Box::new(decrypted.expose_secret().to_string())))
+                    {
+                        let _ = sqlx::query("UPDATE relay_host_options SET value = ? WHERE relay_host_id = ? AND key = ?")
+                            .bind(new_enc)
+                            .bind(relay.id)
+                            .bind(&k)
+                            .execute(&pool)
+                            .await;
+                    }
+                }
                 options.insert(k, decrypted);
             } else {
                 // Fallback if decryption fails or it wasn't encrypted but marked secure
