@@ -13,7 +13,7 @@ use serde::Serialize;
 #[cfg(feature = "server")]
 use server_core::relay::connect_to_relay_channel;
 #[cfg(feature = "server")]
-use state_store::{fetch_relay_host_by_name, server_db, user_has_relay_access};
+use state_store::{fetch_relay_host_by_name, user_has_relay_access};
 
 #[cfg(feature = "server")]
 use crate::server::auth::guards::{WebAuthSession, ensure_authenticated};
@@ -61,7 +61,11 @@ struct SshStatusResponse {
 }
 
 #[cfg(feature = "server")]
-async fn ensure_relay_websocket_permissions(relay_name: &str, auth: &WebAuthSession) -> Result<String, SshAccessError> {
+async fn ensure_relay_websocket_permissions(
+    relay_name: &str,
+    auth: &WebAuthSession,
+    pool: &sqlx::SqlitePool,
+) -> Result<String, SshAccessError> {
     // Today any authenticated user may open relays they have been explicitly granted via ACLs.
     // If we decide to add a dedicated "relay access" claim in the future, this is the choke point.
     let user = ensure_authenticated(auth).map_err(|err| {
@@ -69,14 +73,7 @@ async fn ensure_relay_websocket_permissions(relay_name: &str, auth: &WebAuthSess
         SshAccessError::Unauthorized
     })?;
 
-    let db = server_db().await.map_err(|err| {
-        tracing::error!(relay = %relay_name, "Failed to open server DB: {err}");
-        SshAccessError::Internal
-    })?;
-
-    let pool = db.into_pool();
-
-    let relay = fetch_relay_host_by_name(&pool, relay_name)
+    let relay = fetch_relay_host_by_name(pool, relay_name)
         .await
         .map_err(|err| {
             tracing::error!(relay = %relay_name, "Failed to fetch relay host: {err}");
@@ -87,7 +84,7 @@ async fn ensure_relay_websocket_permissions(relay_name: &str, auth: &WebAuthSess
             SshAccessError::RelayNotFound
         })?;
 
-    let has_access = user_has_relay_access(&pool, &user.username, relay.id).await.map_err(|err| {
+    let has_access = user_has_relay_access(pool, &user.username, relay.id).await.map_err(|err| {
         tracing::error!(user = %user.username, relay = %relay_name, "Failed to check relay ACL: {err}");
         SshAccessError::Internal
     })?;
@@ -103,10 +100,15 @@ async fn ensure_relay_websocket_permissions(relay_name: &str, auth: &WebAuthSess
 // For attach addon, we use raw binary WebSocket (not Dioxus typed WebSocket)
 // This is a plain axum handler, not a Dioxus server function
 #[cfg(feature = "server")]
-pub async fn ssh_terminal_ws(Path(relay_name): Path<String>, auth: WebAuthSession, ws: WebSocketUpgrade) -> Response {
+pub async fn ssh_terminal_ws(
+    Path(relay_name): Path<String>,
+    auth: WebAuthSession,
+    axum::Extension(pool): axum::Extension<sqlx::SqlitePool>,
+    ws: WebSocketUpgrade,
+) -> Response {
     tracing::info!("WebSocket SSH connection requested for relay: {}", relay_name);
 
-    let username = match ensure_relay_websocket_permissions(&relay_name, &auth).await {
+    let username = match ensure_relay_websocket_permissions(&relay_name, &auth, &pool).await {
         Ok(username) => username,
         Err(err) => return err.into_http_response(),
     };
@@ -120,8 +122,12 @@ pub async fn ssh_terminal_ws(Path(relay_name): Path<String>, auth: WebAuthSessio
 }
 
 #[cfg(feature = "server")]
-pub async fn ssh_terminal_status(Path(relay_name): Path<String>, auth: WebAuthSession) -> Response {
-    match ensure_relay_websocket_permissions(&relay_name, &auth).await {
+pub async fn ssh_terminal_status(
+    Path(relay_name): Path<String>,
+    auth: WebAuthSession,
+    axum::Extension(pool): axum::Extension<sqlx::SqlitePool>,
+) -> Response {
+    match ensure_relay_websocket_permissions(&relay_name, &auth, &pool).await {
         Ok(_) => {
             let body = SshStatusResponse {
                 ok: true,

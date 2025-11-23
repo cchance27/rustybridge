@@ -12,12 +12,11 @@ pub use guards::*;
 use rb_types::auth::{AuthUserInfo, LoginRequest, LoginResponse};
 pub use types::*;
 
-#[post("/api/auth/login", auth: WebAuthSession)]
+#[post("/api/auth/login", 
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>)]
 pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
-    use state_store::{get_user_claims, server_db};
-
-    let db = server_db().await.map_err(|e| anyhow::anyhow!(e.to_string()))?;
-    let pool = db.into_pool();
+    use state_store::get_user_claims;
 
     // Authenticate user
     let login_target = server_core::auth::parse_login_target(&request.username);

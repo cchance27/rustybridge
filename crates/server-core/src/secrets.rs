@@ -89,7 +89,7 @@ fn get_or_create_master_salt() -> ServerResult<Vec<u8>> {
     };
 
     if path.exists() {
-        let content = fs::read(&path).map_err(|e| ServerError::Io(e))?;
+        let content = fs::read(&path).map_err(ServerError::Io)?;
         if content.len() != 32 {
             return Err(ServerError::Crypto(format!(
                 "Existing salt file {} is not 32 bytes",
@@ -98,20 +98,19 @@ fn get_or_create_master_salt() -> ServerResult<Vec<u8>> {
         }
 
         // Check and fix permissions on existing salt file
-        if let Ok(changed) = ensure_secure_permissions(&path) {
-            if changed {
+        if let Ok(changed) = ensure_secure_permissions(&path)
+            && changed {
                 tracing::warn!(
                     salt_file = %path.display(),
                     "Fixed insecure salt file permissions to 0600"
                 );
             }
-        }
 
         Ok(content)
     } else {
         // Create parent directory if needed
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| ServerError::Io(e))?;
+            fs::create_dir_all(parent).map_err(ServerError::Io)?;
         }
 
         let salt = random_bytes(32);
@@ -122,8 +121,8 @@ fn get_or_create_master_salt() -> ServerResult<Vec<u8>> {
             use std::os::unix::fs::OpenOptionsExt;
             let mut options = fs::OpenOptions::new();
             options.create_new(true).write(true).mode(0o600);
-            let mut file = options.open(&path).map_err(|e| ServerError::Io(e))?;
-            std::io::Write::write_all(&mut file, &salt).map_err(|e| ServerError::Io(e))?;
+            let mut file = options.open(&path).map_err(ServerError::Io)?;
+            std::io::Write::write_all(&mut file, &salt).map_err(ServerError::Io)?;
         }
 
         #[cfg(not(unix))]
@@ -142,13 +141,13 @@ fn ensure_secure_permissions(path: &Path) -> ServerResult<bool> {
     {
         use std::os::unix::fs::PermissionsExt;
 
-        let metadata = fs::metadata(path).map_err(|e| ServerError::Io(e))?;
+        let metadata = fs::metadata(path).map_err(ServerError::Io)?;
         let current_mode = metadata.permissions().mode() & 0o777;
 
         if current_mode != 0o600 {
             let mut perms = metadata.permissions();
             perms.set_mode(0o600);
-            fs::set_permissions(path, perms).map_err(|e| ServerError::Io(e))?;
+            fs::set_permissions(path, perms).map_err(ServerError::Io)?;
             return Ok(true);
         }
         Ok(false)

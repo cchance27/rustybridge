@@ -15,7 +15,8 @@ fn ensure_user_claim(auth: &WebAuthSession, level: ClaimLevel) -> Result<(), Ser
 
 #[get(
     "/api/users",
-    auth: WebAuthSession
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>
 )]
 pub async fn list_users() -> Result<Vec<UserGroupInfo>, ServerFnError> {
     ensure_user_claim(&auth, ClaimLevel::View)?;
@@ -23,9 +24,6 @@ pub async fn list_users() -> Result<Vec<UserGroupInfo>, ServerFnError> {
 
     use server_core::{list_user_groups_server, list_users as list_users_core};
     use state_store::{fetch_relay_access_principals, get_user_claims, list_relay_hosts};
-
-    let db = state_store::server_db().await.map_err(|e| ServerFnError::new(e.to_string()))?;
-    let pool = db.into_pool();
 
     let usernames = list_users_core().await.map_err(|e| ServerFnError::new(e.to_string()))?;
 

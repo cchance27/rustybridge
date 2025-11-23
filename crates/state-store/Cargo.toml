@@ -3,6 +3,11 @@ name = "state-store"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = ["client", "server"]
+client = []
+server = []
+
 [dependencies]
 sqlx = { workspace = true, features = ["runtime-tokio", "sqlite", "macros"] }
 tokio = { workspace = true, features = ["fs", "sync"] }

@@ -13,15 +13,13 @@ fn ensure_group_claim(auth: &WebAuthSession, level: ClaimLevel) -> Result<(), Se
 
 #[get(
     "/api/groups",
-    auth: WebAuthSession
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>
 )]
 pub async fn list_groups() -> Result<Vec<GroupInfo>, ServerFnError> {
     ensure_group_claim(&auth, ClaimLevel::View)?;
     use server_core::{get_group_claims_server, list_group_members_server, list_groups};
     use state_store::{fetch_relay_access_principals, list_relay_hosts};
-
-    let db = state_store::server_db().await.map_err(|e| ServerFnError::new(e.to_string()))?;
-    let pool = db.into_pool();
 
     let group_names = list_groups().await.map_err(|e| ServerFnError::new(e.to_string()))?;
 

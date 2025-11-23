@@ -6,7 +6,7 @@ edition.workspace = true
 [dependencies]
 ratatui.workspace = true
 russh.workspace = true
-state-store = { path = "../state-store" }
+state-store = { path = "../state-store", features = ["server"] }
 ssh-core = { path = "../ssh-core" }
 rb-types = { path = "../rb-types", features = ["sqlx"] }
 thiserror.workspace = true

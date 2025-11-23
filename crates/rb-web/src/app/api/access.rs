@@ -1,3 +1,5 @@
+#[cfg(feature = "server")]
+use axum::Extension;
 use dioxus::prelude::*;
 #[cfg(feature = "server")]
 use rb_types::auth::{ClaimLevel, ClaimType};
@@ -8,32 +10,25 @@ use crate::server::auth::guards::{WebAuthSession, ensure_claim};
 
 #[get(
     "/api/relays/{relay_id}/access",
-    auth: WebAuthSession
+    auth: WebAuthSession,
+    pool: Extension<sqlx::SqlitePool>
 )]
 pub async fn list_relay_access(relay_id: i64) -> Result<Vec<RelayAccessPrincipal>, ServerFnError> {
-    #[cfg(feature = "server")]
-    {
-        ensure_claim(&auth, &ClaimType::Relays(ClaimLevel::View)).map_err(|e| ServerFnError::new(e.to_string()))?;
-        use rb_types::web::RelayAccessPrincipal;
-        use state_store::fetch_relay_access_principals;
+    ensure_claim(&auth, &ClaimType::Relays(ClaimLevel::View)).map_err(|e| ServerFnError::new(e.to_string()))?;
+    use rb_types::web::RelayAccessPrincipal;
+    use state_store::fetch_relay_access_principals;
 
-        let db = state_store::server_db().await.map_err(|e| ServerFnError::new(e.to_string()))?;
-        let pool = db.into_pool();
+    let principals = fetch_relay_access_principals(&pool, relay_id)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
 
-        let principals = fetch_relay_access_principals(&pool, relay_id)
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-        Ok(principals
-            .into_iter()
-            .map(|p| RelayAccessPrincipal {
-                kind: p.kind,
-                name: p.name,
-            })
-            .collect())
-    }
-    #[cfg(not(feature = "server"))]
-    Err(ServerFnError::new("Not implemented"))
+    Ok(principals
+        .into_iter()
+        .map(|p| RelayAccessPrincipal {
+            kind: p.kind,
+            name: p.name,
+        })
+        .collect())
 }
 
 #[post(
@@ -44,8 +39,7 @@ pub async fn grant_relay_access(relay_id: i64, req: GrantAccessRequest) -> Resul
     ensure_claim(&auth, &ClaimType::Relays(ClaimLevel::Edit)).map_err(|e| ServerFnError::new(e.to_string()))?;
     use state_store::grant_relay_access_principal;
 
-    let db = state_store::server_db().await.map_err(|e| ServerFnError::new(e.to_string()))?;
-    let pool = db.into_pool();
+    let Extension(pool) = FullstackContext::extract().await.map_err(|e| ServerFnError::new(e.to_string()))?;
 
     grant_relay_access_principal(&pool, relay_id, &req.principal_kind, &req.principal_name)
         .await
@@ -62,8 +56,7 @@ pub async fn revoke_relay_access(relay_id: i64, kind: PrincipalKind, name: Strin
     ensure_claim(&auth, &ClaimType::Relays(ClaimLevel::Edit)).map_err(|e| ServerFnError::new(e.to_string()))?;
     use state_store::revoke_relay_access_principal;
 
-    let db = state_store::server_db().await.map_err(|e| ServerFnError::new(e.to_string()))?;
-    let pool = db.into_pool();
+    let Extension(pool) = FullstackContext::extract().await.map_err(|e| ServerFnError::new(e.to_string()))?;
 
     revoke_relay_access_principal(&pool, relay_id, &kind, &name)
         .await

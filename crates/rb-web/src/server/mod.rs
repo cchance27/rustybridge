@@ -48,6 +48,7 @@ pub async fn run_web_server(config: WebServerConfig, app: fn() -> Element) -> an
             axum::routing::get(ssh_websocket::ssh_terminal_status),
         )
         .serve_dioxus_application(ServeConfig::new(), app)
+        .layer(axum::Extension(pool.clone()))
         .layer(auth_layer)
         .layer(session_layer)
         .into_make_service();

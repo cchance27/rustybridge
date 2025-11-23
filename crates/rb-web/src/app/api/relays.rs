@@ -18,15 +18,12 @@ fn ensure_relay_claim(auth: &WebAuthSession, level: ClaimLevel) -> Result<()> {
 /// List all relay hosts with credential and hostkey status
 #[get(
     "/api/relays",
-    auth: WebAuthSession
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>
 )]
 pub async fn list_relay_hosts() -> Result<Vec<RelayHostInfo>> {
     ensure_relay_claim(&auth, ClaimLevel::View)?;
     let hosts = server_core::list_hosts().await.map_err(|e| anyhow!("{}", e))?;
-
-    // Get database connection for querying options
-    let db = state_store::server_db().await.map_err(|e| anyhow!("{}", e))?;
-    let pool = db.into_pool();
 
     let mut result = Vec::new();
 
@@ -163,16 +160,14 @@ pub async fn create_relay_host(req: CreateRelayRequest) -> Result<()> {
 /// Update an existing relay host
 #[put(
     "/api/relays/{id}",
-    auth: WebAuthSession
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>
 )]
 pub async fn update_relay_host(id: i64, req: UpdateRelayRequest) -> Result<()> {
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
     // Parse endpoint
     let (ip, port_str) = req.endpoint.rsplit_once(':').ok_or_else(|| anyhow!("Invalid endpoint format"))?;
     let port = port_str.parse::<i64>().map_err(|_| anyhow!("Invalid port"))?;
-
-    let db = state_store::server_db().await.map_err(|e| anyhow!("{}", e))?;
-    let pool = db.into_pool();
 
     state_store::update_relay_host(&pool, id, &req.name, ip, port)
         .await
@@ -184,12 +179,11 @@ pub async fn update_relay_host(id: i64, req: UpdateRelayRequest) -> Result<()> {
 /// Delete a relay host
 #[delete(
     "/api/relays/{id}",
-    auth: WebAuthSession
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>
 )]
 pub async fn delete_relay_host(id: i64) -> Result<()> {
     ensure_relay_claim(&auth, ClaimLevel::Delete)?;
-    let db = state_store::server_db().await.map_err(|e| anyhow!("{}", e))?;
-    let pool = db.into_pool();
 
     // Delete by ID, not name
     state_store::delete_relay_host_by_id(&pool, id)
@@ -201,13 +195,11 @@ pub async fn delete_relay_host(id: i64) -> Result<()> {
 /// Assign a credential to a relay host
 #[post(
     "/api/relays/{id}/credential/{credential_id}",
-    auth: WebAuthSession
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>
 )]
 pub async fn assign_relay_credential(id: i64, credential_id: i64) -> Result<()> {
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
-    // Get relay host name from ID
-    let db = state_store::server_db().await.map_err(|e| anyhow!("{}", e))?;
-    let pool = db.into_pool();
 
     let host = state_store::fetch_relay_host_by_id(&pool, id)
         .await
@@ -229,13 +221,11 @@ pub async fn assign_relay_credential(id: i64, credential_id: i64) -> Result<()> 
 /// Clear credential assignment from a relay host
 #[delete(
     "/api/relays/{id}/credential",
-    auth: WebAuthSession
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>
 )]
 pub async fn clear_relay_credential(id: i64) -> Result<()> {
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
-    // Get relay host name from ID
-    let db = state_store::server_db().await.map_err(|e| anyhow!("{}", e))?;
-    let pool = db.into_pool();
 
     let host = state_store::fetch_relay_host_by_id(&pool, id)
         .await
@@ -294,13 +284,11 @@ pub async fn store_relay_hostkey(id: i64, key_pem: String) -> Result<()> {
 /// Set custom authentication for a relay (inline, not using a saved credential)
 #[post(
     "/api/relays/{id}/auth/custom",
-    auth: WebAuthSession
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>
 )]
 pub async fn set_custom_auth(id: i64, req: CustomAuthRequest) -> Result<()> {
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
-    // Get relay name from ID
-    let db = state_store::server_db().await.map_err(|e| anyhow!("{}", e))?;
-    let pool = db.into_pool();
     let relay = state_store::fetch_relay_host_by_id(&pool, id)
         .await
         .map_err(|e| anyhow!("{}", e))?
@@ -333,13 +321,12 @@ pub async fn set_custom_auth(id: i64, req: CustomAuthRequest) -> Result<()> {
 /// Clear all authentication settings from a relay
 #[delete(
     "/api/relays/{id}/auth",
-    auth: WebAuthSession
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>
 )]
 pub async fn clear_relay_auth(id: i64) -> Result<()> {
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
-    // Get relay name from ID
-    let db = state_store::server_db().await.map_err(|e| anyhow!("{}", e))?;
-    let pool = db.into_pool();
+
     let relay = state_store::fetch_relay_host_by_id(&pool, id)
         .await
         .map_err(|e| anyhow!("{}", e))?

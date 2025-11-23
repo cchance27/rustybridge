@@ -19,7 +19,7 @@ tui-core.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 rb-types = { path = "../rb-types" }
-state-store = { path = "../state-store" }
+state-store = { path = "../state-store", features = ["client", "server"] }
 rb-web = { path = "../rb-web", features = ["server"] }
 
 [dev-dependencies]
