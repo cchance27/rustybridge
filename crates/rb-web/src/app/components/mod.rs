@@ -1,5 +1,6 @@
 pub mod auth;
 mod avatar_dropdown;
+mod credential_badge;
 mod credential_form;
 mod fab;
 mod footer;
@@ -18,6 +19,7 @@ mod toast;
 
 pub use auth::{Protected, RequireAuth};
 pub use avatar_dropdown::*;
+pub use credential_badge::*;
 pub use credential_form::*;
 pub use fab::*;
 pub use footer::*;

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use dioxus::prelude::*;
+use rb_types::validation::ValidationError;
 
 #[component]
 pub fn CredentialForm(
@@ -20,13 +21,14 @@ pub fn CredentialForm(
     on_public_key_change: EventHandler<String>,
     passphrase: String,
     on_passphrase_change: EventHandler<String>,
-    validation_errors: HashMap<String, String>,
+    validation_errors: HashMap<String, ValidationError>,
     show_hint: bool,
     is_editing: bool,
     has_existing_password: bool,
     has_existing_private_key: bool,
     has_existing_public_key: bool,
     show_type_selector: bool,
+    #[props(default = true)] original_password_required: bool,
 ) -> Element {
     rsx! {
         div { class: "flex flex-col gap-4",
@@ -90,7 +92,11 @@ pub fn CredentialForm(
                             }
                         }
                         if has_existing_password && is_editing {
-                            span { class: "badge badge-warning badge-xs", "Stored • not shown" }
+                            if original_password_required {
+                                span { class: "badge badge-warning badge-xs", "Stored • not shown" }
+                            } else {
+                                span { class: "badge badge-info badge-xs", "Optional (not required previously)" }
+                            }
                         }
                     }
                     // Show password input only if password_required is true AND username_mode is "fixed"

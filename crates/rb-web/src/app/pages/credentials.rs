@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use dioxus::prelude::*;
 use rb_types::{
-    auth::{ClaimLevel, ClaimType}, web::{CreateCredentialRequest, UpdateCredentialRequest}
+    auth::{ClaimLevel, ClaimType}, validation::{CredentialValidationInput, ValidationError}, web::{CreateCredentialRequest, UpdateCredentialRequest}
 };
 
 use crate::{
     app::api::credentials::*, components::{
-        CredentialForm, Fab, Layout, Modal, Protected, RequireAuth, StructuredTooltip, Table, TableActions, Toast, ToastMessage, ToastType, TooltipSection
+        CredentialBadge, CredentialForm, Fab, Layout, Modal, Protected, RequireAuth, StructuredTooltip, Table, TableActions, Toast, ToastMessage, ToastType, TooltipSection
     }
 };
 
@@ -34,8 +34,9 @@ pub fn CredentialsPage() -> Element {
     let mut has_existing_password = use_signal(|| false);
     let mut has_existing_private_key = use_signal(|| false);
     let mut has_existing_public_key = use_signal(|| false);
+    let mut original_password_required = use_signal(|| true); // Track original value when editing
     let mut error_message = use_signal(|| None::<String>);
-    let mut validation_errors = use_signal(HashMap::<String, String>::new);
+    let mut validation_errors = use_signal(HashMap::<String, ValidationError>::new);
 
     // Delete confirmation state
 
@@ -74,6 +75,7 @@ pub fn CredentialsPage() -> Element {
         username.set(current_username.unwrap_or_default());
         username_mode.set(current_username_mode);
         password_required.set(current_password_required);
+        original_password_required.set(current_password_required); // Track original value
         password.set(String::new());
         private_key.set(String::new());
         public_key.set(String::new());
@@ -105,23 +107,28 @@ pub fn CredentialsPage() -> Element {
         let mut errors = HashMap::new();
 
         if name_val.trim().is_empty() {
-            errors.insert("name".to_string(), "Name is required".to_string());
+            errors.insert("name".to_string(), ValidationError::Required);
         }
 
         // Use shared validation utility
-        let field_errors = crate::app::utils::validate_credential_fields(
-            &type_val,
-            &username_mode_val,
-            &username_val,
-            password_required_val,
-            &password_val,
-            &private_key_val,
-            &public_key_val,
-            is_editing,
-            has_existing_password(),
-            has_existing_private_key(),
-            has_existing_public_key(),
-        );
+        // If password requirement is changing from false to true, treat old password as blank
+        let password_required_changing = is_editing && !*original_password_required.read() && password_required_val;
+        let effective_has_existing_password = has_existing_password() && !password_required_changing;
+
+        let field_errors = CredentialValidationInput {
+            kind: &type_val,
+            username_mode: &username_mode_val,
+            username: &username_val,
+            password_required: password_required_val,
+            password: &password_val,
+            private_key: &private_key_val,
+            public_key: &public_key_val,
+            is_editing: is_editing,
+            has_existing_password: effective_has_existing_password,
+            has_existing_private_key: has_existing_private_key(),
+            has_existing_public_key: has_existing_public_key(),
+        }
+        .validate();
         errors.extend(field_errors);
 
         if !errors.is_empty() {
@@ -281,7 +288,14 @@ pub fn CredentialsPage() -> Element {
                                             th { "{cred.id}" }
                                             td { "{cred.name}" }
                                             td {
-                                                span { class: "badge badge-primary", "{cred.kind}" }
+                                                CredentialBadge {
+                                                    kind: cred.kind.clone(),
+                                                    username_mode: Some(cred.username_mode.clone()),
+                                                    password_required: Some(cred.password_required),
+                                                    kind_prefix: true,
+                                                    show_type: true,
+                                                    name: None,
+                                                }
                                             }
                                             td {
                                                 StructuredTooltip {
@@ -453,6 +467,7 @@ pub fn CredentialsPage() -> Element {
                             has_existing_private_key: has_existing_private_key(),
                             has_existing_public_key: has_existing_public_key(),
                             show_type_selector: true,
+                            original_password_required: *original_password_required.read(),
                         }
                     }
                 }

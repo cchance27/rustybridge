@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use dioxus::prelude::*;
 use rb_types::{
-    auth::{ClaimLevel, ClaimType}, web::{AuthWebConfig, CreateRelayRequest, CustomAuthRequest, PrincipalKind, UpdateRelayRequest}
+    auth::{ClaimLevel, ClaimType}, validation::{CredentialValidationInput, ValidationError}, web::{AuthWebConfig, CreateRelayRequest, CustomAuthRequest, PrincipalKind, UpdateRelayRequest}
 };
 
 use crate::{
     app::api::{credentials::list_credentials, relays::*}, components::{
-        CredentialForm, Fab, Layout, Modal, Protected, RelayAccessForm, RequireAuth, StepModal, StructuredTooltip, Table, TableActions, Toast, ToastMessage, ToastType, TooltipSection
+        CredentialBadge, CredentialForm, Fab, Layout, Modal, Protected, RelayAccessForm, RequireAuth, StepModal, StructuredTooltip, Table, TableActions, Toast, ToastMessage, ToastType, TooltipSection
     }
 };
 
@@ -42,7 +42,7 @@ pub fn RelaysPage() -> Element {
     let mut assign_private_key = use_signal(String::new);
     let mut assign_public_key = use_signal(String::new);
     let mut assign_passphrase = use_signal(String::new);
-    let mut assign_validation_errors = use_signal(HashMap::<String, String>::new);
+    let mut assign_validation_errors = use_signal(HashMap::<String, ValidationError>::new);
 
     // Hostkey refresh state
     let mut refresh_modal_open = use_signal(|| false);
@@ -87,7 +87,7 @@ pub fn RelaysPage() -> Element {
     let mut name = use_signal(String::new);
     let mut endpoint = use_signal(String::new);
     let mut error_message = use_signal(|| None::<String>);
-    let mut validation_errors = use_signal(HashMap::<String, String>::new);
+    let mut validation_errors = use_signal(HashMap::<String, ValidationError>::new);
 
     // Authentication state
     let mut auth_mode = use_signal(|| "none".to_string()); // "none", "saved", "custom"
@@ -99,11 +99,13 @@ pub fn RelaysPage() -> Element {
     let mut auth_private_key = use_signal(String::new);
     let mut auth_passphrase = use_signal(String::new);
     let mut auth_public_key = use_signal(String::new);
+    let mut auth_original_password_required = use_signal(|| true);
+    let mut auth_validation_errors = use_signal(HashMap::<String, ValidationError>::new);
     let mut has_existing_password = use_signal(|| false);
     let mut has_existing_private_key = use_signal(|| false);
     let mut has_existing_passphrase = use_signal(|| false);
     let mut has_existing_public_key = use_signal(|| false);
-    let mut current_step = use_signal(|| 1); // 1 = Connection, 2 = Authentication
+    let mut current_step = use_signal(|| 1); // 1 = Connection, 2 = Authentication, 3 = Access
 
     let open_add = move |_| {
         editing_id.set(None);
@@ -118,6 +120,9 @@ pub fn RelaysPage() -> Element {
         auth_private_key.set(String::new());
         auth_passphrase.set(String::new());
         auth_public_key.set(String::new());
+        auth_password_required.set(true);
+        auth_original_password_required.set(true);
+        auth_validation_errors.set(HashMap::new());
         has_existing_password.set(false);
         has_existing_private_key.set(false);
         has_existing_passphrase.set(false);
@@ -137,10 +142,13 @@ pub fn RelaysPage() -> Element {
         auth_mode.set("none".to_string());
         auth_type.set("password".to_string());
         auth_username.set(String::new());
+        auth_password_required.set(true);
         auth_password.set(String::new());
         auth_private_key.set(String::new());
         auth_passphrase.set(String::new());
         auth_public_key.set(String::new());
+        auth_original_password_required.set(true);
+        auth_validation_errors.set(HashMap::new());
         has_existing_password.set(false);
         has_existing_private_key.set(false);
         has_existing_passphrase.set(false);
@@ -163,6 +171,12 @@ pub fn RelaysPage() -> Element {
             match c.username_mode {
                 Some(m) => auth_username_mode.set(m),
                 None => auth_username_mode.set("fixed".to_string()),
+            }
+            if let Some(required) = c.password_required {
+                auth_password_required.set(required);
+                auth_original_password_required.set(required);
+            } else {
+                auth_original_password_required.set(true);
             }
             if c.has_password {
                 has_existing_password.set(true);
@@ -191,16 +205,22 @@ pub fn RelaysPage() -> Element {
             // Validate connection fields
             let mut errors = HashMap::new();
             if name().trim().is_empty() {
-                errors.insert("name".to_string(), "Name is required".to_string());
+                errors.insert("name".to_string(), ValidationError::Required);
             }
             if endpoint().trim().is_empty() {
-                errors.insert("endpoint".to_string(), "Endpoint is required".to_string());
+                errors.insert("endpoint".to_string(), ValidationError::Required);
             } else if let Some((_, port_str)) = endpoint().rsplit_once(':') {
                 if port_str.parse::<u16>().is_err() {
-                    errors.insert("endpoint".to_string(), "Port must be a valid number (0-65535)".to_string());
+                    errors.insert(
+                        "endpoint".to_string(),
+                        ValidationError::InvalidFormat("Port must be a valid number (0-65535)".to_string()),
+                    );
                 }
             } else {
-                errors.insert("endpoint".to_string(), "Endpoint must be in format 'host:port'".to_string());
+                errors.insert(
+                    "endpoint".to_string(),
+                    ValidationError::InvalidFormat("Endpoint must be in format 'host:port'".to_string()),
+                );
             }
 
             if !errors.is_empty() {
@@ -235,6 +255,44 @@ pub fn RelaysPage() -> Element {
         let selected_cred_id = selected_credential_id();
         let is_editing = editing_id().is_some();
         let action_word = if is_editing { "updated" } else { "created" };
+        let effective_has_existing_password = has_existing_password() && !(auth_password_required() && !auth_original_password_required());
+
+        // Client-side validation for authentication step
+        let mut auth_errors = HashMap::new();
+        match mode.as_str() {
+            "saved" => {
+                if selected_cred_id == 0 {
+                    auth_errors.insert("credential".to_string(), ValidationError::Required);
+                }
+            }
+            "custom" => {
+                auth_errors.extend(
+                    CredentialValidationInput {
+                        kind: &auth_type_val,
+                        username_mode: &auth_username_mode(),
+                        username: &username_val,
+                        password_required: auth_password_required(),
+                        password: &password_val,
+                        private_key: &private_key_val,
+                        public_key: &public_key_val,
+                        is_editing,
+                        has_existing_password: effective_has_existing_password,
+                        has_existing_private_key: has_existing_private_key(),
+                        has_existing_public_key: has_existing_public_key(),
+                    }
+                    .validate(),
+                );
+            }
+            _ => {}
+        }
+
+        if !auth_errors.is_empty() {
+            auth_validation_errors.set(auth_errors);
+            current_step.set(2); // Jump user to auth step to correct inputs
+            return;
+        }
+
+        auth_validation_errors.set(HashMap::new());
 
         spawn(async move {
             // Step 1: Create/update the relay
@@ -280,52 +338,40 @@ pub fn RelaysPage() -> Element {
                         let auth_result = match mode.as_str() {
                             "saved" if selected_cred_id > 0 => assign_relay_credential(relay_id, selected_cred_id).await,
                             "custom" => {
-                                let should_update_custom = match auth_type_val.as_str() {
-                                    "password" => !password_val.is_empty() || !is_editing || auth_username_mode() != "fixed",
-                                    "ssh_key" => !private_key_val.trim().is_empty() || !is_editing || auth_username_mode() != "fixed",
-                                    "agent" => !public_key_val.trim().is_empty() || !is_editing || auth_username_mode() != "fixed",
-                                    _ => false,
-                                };
-
-                                if should_update_custom {
-                                    set_custom_auth(
-                                        relay_id,
-                                        CustomAuthRequest {
-                                            auth_type: auth_type_val.clone(),
-                                            username: if username_val.is_empty() {
-                                                None
-                                            } else {
-                                                Some(username_val.clone())
-                                            },
-                                            username_mode: auth_username_mode(),
-                                            password: if password_val.is_empty() {
-                                                None
-                                            } else {
-                                                Some(password_val.clone())
-                                            },
-                                            password_required: auth_password_required(),
-                                            private_key: if private_key_val.is_empty() {
-                                                None
-                                            } else {
-                                                Some(private_key_val.clone())
-                                            },
-                                            passphrase: if passphrase_val.is_empty() {
-                                                None
-                                            } else {
-                                                Some(passphrase_val.clone())
-                                            },
-                                            public_key: if public_key_val.is_empty() {
-                                                None
-                                            } else {
-                                                Some(public_key_val.clone())
-                                            },
+                                set_custom_auth(
+                                    relay_id,
+                                    CustomAuthRequest {
+                                        auth_type: auth_type_val.clone(),
+                                        username: if username_val.is_empty() {
+                                            None
+                                        } else {
+                                            Some(username_val.clone())
                                         },
-                                    )
-                                    .await
-                                } else {
-                                    // Leave existing inline auth untouched when editing without new secret input.
-                                    Ok(())
-                                }
+                                        username_mode: auth_username_mode(),
+                                        password: if password_val.is_empty() {
+                                            None
+                                        } else {
+                                            Some(password_val.clone())
+                                        },
+                                        password_required: auth_password_required(),
+                                        private_key: if private_key_val.is_empty() {
+                                            None
+                                        } else {
+                                            Some(private_key_val.clone())
+                                        },
+                                        passphrase: if passphrase_val.is_empty() {
+                                            None
+                                        } else {
+                                            Some(passphrase_val.clone())
+                                        },
+                                        public_key: if public_key_val.is_empty() {
+                                            None
+                                        } else {
+                                            Some(public_key_val.clone())
+                                        },
+                                    },
+                                )
+                                .await
                             }
                             _ => Ok(()), // "none" or invalid - do nothing
                         };
@@ -443,25 +489,27 @@ pub fn RelaysPage() -> Element {
         match mode.as_str() {
             "saved" => {
                 if cred_id == 0 {
-                    errors.insert("credential".to_string(), "Select a credential".to_string());
+                    errors.insert("credential".to_string(), ValidationError::Required);
                 }
             }
             "custom" => {
                 // Use shared validation utility
-                let field_errors = crate::app::utils::validate_credential_fields(
-                    &auth_type_val,
-                    &assign_username_mode(),
-                    &username_val,
-                    assign_password_required(),
-                    &password_val,
-                    &private_key_val,
-                    &public_key_val,
-                    false, // not editing
-                    false, // no existing password
-                    false, // no existing private key
-                    false, // no existing public key
+                errors.extend(
+                    CredentialValidationInput {
+                        kind: &auth_type_val,
+                        username_mode: &assign_username_mode(),
+                        username: &username_val,
+                        password_required: assign_password_required(),
+                        password: &password_val,
+                        private_key: &private_key_val,
+                        public_key: &public_key_val,
+                        is_editing: false,               // not editing
+                        has_existing_password: false,    // no existing password
+                        has_existing_private_key: false, // no existing private key
+                        has_existing_public_key: false,  // no existing public key
+                    }
+                    .validate(),
                 );
-                errors.extend(field_errors);
             }
             _ => {}
         }
@@ -600,6 +648,89 @@ pub fn RelaysPage() -> Element {
         }
     };
 
+    // Helper to render the credential cell consistently
+    let render_credential_cell = |host: &rb_types::web::RelayHostInfo| -> Element {
+        let badge = if let Some(cred) = &host.credential {
+            Some((
+                cred.clone(),
+                host.credential_kind.clone().unwrap_or_else(|| "password".to_string()),
+                host.credential_username_mode.clone(),
+                host.credential_password_required,
+                "saved".to_string(),
+                matches!(host.auth_config.as_ref().map(|c| c.mode.as_str()), Some("custom")),
+            ))
+        } else if let Some(config) = &host.auth_config {
+            if config.mode == "custom" {
+                Some((
+                    "Custom".to_string(),
+                    config.custom_type.clone().unwrap_or_else(|| "password".to_string()),
+                    config.username_mode.clone(),
+                    config.password_required,
+                    "custom".to_string(),
+                    true,
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        rsx! {
+            td {
+                if let Some((badge_name, badge_kind, badge_username_mode, badge_pw_required, badge_mode, is_inline)) = badge {
+                    div { class: "flex items-center gap-2 flex-wrap",
+                        Protected {
+                            claim: Some(ClaimType::Relays(ClaimLevel::Edit)),
+                            fallback: Some(rsx! {
+                                CredentialBadge {
+                                    name: Some(badge_name.clone()),
+                                    kind: badge_kind.clone(),
+                                    username_mode: badge_username_mode.clone(),
+                                    password_required: badge_pw_required,
+                                    kind_prefix: false,
+                                    custom_prefix: false,
+                                    compound: true,
+                                    mode: Some(badge_mode.clone()),
+                                    on_clear: None,
+                                }
+                            }),
+                            CredentialBadge {
+                                name: Some(badge_name),
+                                kind: badge_kind,
+                                username_mode: badge_username_mode,
+                                password_required: badge_pw_required,
+                                kind_prefix: false,
+                                custom_prefix: false,
+                                compound: true,
+                                mode: Some(badge_mode.clone()),
+                                on_clear: Some(EventHandler::new({
+                                    let id = host.id;
+                                    let name = host.name.clone();
+                                    let is_inline = is_inline;
+                                    move |_| open_clear_modal(id, name.clone(), is_inline)
+                                })),
+                            }
+                        }
+                    }
+                } else {
+                    Protected {
+                        claim: Some(ClaimType::Relays(ClaimLevel::Edit)),
+                        button {
+                            class: "badge badge-primary gap-2 cursor-pointer text-[11px] hover:badge-accent",
+                            onclick: {
+                                let id = host.id;
+                                let name = host.name.clone();
+                                move |_| open_assign_modal(id, name.clone())
+                            },
+                            "Assign"
+                        }
+                    }
+                }
+            }
+        }
+    };
+
     rsx! {
         RequireAuth {
             any_claims: vec![ClaimType::Relays(ClaimLevel::View)],
@@ -620,85 +751,7 @@ pub fn RelaysPage() -> Element {
                                             th { "{host.id}" }
                                             td { "{host.name}" }
                                             td { "{host.ip}:{host.port}" }
-                                            td {
-                                                if let Some(cred) = &host.credential {
-                                                    div { class: "flex items-center gap-2",
-                                                        span { class: "badge badge-primary", "{cred}" }
-                                                        Protected {
-                                                            claim: Some(ClaimType::Relays(ClaimLevel::Edit)),
-                                                            button {
-                                                                class: "btn btn-xs btn-ghost",
-                                                                onclick: {
-                                                                    let id = host.id;
-                                                                    let name = host.name.clone();
-                                                                    let is_inline = matches!(host.auth_config.as_ref().map(|c| c.mode.as_str()), Some("custom"));
-                                                                    move |_| open_clear_modal(id, name.clone(), is_inline)
-                                                                },
-                                                                "Clear"
-                                                            }
-                                                        }
-                                                    }
-
-                                                } else if let Some(config) = &host.auth_config {
-                                                    if config.mode == "custom" {
-                                                        div { class: "flex items-center gap-2",
-                                                            span { class: "badge badge-info",
-                                                                {
-                                                                    match (config.custom_type.as_deref(), config.username_mode.as_deref()) {
-                                                                        (Some("password"), Some("passthrough")) => "Custom (Passthrough)",
-                                                                        (Some("password"), Some("blank")) => "Custom (Interactive)",
-                                                                        (Some("password"), Some("fixed")) => "Custom (UserPass)",
-                                                                        (Some("password"), _) => "Custom (Password)",
-                                                                        (Some("ssh_key"), Some("passthrough")) => "Custom (SSH Key / Passthrough)",
-                                                                        (Some("ssh_key"), _) => "Custom (SSH Key)",
-                                                                        (Some("agent"), Some("passthrough")) => "Custom (Agent / Passthrough)",
-                                                                        (Some("agent"), _) => "Custom (Agent)",
-                                                                        _ => "Custom",
-                                                                    }
-                                                                }
-                                                            }
-                                                            Protected {
-                                                                claim: Some(ClaimType::Relays(ClaimLevel::Edit)),
-                                                                button {
-                                                                    class: "btn btn-xs btn-ghost",
-                                                                    onclick: {
-                                                                        let id = host.id;
-                                                                        let name = host.name.clone();
-                                                                        move |_| open_clear_modal(id, name.clone(), true)
-                                                                    },
-                                                                    "Clear"
-                                                                }
-                                                            }
-                                                        }
-                                                    } else {
-                                                        Protected {
-                                                            claim: Some(ClaimType::Relays(ClaimLevel::Edit)),
-                                                            button {
-                                                                class: "btn btn-xs btn-primary",
-                                                                onclick: {
-                                                                    let id = host.id;
-                                                                    let name = host.name.clone();
-                                                                    move |_| open_assign_modal(id, name.clone())
-                                                                },
-                                                                "Assign"
-                                                            }
-                                                        }
-                                                    }
-                                                } else {
-                                                    Protected {
-                                                        claim: Some(ClaimType::Relays(ClaimLevel::Edit)),
-                                                        button {
-                                                            class: "btn btn-xs btn-primary",
-                                                            onclick: {
-                                                                let id = host.id;
-                                                                let name = host.name.clone();
-                                                                move |_| open_assign_modal(id, name.clone())
-                                                            },
-                                                            "Assign"
-                                                        }
-                                                    }
-                                                }
-                                            }
+                                            { render_credential_cell(&host) }
                                             td {
                                                 div { class: "flex items-center gap-2",
                                                     if host.has_hostkey {
@@ -849,50 +902,29 @@ pub fn RelaysPage() -> Element {
                                 "none" => true,
                                 "saved" => selected_credential_id() > 0,
                                 "custom" => {
+                                    let auth_type_val = auth_type();
                                     let username_mode_val = auth_username_mode();
                                     let password_required_val = auth_password_required();
+                                    let password_required_changing =
+                                        editing_id().is_some() && !auth_original_password_required() && password_required_val;
+                                    let effective_has_existing_password =
+                                        has_existing_password() && !password_required_changing;
 
-                                    // Validate username for fixed mode
-                                    let username_valid = if username_mode_val == "fixed" {
-                                        !auth_username().trim().is_empty()
-                                    } else {
-                                        true // username not required for interactive/passthrough
-                                    };
-
-                                    if !username_valid {
-                                        false
-                                    } else {
-                                        match auth_type().as_str() {
-                                            "password" => {
-                                                // Only require password if username_mode is "fixed" AND password_required is true
-                                                if username_mode_val == "fixed" && password_required_val {
-                                                    if auth_password().is_empty() {
-                                                        editing_id().is_some() && has_existing_password()
-                                                    } else {
-                                                        true
-                                                    }
-                                                } else {
-                                                    // For interactive/passthrough or non-required, always valid
-                                                    true
-                                                }
-                                            }
-                                            "ssh_key" => {
-                                                if auth_private_key().trim().is_empty() {
-                                                    editing_id().is_some() && has_existing_private_key()
-                                                } else {
-                                                    true
-                                                }
-                                            }
-                                            "agent" => {
-                                                if auth_public_key().trim().is_empty() {
-                                                    editing_id().is_some() && has_existing_public_key()
-                                                } else {
-                                                    true
-                                                }
-                                            }
-                                            _ => false,
-                                        }
+                                    CredentialValidationInput {
+                                        kind: &auth_type_val,
+                                        username_mode: &username_mode_val,
+                                        username: &auth_username(),
+                                        password_required: password_required_val,
+                                        password: &auth_password(),
+                                        private_key: &auth_private_key(),
+                                        public_key: &auth_public_key(),
+                                        is_editing: editing_id().is_some(),
+                                        has_existing_password: effective_has_existing_password,
+                                        has_existing_private_key: has_existing_private_key(),
+                                        has_existing_public_key: has_existing_public_key(),
                                     }
+                                    .validate()
+                                    .is_empty()
                                 }
                                 _ => false,
                             }
@@ -967,7 +999,10 @@ pub fn RelaysPage() -> Element {
                                         name: "auth-mode",
                                         class: "radio",
                                         checked: auth_mode() == "none",
-                                        onchange: move |_| auth_mode.set("none".to_string())
+                                        onchange: move |_| {
+                                            auth_mode.set("none".to_string());
+                                            auth_validation_errors.set(HashMap::new());
+                                        }
                                     }
                                     span { class: "label-text", "None" }
                                 }
@@ -977,7 +1012,10 @@ pub fn RelaysPage() -> Element {
                                         name: "auth-mode",
                                         class: "radio",
                                         checked: auth_mode() == "saved",
-                                        onchange: move |_| auth_mode.set("saved".to_string())
+                                        onchange: move |_| {
+                                            auth_mode.set("saved".to_string());
+                                            auth_validation_errors.set(HashMap::new());
+                                        }
                                     }
                                     span { class: "label-text", "Saved Credential" }
                                 }
@@ -987,7 +1025,10 @@ pub fn RelaysPage() -> Element {
                                         name: "auth-mode",
                                         class: "radio",
                                         checked: auth_mode() == "custom",
-                                        onchange: move |_| auth_mode.set("custom".to_string())
+                                        onchange: move |_| {
+                                            auth_mode.set("custom".to_string());
+                                            auth_validation_errors.set(HashMap::new());
+                                        }
                                     }
                                     span { class: "label-text", "Custom" }
                                 }
@@ -998,11 +1039,20 @@ pub fn RelaysPage() -> Element {
                                 div { class: "form-control w-full",
                                     div { class: "label", span { class: "label-text", "Select Credential" } }
                                     select {
-                                        class: "select select-bordered w-full",
+                                        class: if auth_validation_errors().contains_key("credential") {
+                                            "select select-bordered w-full select-error"
+                                        } else {
+                                            "select select-bordered w-full"
+                                        },
                                         value: "{selected_credential_id}",
                                         onchange: move |e| {
                                             if let Ok(id) = e.value().parse::<i64>() {
                                                 selected_credential_id.set(id);
+                                                if auth_validation_errors().contains_key("credential") {
+                                                    let mut errs = auth_validation_errors();
+                                                    errs.remove("credential");
+                                                    auth_validation_errors.set(errs);
+                                                }
                                             }
                                         },
                                         option { value: "0", "-- Select a credential --" }
@@ -1016,6 +1066,9 @@ pub fn RelaysPage() -> Element {
                                             }
                                         })}
                                     }
+                                    if let Some(err) = auth_validation_errors().get("credential") {
+                                        div { class: "text-error text-sm mt-1", "{err}" }
+                                    }
                                 }
                             }
                             // Custom auth fields
@@ -1023,22 +1076,79 @@ pub fn RelaysPage() -> Element {
                                 div { class: "flex flex-col gap-4 p-4 bg-base-300 rounded-lg",
                                     CredentialForm {
                                         cred_type: auth_type(),
-                                        on_type_change: move |v| auth_type.set(v),
+                                        on_type_change: move |v| {
+                                            auth_type.set(v);
+                                            if auth_validation_errors().contains_key("password")
+                                                || auth_validation_errors().contains_key("private_key")
+                                                || auth_validation_errors().contains_key("public_key")
+                                            {
+                                                let mut errs = auth_validation_errors();
+                                                errs.remove("password");
+                                                errs.remove("private_key");
+                                                errs.remove("public_key");
+                                                auth_validation_errors.set(errs);
+                                            }
+                                        },
                                         username: auth_username(),
-                                        on_username_change: move |v| auth_username.set(v),
+                                        on_username_change: move |v| {
+                                            auth_username.set(v);
+                                            if auth_validation_errors().contains_key("username") {
+                                                let mut errs = auth_validation_errors();
+                                                errs.remove("username");
+                                                auth_validation_errors.set(errs);
+                                            }
+                                        },
                                         username_mode: auth_username_mode(),
-                                        on_username_mode_change: move |v| auth_username_mode.set(v),
+                                        on_username_mode_change: move |v: String| {
+                                            auth_username_mode.set(v.clone());
+                                            // If username_mode is not "fixed", force password_required to false
+                                            if v != "fixed" {
+                                                auth_password_required.set(false);
+                                                auth_password.set(String::new());
+                                                if auth_validation_errors().contains_key("username") {
+                                                    let mut errs = auth_validation_errors();
+                                                    errs.remove("username");
+                                                    auth_validation_errors.set(errs);
+                                                }
+                                            }
+                                        },
                                         password_required: auth_password_required(),
-                                        on_password_required_change: move |v| auth_password_required.set(v),
+                                        on_password_required_change: move |v| {
+                                            auth_password_required.set(v);
+                                            if !v {
+                                                auth_password.set(String::new());
+                                            }
+                                        },
                                         password: auth_password(),
-                                        on_password_change: move |v| auth_password.set(v),
+                                        on_password_change: move |v| {
+                                            auth_password.set(v);
+                                            if auth_validation_errors().contains_key("password") {
+                                                let mut errs = auth_validation_errors();
+                                                errs.remove("password");
+                                                auth_validation_errors.set(errs);
+                                            }
+                                        },
                                         private_key: auth_private_key(),
-                                        on_private_key_change: move |v| auth_private_key.set(v),
+                                        on_private_key_change: move |v| {
+                                            auth_private_key.set(v);
+                                            if auth_validation_errors().contains_key("private_key") {
+                                                let mut errs = auth_validation_errors();
+                                                errs.remove("private_key");
+                                                auth_validation_errors.set(errs);
+                                            }
+                                        },
                                         public_key: auth_public_key(),
-                                        on_public_key_change: move |v| auth_public_key.set(v),
+                                        on_public_key_change: move |v| {
+                                            auth_public_key.set(v);
+                                            if auth_validation_errors().contains_key("public_key") {
+                                                let mut errs = auth_validation_errors();
+                                                errs.remove("public_key");
+                                                auth_validation_errors.set(errs);
+                                            }
+                                        },
                                         passphrase: auth_passphrase(),
                                         on_passphrase_change: move |v| auth_passphrase.set(v),
-                                        validation_errors: std::collections::HashMap::new(),
+                                        validation_errors: auth_validation_errors(),
                                         show_hint: editing_id().is_some()
                                             && (has_existing_password()
                                                 || has_existing_private_key()
@@ -1048,6 +1158,7 @@ pub fn RelaysPage() -> Element {
                                         has_existing_private_key: has_existing_private_key(),
                                         has_existing_public_key: has_existing_public_key(),
                                         show_type_selector: true,
+                                        original_password_required: auth_original_password_required(),
                                     }
                                 }
                             }

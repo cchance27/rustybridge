@@ -58,20 +58,25 @@ pub async fn list_relay_hosts() -> Result<Vec<RelayHostInfo>> {
             None
         };
 
-        let credential = match auth_source.as_deref() {
+        let (credential, credential_kind, credential_username_mode, credential_password_required) = match auth_source.as_deref() {
             Some("credential") => {
                 if let Some(cred_id) = credential_id {
                     match state_store::get_relay_credential_by_id(&pool, cred_id).await {
-                        Ok(Some(cred)) => Some(cred.name),
-                        Ok(None) => Some("<unknown>".to_string()),
-                        Err(_) => None,
+                        Ok(Some(cred)) => (
+                            Some(cred.name),
+                            Some(cred.kind),
+                            Some(cred.username_mode),
+                            Some(cred.password_required),
+                        ),
+                        Ok(None) => (Some("<unknown>".to_string()), None, None, None),
+                        Err(_) => (None, None, None, None),
                     }
                 } else {
-                    None
+                    (None, None, None, None)
                 }
             }
-            Some("inline") => None,
-            _ => None,
+            Some("inline") => (None, None, None, None),
+            _ => (None, None, None, None),
         };
 
         // Check for hostkey
@@ -88,6 +93,7 @@ pub async fn list_relay_hosts() -> Result<Vec<RelayHostInfo>> {
                 has_private_key: false,
                 has_passphrase: false,
                 has_public_key: false,
+                password_required: None,
             }),
             Some("inline") => Some(AuthWebConfig {
                 mode: "custom".to_string(),
@@ -99,6 +105,10 @@ pub async fn list_relay_hosts() -> Result<Vec<RelayHostInfo>> {
                 has_private_key: opts.contains_key("auth.identity"),
                 has_passphrase: opts.contains_key("auth.passphrase"),
                 has_public_key: opts.contains_key("auth.agent_pubkey"),
+                password_required: opts
+                    .get("auth.password_required")
+                    .map(|(v, s)| decode_value(v, *s))
+                    .and_then(|v| v.parse::<bool>().ok()),
             }),
             _ => Some(AuthWebConfig {
                 mode: "none".to_string(),
@@ -110,6 +120,7 @@ pub async fn list_relay_hosts() -> Result<Vec<RelayHostInfo>> {
                 has_private_key: false,
                 has_passphrase: false,
                 has_public_key: false,
+                password_required: None,
             }),
         };
 
@@ -130,6 +141,9 @@ pub async fn list_relay_hosts() -> Result<Vec<RelayHostInfo>> {
             ip: host.ip,
             port: host.port,
             credential,
+            credential_kind,
+            credential_username_mode,
+            credential_password_required,
             has_hostkey,
             auth_config,
             access_principals,
@@ -283,11 +297,30 @@ pub async fn store_relay_hostkey(id: i64, key_pem: String) -> Result<()> {
     pool: axum::Extension<sqlx::SqlitePool>
 )]
 pub async fn set_custom_auth(id: i64, req: CustomAuthRequest) -> Result<()> {
+    use rb_types::validation::CredentialValidationInput;
+
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
     let relay = state_store::fetch_relay_host_by_id(&pool, id)
         .await
         .map_err(|e| anyhow!("{}", e))?
         .ok_or_else(|| anyhow!("Relay not found"))?;
+
+    let errors = CredentialValidationInput {
+        kind: &req.auth_type,
+        username_mode: &req.username_mode,
+        username: req.username.as_deref().unwrap_or(""),
+        password_required: req.password_required,
+        password: req.password.as_deref().unwrap_or(""),
+        private_key: req.private_key.as_deref().unwrap_or(""),
+        public_key: req.public_key.as_deref().unwrap_or(""),
+        // Treat custom auth set as new/overwrite (no "keep existing" logic yet)
+        ..Default::default()
+    }
+    .validate();
+
+    if !errors.is_empty() {
+        return Err(anyhow!("Validation failed: {}", rb_types::validation::format_errors(&errors)).into());
+    }
 
     match req.auth_type.as_str() {
         "password" => {

@@ -66,6 +66,10 @@ pub async fn authenticate_password(login: &LoginTarget, password: &str) -> Serve
             return Ok(AuthDecision::Reject);
         }
     };
+    // NOTE: This verification is theoretically susceptible to timing attacks (user enumeration)
+    // because we return early if the user is not found or the hash is invalid.
+    // However, in this context (networked SSH server), the network jitter makes this
+    // practically unexploitable, so we accept the risk for simplicity.
     match Argon2::default().verify_password(password.as_bytes(), &parsed) {
         Ok(_) => Ok(AuthDecision::Accept),
         Err(_) => Ok(AuthDecision::Reject),

@@ -19,6 +19,8 @@ pub struct AuthWebConfig {
     pub has_private_key: bool,
     pub has_passphrase: bool,
     pub has_public_key: bool,
+    #[serde(default)]
+    pub password_required: Option<bool>, // only meaningful for password custom auth; None when unknown/not applicable
 }
 
 /// Extended relay host info with credential and hostkey status
@@ -29,6 +31,9 @@ pub struct RelayHostInfo {
     pub ip: String,
     pub port: i64,
     pub credential: Option<String>, // credential name if assigned (display only)
+    pub credential_kind: Option<String>,
+    pub credential_username_mode: Option<String>,
+    pub credential_password_required: Option<bool>,
     pub has_hostkey: bool,
     pub auth_config: Option<AuthWebConfig>,           // Full auth config for editing
     pub access_principals: Vec<RelayAccessPrincipal>, // Users and groups with access

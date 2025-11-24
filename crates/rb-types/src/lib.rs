@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
 pub mod auth;
+pub mod validation;
 pub mod web;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

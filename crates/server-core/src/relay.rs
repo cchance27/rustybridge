@@ -295,11 +295,17 @@ async fn prompt_for_input(
         let _ = handle.data(chan, payload).await;
     }
 
+    const MAX_PROMPT_RESPONSE: usize = 1024; // Reasonable username/password size
+
     let mut rx = rx_arc.lock().await;
     let response = rx
         .recv()
         .await
         .ok_or_else(|| crate::ServerError::Other("authentication prompt was cancelled".to_string()))?;
+
+    if response.len() > MAX_PROMPT_RESPONSE {
+        return Err(crate::ServerError::Other("interactive response too large".to_string()));
+    }
 
     let trimmed = response.trim_end_matches(|c| c == '\r' || c == '\n').to_string();
     tracing::warn!(
