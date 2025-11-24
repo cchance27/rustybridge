@@ -22,7 +22,7 @@ async fn rotation_reencrypts_credentials_and_options() -> Result<()> {
         .execute(&pool)
         .await?;
     server_core::set_relay_option("h3", "api.secret", "abc123", true).await?;
-    let _cred = server_core::create_password_credential("credR", Some("ux"), "pw-xyz").await?;
+    let _cred = server_core::create_password_credential("credR", Some("ux"), "pw-xyz", "fixed", true).await?;
     server_core::assign_credential("h3", "credR").await?;
 
     // Capture pre-rotation ciphertexts

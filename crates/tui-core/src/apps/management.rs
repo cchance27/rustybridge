@@ -29,11 +29,14 @@ pub enum CredentialSpec {
     Password {
         name: String,
         username: Option<String>,
+        username_mode: String,
+        password_required: bool,
         password: String,
     },
     SshKey {
         name: String,
         username: Option<String>,
+        username_mode: String,
         key_file: Option<String>,
         value: Option<String>,
         cert_file: Option<String>,
@@ -42,6 +45,7 @@ pub enum CredentialSpec {
     Agent {
         name: String,
         username: Option<String>,
+        username_mode: String,
         public_key: String,
     },
 }
@@ -73,6 +77,37 @@ impl CredentialType {
             CredentialType::Password => Self::Agent,
             CredentialType::SshKey => Self::Password,
             CredentialType::Agent => Self::SshKey,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CredentialUsernameMode {
+    Fixed,
+    Blank,
+    Passthrough,
+}
+
+impl CredentialUsernameMode {
+    fn as_str(&self) -> &'static str {
+        match self {
+            CredentialUsernameMode::Fixed => "fixed",
+            CredentialUsernameMode::Blank => "blank",
+            CredentialUsernameMode::Passthrough => "passthrough",
+        }
+    }
+    fn next(&self) -> Self {
+        match self {
+            CredentialUsernameMode::Fixed => Self::Blank,
+            CredentialUsernameMode::Blank => Self::Passthrough,
+            CredentialUsernameMode::Passthrough => Self::Fixed,
+        }
+    }
+    fn prev(&self) -> Self {
+        match self {
+            CredentialUsernameMode::Fixed => Self::Passthrough,
+            CredentialUsernameMode::Blank => Self::Fixed,
+            CredentialUsernameMode::Passthrough => Self::Blank,
         }
     }
 }
@@ -1218,14 +1253,16 @@ impl ManagementApp {
                 frame.render_widget(Clear, area);
                 frame.render_widget(block, area);
 
-                // Build constraints: type(1), name(3), username(3), then per-type fields, error(1), instructions(1)
+                // Build constraints: type(1), name(3), umode(1), username(3), then per-type fields, error(1), instructions(1)
                 let mut constraints: Vec<Constraint> = vec![
                     Constraint::Length(1), // Type selector
                     Constraint::Length(3), // Name
+                    Constraint::Length(1), // Username Mode
                     Constraint::Length(3), // Username
                 ];
                 match form.ctype {
                     CredentialType::Password => {
+                        constraints.push(Constraint::Length(1)); // Password Required
                         constraints.push(Constraint::Length(3)); // Password
                     }
                     CredentialType::SshKey => {
@@ -1262,12 +1299,40 @@ impl ManagementApp {
 
                 // 1: Name
                 form.name.render(frame, chunks[1], *focus == 1);
-                // 2: Username (optional)
-                form.username.render(frame, chunks[2], *focus == 2);
 
-                let mut line = 3usize;
+                // 2: Username Mode
+                let umode_text = if *focus == 2 {
+                    format!("Username Mode: < {} >", form.username_mode.as_str())
+                } else {
+                    format!("Username Mode: {}", form.username_mode.as_str())
+                };
+                let umode_style = if *focus == 2 {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default().fg(Color::Yellow)
+                };
+                frame.render_widget(Paragraph::new(umode_text).style(umode_style), chunks[2]);
+
+                // 3: Username (optional)
+                form.username.render(frame, chunks[3], *focus == 3);
+
+                let mut line = 4usize;
                 match form.ctype {
                     CredentialType::Password => {
+                        // 4: Password Required
+                        let pw_req_text = if form.password_required {
+                            "[x] Password Required"
+                        } else {
+                            "[ ] Password Required"
+                        };
+                        let pw_req_style = if *focus == line {
+                            Style::default().fg(Color::Yellow).add_modifier(Modifier::REVERSED)
+                        } else {
+                            Style::default().fg(Color::Yellow)
+                        };
+                        frame.render_widget(Paragraph::new(pw_req_text).style(pw_req_style), chunks[line]);
+                        line += 1;
+
                         form.password.render(frame, chunks[line], *focus == line);
                         line += 1;
                     }
@@ -1424,6 +1489,8 @@ struct CredentialForm {
     ctype: CredentialType,
     name: Input,
     username: Input,
+    username_mode: CredentialUsernameMode,
+    password_required: bool,
     // Password
     password: Input,
     // SSH key (multiline)
@@ -1440,7 +1507,9 @@ impl CredentialForm {
         Self {
             ctype: CredentialType::Password,
             name: Input::new("Name: "),
-            username: Input::new("Username (optional): "),
+            username: Input::new("Username: "),
+            username_mode: CredentialUsernameMode::Fixed,
+            password_required: true,
             password: Input::new("Password: "),
             key_value: TextArea::new("Private key (PEM/OpenSSH): "),
             cert_value: TextArea::new("Certificate (OpenSSH, optional): "),
@@ -1452,9 +1521,9 @@ impl CredentialForm {
 
     fn fields_len(&self) -> usize {
         match self.ctype {
-            CredentialType::Password => 4,
-            CredentialType::SshKey => 6,
-            CredentialType::Agent => 4,
+            CredentialType::Password => 6, // Type, Name, UMode, User, PwReq, Pass
+            CredentialType::SshKey => 7,   // Type, Name, UMode, User, Key, Cert, Passphrase
+            CredentialType::Agent => 5,    // Type, Name, UMode, User, PubKey
         } // includes type row at index 0
     }
 
@@ -1472,7 +1541,7 @@ impl CredentialForm {
         match self.ctype {
             CredentialType::Password => {
                 let pw = self.password.value().to_string();
-                if pw.is_empty() {
+                if self.password_required && pw.is_empty() {
                     self.error = Some("Password is required".to_string());
                     return None;
                 }
@@ -1480,6 +1549,8 @@ impl CredentialForm {
                 Some(CredentialSpec::Password {
                     name: name.to_string(),
                     username,
+                    username_mode: self.username_mode.as_str().to_string(),
+                    password_required: self.password_required,
                     password: pw,
                 })
             }
@@ -1501,6 +1572,7 @@ impl CredentialForm {
                 Some(CredentialSpec::SshKey {
                     name: name.to_string(),
                     username,
+                    username_mode: self.username_mode.as_str().to_string(),
                     key_file: None,
                     value: Some(key_val),
                     cert_file: cert_opt,
@@ -1517,6 +1589,7 @@ impl CredentialForm {
                 Some(CredentialSpec::Agent {
                     name: name.to_string(),
                     username,
+                    username_mode: self.username_mode.as_str().to_string(),
                     public_key: pk,
                 })
             }
@@ -1548,21 +1621,18 @@ fn handle_credential_form_input(form: &mut CredentialForm, focus: &mut usize, in
                         match code {
                             b'A' => {
                                 // Up
-                                // If focused on a textarea field, move within it; else switch field
                                 let is_textarea =
-                                    matches!((&form.ctype, *focus), (CredentialType::SshKey, 3 | 4) | (CredentialType::Agent, 3));
+                                    matches!((&form.ctype, *focus), (CredentialType::SshKey, 4 | 5) | (CredentialType::Agent, 4));
                                 if is_textarea {
                                     match *focus {
-                                        3 => {
-                                            if let CredentialType::SshKey | CredentialType::Agent = form.ctype {
-                                                if form.ctype == CredentialType::SshKey {
-                                                    form.key_value.move_up();
-                                                } else {
-                                                    form.public_key.move_up();
-                                                }
+                                        4 => {
+                                            if form.ctype == CredentialType::SshKey {
+                                                form.key_value.move_up();
+                                            } else {
+                                                form.public_key.move_up();
                                             }
                                         }
-                                        4 => {
+                                        5 => {
                                             if form.ctype == CredentialType::SshKey {
                                                 form.cert_value.move_up()
                                             }
@@ -1578,17 +1648,17 @@ fn handle_credential_form_input(form: &mut CredentialForm, focus: &mut usize, in
                             b'B' => {
                                 // Down
                                 let is_textarea =
-                                    matches!((&form.ctype, *focus), (CredentialType::SshKey, 3 | 4) | (CredentialType::Agent, 3));
+                                    matches!((&form.ctype, *focus), (CredentialType::SshKey, 4 | 5) | (CredentialType::Agent, 4));
                                 if is_textarea {
                                     match *focus {
-                                        3 => {
+                                        4 => {
                                             if form.ctype == CredentialType::SshKey {
                                                 form.key_value.move_down();
                                             } else {
                                                 form.public_key.move_down();
                                             }
                                         }
-                                        4 => {
+                                        5 => {
                                             if form.ctype == CredentialType::SshKey {
                                                 form.cert_value.move_down()
                                             }
@@ -1603,143 +1673,95 @@ fn handle_credential_form_input(form: &mut CredentialForm, focus: &mut usize, in
                             }
                             b'C' => {
                                 // Right
-                                if *focus == 0 {
-                                    form.ctype = form.ctype.next();
-                                    render = true;
-                                } else {
-                                    match *focus {
-                                        1 => form.name.move_right(),
-                                        2 => form.username.move_right(),
-                                        3 => match form.ctype {
-                                            CredentialType::Password => form.password.move_right(),
-                                            CredentialType::SshKey => form.key_value.move_right(),
-                                            CredentialType::Agent => form.public_key.move_right(),
-                                        },
-                                        4 => {
-                                            if form.ctype == CredentialType::SshKey {
-                                                form.cert_value.move_right()
-                                            }
-                                        }
-                                        5 => {
-                                            if form.ctype == CredentialType::SshKey {
-                                                form.passphrase.move_right()
-                                            }
-                                        }
+                                match *focus {
+                                    0 => form.ctype = form.ctype.next(),
+                                    2 => form.username_mode = form.username_mode.next(),
+                                    4 if form.ctype == CredentialType::Password => form.password_required = !form.password_required,
+                                    _ => match (&form.ctype, *focus) {
+                                        (CredentialType::SshKey, 4) => form.key_value.move_right(),
+                                        (CredentialType::SshKey, 5) => form.cert_value.move_right(),
+                                        (CredentialType::Agent, 4) => form.public_key.move_right(),
+                                        (CredentialType::Password, 5) => form.password.move_right(),
+                                        (CredentialType::SshKey, 6) => form.passphrase.move_right(),
+                                        (_, 1) => form.name.move_right(),
+                                        (_, 3) => form.username.move_right(),
                                         _ => {}
-                                    }
-                                    render = true;
+                                    },
                                 }
+                                render = true;
                             }
                             b'D' => {
                                 // Left
-                                if *focus == 0 {
-                                    form.ctype = form.ctype.prev();
-                                    render = true;
-                                } else {
-                                    match *focus {
-                                        1 => form.name.move_left(),
-                                        2 => form.username.move_left(),
-                                        3 => match form.ctype {
-                                            CredentialType::Password => form.password.move_left(),
-                                            CredentialType::SshKey => form.key_value.move_left(),
-                                            CredentialType::Agent => form.public_key.move_left(),
-                                        },
-                                        4 => {
-                                            if form.ctype == CredentialType::SshKey {
-                                                form.cert_value.move_left()
-                                            }
-                                        }
-                                        5 => {
-                                            if form.ctype == CredentialType::SshKey {
-                                                form.passphrase.move_left()
-                                            }
-                                        }
+                                match *focus {
+                                    0 => form.ctype = form.ctype.prev(),
+                                    2 => form.username_mode = form.username_mode.prev(),
+                                    4 if form.ctype == CredentialType::Password => form.password_required = !form.password_required,
+                                    _ => match (&form.ctype, *focus) {
+                                        (CredentialType::SshKey, 4) => form.key_value.move_left(),
+                                        (CredentialType::SshKey, 5) => form.cert_value.move_left(),
+                                        (CredentialType::Agent, 4) => form.public_key.move_left(),
+                                        (CredentialType::Password, 5) => form.password.move_left(),
+                                        (CredentialType::SshKey, 6) => form.passphrase.move_left(),
+                                        (_, 1) => form.name.move_left(),
+                                        (_, 3) => form.username.move_left(),
                                         _ => {}
-                                    }
-                                    render = true;
+                                    },
                                 }
+                                render = true;
                             }
                             b'H' => {
-                                if *focus != 0 {
-                                    match *focus {
-                                        1 => form.name.move_home(),
-                                        2 => form.username.move_home(),
-                                        3 => match form.ctype {
-                                            CredentialType::Password => form.password.move_home(),
-                                            CredentialType::SshKey => form.key_value.move_home(),
-                                            CredentialType::Agent => form.public_key.move_home(),
-                                        },
-                                        4 => {
-                                            if form.ctype == CredentialType::SshKey {
-                                                form.cert_value.move_home()
-                                            }
-                                        }
-                                        5 => {
-                                            if form.ctype == CredentialType::SshKey {
-                                                form.passphrase.move_home()
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                    render = true;
+                                // Home
+                                match *focus {
+                                    1 => form.name.move_home(),
+                                    3 => form.username.move_home(),
+                                    5 if form.ctype == CredentialType::Password => form.password.move_home(),
+                                    4 if form.ctype == CredentialType::SshKey => form.key_value.move_home(),
+                                    5 if form.ctype == CredentialType::SshKey => form.cert_value.move_home(),
+                                    6 if form.ctype == CredentialType::SshKey => form.passphrase.move_home(),
+                                    4 if form.ctype == CredentialType::Agent => form.public_key.move_home(),
+                                    _ => {}
                                 }
+                                render = true;
                             }
                             b'F' => {
-                                if *focus != 0 {
-                                    match *focus {
-                                        1 => form.name.move_end(),
-                                        2 => form.username.move_end(),
-                                        3 => match form.ctype {
-                                            CredentialType::Password => form.password.move_end(),
-                                            CredentialType::SshKey => form.key_value.move_end(),
-                                            CredentialType::Agent => form.public_key.move_end(),
-                                        },
-                                        4 => {
-                                            if form.ctype == CredentialType::SshKey {
-                                                form.cert_value.move_end()
-                                            }
-                                        }
-                                        5 => {
-                                            if form.ctype == CredentialType::SshKey {
-                                                form.passphrase.move_end()
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                    render = true;
+                                // End
+                                match *focus {
+                                    1 => form.name.move_end(),
+                                    3 => form.username.move_end(),
+                                    5 if form.ctype == CredentialType::Password => form.password.move_end(),
+                                    4 if form.ctype == CredentialType::SshKey => form.key_value.move_end(),
+                                    5 if form.ctype == CredentialType::SshKey => form.cert_value.move_end(),
+                                    6 if form.ctype == CredentialType::SshKey => form.passphrase.move_end(),
+                                    4 if form.ctype == CredentialType::Agent => form.public_key.move_end(),
+                                    _ => {}
                                 }
+                                render = true;
                             }
                             b'3' => {
                                 if i < input.len() && input[i] == b'~' {
                                     i += 1;
-                                } else if *focus != 0 {
+                                    // Delete
                                     match *focus {
                                         1 => {
                                             let _ = form.name.delete_char();
                                         }
-                                        2 => {
+                                        3 => {
                                             let _ = form.username.delete_char();
                                         }
-                                        3 => match form.ctype {
-                                            CredentialType::Password => {
-                                                let _ = form.password.delete_char();
-                                            }
-                                            CredentialType::SshKey => {
-                                                let _ = form.key_value.delete_char();
-                                            }
-                                            CredentialType::Agent => {
-                                                let _ = form.public_key.delete_char();
-                                            }
-                                        },
-                                        4 => {
-                                            if let CredentialType::SshKey = form.ctype {
-                                                let _ = form.cert_value.delete_char();
-                                            }
+                                        5 if form.ctype == CredentialType::Password => {
+                                            let _ = form.password.delete_char();
                                         }
-                                        5 => {
-                                            if let CredentialType::SshKey = form.ctype {
-                                                let _ = form.passphrase.delete_char();
-                                            }
+                                        4 if form.ctype == CredentialType::SshKey => {
+                                            let _ = form.key_value.delete_char();
+                                        }
+                                        5 if form.ctype == CredentialType::SshKey => {
+                                            let _ = form.cert_value.delete_char();
+                                        }
+                                        6 if form.ctype == CredentialType::SshKey => {
+                                            let _ = form.passphrase.delete_char();
+                                        }
+                                        4 if form.ctype == CredentialType::Agent => {
+                                            let _ = form.public_key.delete_char();
                                         }
                                         _ => {}
                                     }
@@ -1759,18 +1781,17 @@ fn handle_credential_form_input(form: &mut CredentialForm, focus: &mut usize, in
                 render = true;
             }
             b'\r' | b'\n' => {
-                // In textarea fields, Enter inserts newline; otherwise submit
-                let is_textarea = matches!((&form.ctype, *focus), (CredentialType::SshKey, 3 | 4) | (CredentialType::Agent, 3));
+                let is_textarea = matches!((&form.ctype, *focus), (CredentialType::SshKey, 4 | 5) | (CredentialType::Agent, 4));
                 if is_textarea {
                     match *focus {
-                        3 => {
+                        4 => {
                             if form.ctype == CredentialType::SshKey {
                                 form.key_value.insert_newline();
                             } else {
                                 form.public_key.insert_newline();
                             }
                         }
-                        4 => {
+                        5 => {
                             if form.ctype == CredentialType::SshKey {
                                 form.cert_value.insert_newline()
                             }
@@ -1783,67 +1804,48 @@ fn handle_credential_form_input(form: &mut CredentialForm, focus: &mut usize, in
                 }
             }
             0x7f | 0x08 => {
-                if *focus != 0 {
-                    match *focus {
-                        1 => {
-                            let _ = form.name.pop_char();
-                        }
-                        2 => {
-                            let _ = form.username.pop_char();
-                        }
-                        3 => match form.ctype {
-                            CredentialType::Password => {
-                                let _ = form.password.pop_char();
-                            }
-                            CredentialType::SshKey => {
-                                let _ = form.key_value.backspace();
-                            }
-                            CredentialType::Agent => {
-                                let _ = form.public_key.backspace();
-                            }
-                        },
-                        4 => {
-                            if let CredentialType::SshKey = form.ctype {
-                                let _ = form.cert_value.backspace();
-                            }
-                        }
-                        5 => {
-                            if let CredentialType::SshKey = form.ctype {
-                                let _ = form.passphrase.pop_char();
-                            }
-                        }
-                        _ => {}
+                match *focus {
+                    1 => {
+                        let _ = form.name.pop_char();
                     }
-                    render = true;
+                    3 => {
+                        let _ = form.username.pop_char();
+                    }
+                    5 if form.ctype == CredentialType::Password => {
+                        let _ = form.password.pop_char();
+                    }
+                    4 if form.ctype == CredentialType::SshKey => {
+                        let _ = form.key_value.backspace();
+                    }
+                    5 if form.ctype == CredentialType::SshKey => {
+                        let _ = form.cert_value.backspace();
+                    }
+                    6 if form.ctype == CredentialType::SshKey => {
+                        let _ = form.passphrase.pop_char();
+                    }
+                    4 if form.ctype == CredentialType::Agent => {
+                        let _ = form.public_key.backspace();
+                    }
+                    _ => {}
                 }
+                render = true;
             }
-            c if (32..=126).contains(&c) => {
-                if *focus != 0 {
+            c => {
+                if c >= 32 {
                     let ch = c as char;
                     match *focus {
                         1 => form.name.push_char(ch),
-                        2 => form.username.push_char(ch),
-                        3 => match form.ctype {
-                            CredentialType::Password => form.password.push_char(ch),
-                            CredentialType::SshKey => form.key_value.push_char(ch),
-                            CredentialType::Agent => form.public_key.push_char(ch),
-                        },
-                        4 => {
-                            if let CredentialType::SshKey = form.ctype {
-                                form.cert_value.push_char(ch);
-                            }
-                        }
-                        5 => {
-                            if let CredentialType::SshKey = form.ctype {
-                                form.passphrase.push_char(ch);
-                            }
-                        }
+                        3 => form.username.push_char(ch),
+                        5 if form.ctype == CredentialType::Password => form.password.push_char(ch),
+                        4 if form.ctype == CredentialType::SshKey => form.key_value.push_char(ch),
+                        5 if form.ctype == CredentialType::SshKey => form.cert_value.push_char(ch),
+                        6 if form.ctype == CredentialType::SshKey => form.passphrase.push_char(ch),
+                        4 if form.ctype == CredentialType::Agent => form.public_key.push_char(ch),
                         _ => {}
                     }
                     render = true;
                 }
             }
-            _ => {}
         }
     }
     if render { CFAction::Render } else { CFAction::Continue }
@@ -1851,8 +1853,6 @@ fn handle_credential_form_input(form: &mut CredentialForm, focus: &mut usize, in
 
 // -------------------------
 // Hostkey review payload
-// -------------------------
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostkeyReview {
     pub host_id: i64,

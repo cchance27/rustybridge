@@ -8,6 +8,10 @@ pub fn CredentialForm(
     on_type_change: EventHandler<String>,
     username: String,
     on_username_change: EventHandler<String>,
+    username_mode: String,
+    on_username_mode_change: EventHandler<String>,
+    password_required: bool,
+    on_password_required_change: EventHandler<bool>,
     password: String,
     on_password_change: EventHandler<String>,
     private_key: String,
@@ -40,14 +44,31 @@ pub fn CredentialForm(
                 }
             }
 
-            label { class: "form-control w-full",
-                div { class: "label", span { class: "label-text", "Username (optional)" } }
-                input {
-                    r#type: "text",
-                    class: "input input-bordered w-full",
-                    placeholder: "username",
-                    value: "{username}",
-                    oninput: move |e| on_username_change.call(e.value())
+            div { class: "form-control w-full",
+                div { class: "label", span { class: "label-text", "Username Mode" } }
+                select {
+                    class: "select select-bordered w-full",
+                    value: "{username_mode}",
+                    onchange: move |e| on_username_mode_change.call(e.value()),
+                    option { value: "fixed", "Fixed (Use value below)" }
+                    option { value: "blank", "Interactive (Prompt user)" }
+                    option { value: "passthrough", "Passthrough (Use relay user)" }
+                }
+            }
+
+            if username_mode == "fixed" {
+                label { class: "form-control w-full",
+                    div { class: "label", span { class: "label-text", "Username" } }
+                    input {
+                        r#type: "text",
+                        class: if validation_errors.contains_key("username") { "input input-bordered w-full input-error" } else { "input input-bordered w-full" },
+                        placeholder: "username",
+                        value: "{username}",
+                        oninput: move |e| on_username_change.call(e.value())
+                    }
+                    if let Some(err) = validation_errors.get("username") {
+                        div { class: "text-error text-sm mt-1", "{err}" }
+                    }
                 }
             }
 
@@ -56,16 +77,41 @@ pub fn CredentialForm(
                 label { class: "form-control w-full",
                     div { class: "label items-center justify-between",
                         span { class: "label-text", "Password" }
+                        // Only show "Required (stored)" checkbox if username_mode is "fixed"
+                        if username_mode == "fixed" {
+                            div { class: "flex items-center gap-2",
+                                input {
+                                    r#type: "checkbox",
+                                    class: "checkbox checkbox-sm",
+                                    checked: "{password_required}",
+                                    onchange: move |e| on_password_required_change.call(e.value() == "true")
+                                }
+                                span { class: "label-text-alt", "Required (stored)" }
+                            }
+                        }
                         if has_existing_password && is_editing {
                             span { class: "badge badge-warning badge-xs", "Stored • not shown" }
                         }
                     }
-                    input {
-                        r#type: "password",
-                        class: if validation_errors.contains_key("password") { "input input-bordered w-full input-error" } else { "input input-bordered w-full" },
-                        placeholder: "••••••••",
-                        value: "{password}",
-                        oninput: move |e| on_password_change.call(e.value())
+                    // Show password input only if password_required is true AND username_mode is "fixed"
+                    if password_required && username_mode == "fixed" {
+                        input {
+                            r#type: "password",
+                            class: if validation_errors.contains_key("password") { "input input-bordered w-full input-error" } else { "input input-bordered w-full" },
+                            placeholder: "••••••••",
+                            value: "{password}",
+                            oninput: move |e| on_password_change.call(e.value())
+                        }
+                    } else {
+                        div { class: "alert alert-info text-xs py-2",
+                            span {
+                                if username_mode == "blank" || username_mode == "passthrough" {
+                                    "Password will be prompted interactively during connection (username mode: {username_mode})."
+                                } else {
+                                    "Password will be prompted interactively during connection."
+                                }
+                            }
+                        }
                     }
                     if let Some(err) = validation_errors.get("password") {
                         div { class: "text-error text-sm mt-1", "{err}" }

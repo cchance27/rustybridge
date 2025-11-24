@@ -25,6 +25,8 @@ pub fn CredentialsPage() -> Element {
     let mut name = use_signal(String::new);
     let mut cred_type = use_signal(|| "password".to_string());
     let mut username = use_signal(String::new);
+    let mut username_mode = use_signal(|| "fixed".to_string());
+    let mut password_required = use_signal(|| true);
     let mut password = use_signal(String::new);
     let mut private_key = use_signal(String::new);
     let mut public_key = use_signal(String::new);
@@ -42,6 +44,8 @@ pub fn CredentialsPage() -> Element {
         name.set(String::new());
         cred_type.set("password".to_string());
         username.set(String::new());
+        username_mode.set("fixed".to_string());
+        password_required.set(true);
         password.set(String::new());
         private_key.set(String::new());
         public_key.set(String::new());
@@ -54,7 +58,13 @@ pub fn CredentialsPage() -> Element {
         is_modal_open.set(true);
     };
 
-    let mut open_edit = move |id: i64, current_name: String, current_kind: String, current_username: Option<String>, has_secret: bool| {
+    let mut open_edit = move |id: i64,
+                              current_name: String,
+                              current_kind: String,
+                              current_username: Option<String>,
+                              current_username_mode: String,
+                              current_password_required: bool,
+                              has_secret: bool| {
         // We can't easily get the secrets back, so we leave them empty for the user to replace if they want
         // But we should probably fetch the username if possible.
         // For now, let's just allow resetting them.
@@ -62,6 +72,8 @@ pub fn CredentialsPage() -> Element {
         name.set(current_name);
         cred_type.set(current_kind.clone());
         username.set(current_username.unwrap_or_default());
+        username_mode.set(current_username_mode);
+        password_required.set(current_password_required);
         password.set(String::new());
         private_key.set(String::new());
         public_key.set(String::new());
@@ -81,6 +93,8 @@ pub fn CredentialsPage() -> Element {
         let name_val = name();
         let type_val = cred_type();
         let username_val = username();
+        let username_mode_val = username_mode();
+        let password_required_val = password_required();
         let password_val = password();
         let private_key_val = private_key();
         let public_key_val = public_key();
@@ -94,24 +108,21 @@ pub fn CredentialsPage() -> Element {
             errors.insert("name".to_string(), "Name is required".to_string());
         }
 
-        match type_val.as_str() {
-            "password" => {
-                if password_val.trim().is_empty() && !(is_editing && has_existing_password()) {
-                    errors.insert("password".to_string(), "Password is required".to_string());
-                }
-            }
-            "ssh_key" => {
-                if private_key_val.trim().is_empty() && !(is_editing && has_existing_private_key()) {
-                    errors.insert("private_key".to_string(), "Private key is required".to_string());
-                }
-            }
-            "agent" => {
-                if public_key_val.trim().is_empty() && !(is_editing && has_existing_public_key()) {
-                    errors.insert("public_key".to_string(), "Public key is required".to_string());
-                }
-            }
-            _ => {}
-        }
+        // Use shared validation utility
+        let field_errors = crate::app::utils::validate_credential_fields(
+            &type_val,
+            &username_mode_val,
+            &username_val,
+            password_required_val,
+            &password_val,
+            &private_key_val,
+            &public_key_val,
+            is_editing,
+            has_existing_password(),
+            has_existing_private_key(),
+            has_existing_public_key(),
+        );
+        errors.extend(field_errors);
 
         if !errors.is_empty() {
             // Show inline errors, keep modal open
@@ -134,6 +145,8 @@ pub fn CredentialsPage() -> Element {
                         } else {
                             Some(username_val.clone())
                         },
+                        username_mode: username_mode_val.clone(),
+                        password_required: password_required_val,
                         password: if password_val.is_empty() {
                             None
                         } else {
@@ -166,6 +179,8 @@ pub fn CredentialsPage() -> Element {
                     } else {
                         Some(username_val.clone())
                     },
+                    username_mode: username_mode_val.clone(),
+                    password_required: password_required_val,
                     password: if password_val.is_empty() {
                         None
                     } else {
@@ -291,8 +306,10 @@ pub fn CredentialsPage() -> Element {
                                                             let cred_name = cred.name.clone();
                                                             let cred_kind = cred.kind.clone();
                                                             let cred_username = cred.username.clone();
+                                                            let cred_username_mode = cred.username_mode.clone();
+                                                            let cred_password_required = cred.password_required;
                                                             let has_secret = cred.has_secret;
-                                                            move |_| open_edit(cred.id, cred_name.clone(), cred_kind.clone(), cred_username.clone(), has_secret)
+                                                            move |_| open_edit(cred.id, cred_name.clone(), cred_kind.clone(), cred_username.clone(), cred_username_mode.clone(), cred_password_required, has_secret)
                                                         },
                                                         on_delete: {
                                                             let cred_name = cred.name.clone();
@@ -375,7 +392,31 @@ pub fn CredentialsPage() -> Element {
                                 }
                             },
                             username: username(),
-                            on_username_change: move |v| username.set(v),
+                            on_username_change: move |v| {
+                                username.set(v);
+                                if validation_errors().contains_key("username") {
+                                    let mut errs = validation_errors();
+                                    errs.remove("username");
+                                    validation_errors.set(errs);
+                                }
+                            },
+                            username_mode: username_mode(),
+                            on_username_mode_change: move |v: String| {
+                                username_mode.set(v.clone());
+                                // If username_mode is not "fixed", force password_required to false
+                                if v != "fixed" {
+                                    password_required.set(false);
+                                    password.set(String::new()); // Clear password field
+                                }
+                            },
+                            password_required: password_required(),
+                            on_password_required_change: move |v| {
+                                password_required.set(v);
+                                // Clear password field when unchecking "stored"
+                                if !v {
+                                    password.set(String::new());
+                                }
+                            },
                             password: password(),
                             on_password_change: move |v| {
                                 password.set(v);

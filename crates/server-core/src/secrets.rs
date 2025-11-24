@@ -99,12 +99,13 @@ fn get_or_create_master_salt() -> ServerResult<Vec<u8>> {
 
         // Check and fix permissions on existing salt file
         if let Ok(changed) = ensure_secure_permissions(&path)
-            && changed {
-                tracing::warn!(
-                    salt_file = %path.display(),
-                    "Fixed insecure salt file permissions to 0600"
-                );
-            }
+            && changed
+        {
+            tracing::warn!(
+                salt_file = %path.display(),
+                "Fixed insecure salt file permissions to 0600"
+            );
+        }
 
         Ok(content)
     } else {

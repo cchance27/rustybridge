@@ -167,7 +167,7 @@ async fn main() -> Result<()> {
                     } else {
                         rpassword::prompt_password(format!("Enter credential password for {name}: "))?
                     };
-                    let _ = create_password_credential(&name, Some(&username), &pass).await?;
+                    let _ = create_password_credential(&name, Some(&username), &pass, "fixed", true).await?;
                 }
                 CredsCreateCmd::SshKey {
                     name,
@@ -204,6 +204,7 @@ async fn main() -> Result<()> {
                         &key_data,
                         cert_data.as_deref(),
                         pass_opt.as_deref(),
+                        "fixed",
                     )
                     .await?;
                 }
@@ -220,7 +221,7 @@ async fn main() -> Result<()> {
                     } else {
                         return Err(anyhow!("--pubkey-file or --value is required for agent credentials"));
                     };
-                    let _ = create_agent_credential(&name, Some(&username), &pubkey).await?;
+                    let _ = create_agent_credential(&name, Some(&username), &pubkey, "fixed").await?;
                 }
             },
             CredsCmd::Delete { name, force: _ } => {
@@ -228,7 +229,7 @@ async fn main() -> Result<()> {
                 delete_credential(&name).await?;
             }
             CredsCmd::List => {
-                for (_id, name, kind, _meta) in list_credentials().await? {
+                for (_id, name, kind, _meta, _username_mode, _password_required) in list_credentials().await? {
                     println!("{} {}", name, kind);
                 }
             }
@@ -432,6 +433,15 @@ async fn handle_local_action(
             // Reload management app with the review
             let app = server_core::create_management_app_with_tab(0, Some(review)).await?;
             session.set_app(Box::new(app)).map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
+            Ok(false)
+        }
+        AuthPrompt { .. } => {
+            // Auth prompts are only used in server mode with interactive auth
+            // Not applicable in local TUI mode
+            Ok(false)
+        }
+        BackendEvent(_) => {
+            // Backend events are internal signals
             Ok(false)
         }
     }

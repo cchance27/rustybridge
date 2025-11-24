@@ -3,16 +3,24 @@ use std::sync::Arc;
 // Internal Result type alias
 type Result<T> = crate::ServerResult<T>;
 use rb_types::RelayInfo;
-use russh::{ChannelMsg, CryptoVec, client, keys, keys::HashAlg};
+use russh::{ChannelMsg, CryptoVec, client, keys};
 use secrecy::ExposeSecret;
 use serde_json::Value as JsonValue;
 use ssh_core::crypto::default_preferred;
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 
-#[derive(Clone)]
 pub struct RelayHandle {
-    input_tx: mpsc::UnboundedSender<Vec<u8>>,
+    pub session: russh::client::Handle<SharedRelayHandler>,
+    pub channel_id: russh::ChannelId,
+    pub input_tx: mpsc::UnboundedSender<Vec<u8>>,
+}
+
+/// Minimal prompt event used by non-TUI frontends (e.g., Web UI) to drive interactive auth.
+#[derive(Debug, Clone)]
+pub struct AuthPromptEvent {
+    pub prompt: String,
+    pub echo: bool,
 }
 
 impl RelayHandle {
@@ -37,7 +45,12 @@ pub async fn start_bridge(
     mut pty_size_rx: watch::Receiver<(u16, u16)>,
     options: &std::collections::HashMap<String, crate::secrets::SecretString>,
     peer_addr: Option<std::net::SocketAddr>,
+    action_tx: Option<tokio::sync::mpsc::UnboundedSender<tui_core::AppAction>>,
+    auth_rx: Option<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<String>>>,
+    prompt_sink: Option<(russh::server::Handle, russh::ChannelId)>,
 ) -> Result<RelayHandle> {
+    let auth_rx = auth_rx.map(Arc::new);
+
     // Build client config with secure defaults.
     let cfg = build_client_config(options);
 
@@ -45,20 +58,22 @@ pub async fn start_bridge(
     let handler = SharedRelayHandler {
         expected_key: options.get("hostkey.openssh").map(|v| v.expose_secret().clone()),
         relay_name: relay.name.clone(),
-        warning_callback: Box::new({
+        warning_callback: Arc::new({
             let server_handle = server_handle.clone();
             let relay_name = relay.name.clone();
             move |msg| {
                 let server_handle = server_handle.clone();
                 let relay_name = relay_name.clone();
-                async move {
+                Box::pin(async move {
                     warn!(relay = %relay_name, "{}", msg);
                     let mut payload = CryptoVec::new();
                     payload.extend(format!("[rustybridge] {}\r\n", msg).as_bytes());
                     let _ = server_handle.data(client_channel, payload).await;
-                }
+                })
             }
         }),
+        action_tx: action_tx.clone(),
+        auth_rx: auth_rx.clone(),
     };
 
     let target = format!("{}:{}", relay.ip, relay.port);
@@ -68,7 +83,8 @@ pub async fn start_bridge(
     let mut remote = client::connect(cfg, (relay.ip.as_str(), relay.port as u16), handler).await?;
 
     // Authenticate according to options.
-    authenticate_relay_session(&mut remote, options, base_username).await?;
+    let prompt_sink = prompt_sink.clone();
+    authenticate_relay_session(&mut remote, options, base_username, &action_tx, &auth_rx, prompt_sink).await?;
 
     // Open channel + PTY + shell
     let rchan = remote.channel_open_session().await?;
@@ -81,6 +97,7 @@ pub async fn start_bridge(
 
     let server_handle_in = server_handle.clone();
     let client_channel_in = client_channel;
+    let channel_id = rchan.id();
 
     // Single task handling relay->client, client->relay, and window resizes.
     tokio::spawn(async move {
@@ -140,30 +157,76 @@ pub async fn start_bridge(
         }
     });
 
-    Ok(RelayHandle { input_tx: tx })
+    Ok(RelayHandle {
+        session: remote,
+        channel_id,
+        input_tx: tx,
+    })
 }
 
-async fn resolve_auth_username(options: &std::collections::HashMap<String, crate::secrets::SecretString>, fallback: &str) -> String {
+/// Resolve the username for relay authentication based on credential configuration.
+/// Returns None if username should be prompted interactively (username_mode="blank").
+async fn resolve_auth_username(
+    options: &std::collections::HashMap<String, crate::secrets::SecretString>,
+    fallback: &str,
+) -> Option<String> {
+    // Explicit auth.username always takes precedence (for inline auth)
     if let Some(u) = options.get("auth.username") {
-        return u.expose_secret().clone();
+        return Some(u.expose_secret().clone());
     }
+
+    // If relay options declare username_mode explicitly, honor it
+    if let Some(mode) = options.get("auth.username_mode").map(|s| s.expose_secret().as_str()) {
+        match mode {
+            "passthrough" => return Some(fallback.to_string()),
+            "blank" => return None,
+            "fixed" => {
+                // fall through to credential/meta or inline username
+            }
+            _ => {}
+        }
+    }
+
+    // Check credential configuration
     if let Some(id_str) = options.get("auth.id")
         && let Ok(id) = id_str.expose_secret().parse::<i64>()
     {
         let db = match state_store::server_db().await {
             Ok(h) => h,
-            Err(_) => return fallback.to_string(),
+            Err(_) => return Some(fallback.to_string()),
         };
         let pool = db.into_pool();
-        if let Ok(Some(row)) = state_store::get_relay_credential_by_id(&pool, id).await
-            && let Some(meta) = row.meta
-            && let Ok(json) = serde_json::from_str::<JsonValue>(&meta)
-            && let Some(u) = json.get("username").and_then(|v| v.as_str())
-        {
-            return u.to_string();
+        if let Ok(Some(row)) = state_store::get_relay_credential_by_id(&pool, id).await {
+            // Check username_mode
+            match row.username_mode.as_str() {
+                "passthrough" => {
+                    // Use the relay user's username (base_username)
+                    return Some(fallback.to_string());
+                }
+                "blank" => {
+                    // Signal that username should be prompted interactively
+                    return None;
+                }
+                "fixed" | _ => {
+                    // Use stored username from meta, or fallback
+                    if let Some(meta) = row.meta
+                        && let Ok(json) = serde_json::from_str::<JsonValue>(&meta)
+                        && let Some(u) = json.get("username").and_then(|v| v.as_str())
+                    {
+                        return Some(u.to_string());
+                    } else {
+                        // No stored username; fallback to base user
+                        return Some(fallback.to_string());
+                    }
+                }
+            }
         }
     }
-    fallback.to_string()
+
+    // No credential; default to manual login
+    // TODO: Perhaps this should be a failure, or perhaps we should allow our server to configure in
+    // settings if we should fallback to manual, passthrough, or deny when no username mode is specified.
+    None
 }
 
 fn ensure_success(res: client::AuthResult, method: &str) -> Result<()> {
@@ -173,17 +236,93 @@ fn ensure_success(res: client::AuthResult, method: &str) -> Result<()> {
     }
 }
 
+/// Send an interactive prompt to the user (if channels are present) and await the response.
+async fn prompt_for_input(
+    prompt: &str,
+    echo: bool,
+    action_tx: &Option<tokio::sync::mpsc::UnboundedSender<tui_core::AppAction>>,
+    auth_rx: &Option<std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<String>>>>,
+    prompt_sink: Option<(russh::server::Handle, russh::ChannelId)>,
+) -> Result<String> {
+    let tx = action_tx
+        .as_ref()
+        .ok_or_else(|| crate::ServerError::Other("interactive auth prompt channel unavailable".to_string()))?;
+    let rx_arc = auth_rx
+        .as_ref()
+        .ok_or_else(|| crate::ServerError::Other("interactive auth response channel unavailable".to_string()))?;
+
+    // Fire the prompt to the UI; ignore send errors because the receiver might have gone away.
+    tracing::warn!("sending interactive prompt: '{}', echo={}", prompt, echo);
+    let prompt_str = if echo { prompt.to_string() } else { format!("\r\n{}", prompt) };
+    let _ = tx.send(tui_core::AppAction::AuthPrompt { prompt: prompt_str, echo });
+
+    if let Some((handle, chan)) = prompt_sink {
+        let mut payload = CryptoVec::new();
+        payload.extend(prompt.as_bytes());
+        // Do not append trailing spaces/newlines here; just the prompt text.
+        let _ = handle.data(chan, payload).await;
+    }
+
+    let mut rx = rx_arc.lock().await;
+    let response = rx
+        .recv()
+        .await
+        .ok_or_else(|| crate::ServerError::Other("authentication prompt was cancelled".to_string()))?;
+
+    let trimmed = response.trim_end_matches(|c| c == '\r' || c == '\n').to_string();
+    tracing::warn!(
+        "received interactive response (len={}, echo={} prompt='{}')",
+        trimmed.len(),
+        echo,
+        prompt
+    );
+    Ok(trimmed)
+}
+
 async fn authenticate_relay_session<H: client::Handler>(
     remote: &mut client::Handle<H>,
     options: &std::collections::HashMap<String, crate::secrets::SecretString>,
     base_username: &str,
+    action_tx: &Option<tokio::sync::mpsc::UnboundedSender<tui_core::AppAction>>,
+    auth_rx: &Option<std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<String>>>>,
+    prompt_sink: Option<(russh::server::Handle, russh::ChannelId)>,
 ) -> Result<()> {
     let method = options.get("auth.method").map(|s| s.expose_secret().as_str()).unwrap_or("password");
-    let username = resolve_auth_username(options, base_username).await;
+    let username_opt = resolve_auth_username(options, base_username).await;
     let cred_id = options.get("auth.id").and_then(|s| s.expose_secret().parse::<i64>().ok());
+    let interactive_available = action_tx.is_some() && auth_rx.is_some();
+    let mut username_mode = String::from("inline");
+    let mut password_required_flag: Option<bool> = None;
+    // Capture explicit username_mode override from options (e.g., relay settings)
+    if let Some(mode) = options.get("auth.username_mode") {
+        username_mode = mode.expose_secret().clone();
+    }
+
     match method {
         "password" => {
-            let password = if let Some(id) = cred_id {
+            // Resolve username, prompting if configured as blank
+            let username = match username_opt {
+                Some(u) => u,
+                None if interactive_available => {
+                    tracing::warn!(
+                        "relay auth prompting for username (base_user={}, cred_id={:?})",
+                        base_username,
+                        cred_id
+                    );
+                    prompt_for_input("Username: ", true, action_tx, auth_rx, prompt_sink.clone()).await?
+                }
+                None => {
+                    return Err(crate::ServerError::Other(
+                        "relay host requires a username but no interactive prompt channel is available".to_string(),
+                    ));
+                }
+            };
+
+            // Resolve password depending on credential configuration
+            let mut password_required = true;
+            let mut password: Option<String> = None;
+
+            if let Some(id) = cred_id {
                 let db = state_store::server_db().await?;
                 let pool = db.into_pool();
                 let cred = state_store::get_relay_credential_by_id(&pool, id)
@@ -192,32 +331,113 @@ async fn authenticate_relay_session<H: client::Handler>(
                 if cred.kind != "password" {
                     return Err(crate::ServerError::Other("credential is not of kind password".to_string()));
                 }
-                let (pt, is_legacy) = crate::secrets::decrypt_secret(&cred.salt, &cred.nonce, &cred.secret)?;
-                if is_legacy {
-                    warn!("Upgrading legacy v1 credential '{}' (password)", id);
-                    if let Ok(blob) = crate::secrets::encrypt_secret(pt.expose_secret()) {
-                        let _ = sqlx::query("UPDATE relay_credentials SET salt = ?, nonce = ?, secret = ? WHERE id = ?")
-                            .bind(blob.salt)
-                            .bind(blob.nonce)
-                            .bind(blob.ciphertext)
-                            .bind(id)
-                            .execute(&pool)
-                            .await;
+                username_mode = cred.username_mode.clone();
+                password_required = cred.password_required;
+                password_required_flag = Some(cred.password_required);
+
+                let has_secret = !cred.secret.is_empty();
+                if has_secret {
+                    match crate::secrets::decrypt_secret(&cred.salt, &cred.nonce, &cred.secret) {
+                        Ok((pt, is_legacy)) => {
+                            if is_legacy {
+                                warn!("Upgrading legacy v1 credential '{}' (password)", id);
+                                if let Ok(blob) = crate::secrets::encrypt_secret(pt.expose_secret()) {
+                                    let _ = sqlx::query("UPDATE relay_credentials SET salt = ?, nonce = ?, secret = ? WHERE id = ?")
+                                        .bind(blob.salt)
+                                        .bind(blob.nonce)
+                                        .bind(blob.ciphertext)
+                                        .bind(id)
+                                        .execute(&pool)
+                                        .await;
+                                }
+                            }
+                            password = Some(
+                                String::from_utf8(pt.expose_secret().clone())
+                                    .map_err(|_| crate::ServerError::Crypto("credential secret is not valid UTF-8".to_string()))?,
+                            );
+                            // If the stored password is empty, treat it as None so we prompt interactively
+                            if let Some(ref p) = password {
+                                if p.is_empty() {
+                                    password = None;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("failed to decrypt password credential {id}: {e}");
+                            // Fall through to prompt/empty handling below
+                            password = None;
+                        }
                     }
                 }
-                String::from_utf8(pt.expose_secret().clone())
-                    .map_err(|_| crate::ServerError::Crypto("credential secret is not valid UTF-8".to_string()))?
-            } else {
-                options
-                    .get("auth.password")
-                    .ok_or_else(|| crate::ServerError::Other("relay host requires 'auth.password' for password auth".to_string()))?
-                    .expose_secret()
-                    .to_string()
+            } else if let Some(pw) = options.get("auth.password") {
+                let val = pw.expose_secret().to_string();
+                if val.is_empty() {
+                    // Treat empty inline password as "absent" so we will prompt
+                    password = None;
+                } else {
+                    password = Some(val);
+                }
+            }
+            tracing::info!(
+                "relay auth password path pre-prompt (cred_id={:?}, inline_pw_present={}, password_required={}, interactive_available={})",
+                cred_id,
+                password.is_some(),
+                password_required,
+                interactive_available
+            );
+
+            let password = match password {
+                Some(pw) => pw,
+                None if interactive_available => {
+                    tracing::warn!(
+                        "relay auth prompting for password (user={}, cred_id={:?}, password_required={:?}, username_mode={})",
+                        username,
+                        cred_id,
+                        password_required_flag.unwrap_or(password_required),
+                        username_mode
+                    );
+                    prompt_for_input("Password: ", false, action_tx, auth_rx, prompt_sink.clone()).await?
+                }
+                None if !password_required => {
+                    warn!("password not stored for relay credential; using empty password");
+                    String::new()
+                }
+                None => {
+                    return Err(crate::ServerError::Other(
+                        "relay host requires a password but no interactive prompt channel is available".to_string(),
+                    ));
+                }
             };
-            let res = remote.authenticate_password(username.to_string(), password).await?;
+
+            tracing::info!(
+                "relay auth attempting password method (user={}, cred_id={:?}, username_mode={}, password_required={}, interactive_available={})",
+                username,
+                cred_id,
+                username_mode,
+                password_required_flag.unwrap_or(password_required),
+                interactive_available
+            );
+
+            tracing::info!(
+                "relay auth attempting password method (user={}, cred_id={:?}, username_mode={}, password_required={}, interactive_available={}, options_username_mode={})",
+                username,
+                cred_id,
+                username_mode,
+                password_required_flag.unwrap_or(password_required),
+                interactive_available,
+                options
+                    .get("auth.username_mode")
+                    .map(|s| s.expose_secret().as_str())
+                    .unwrap_or("unset"),
+            );
+            let res = remote.authenticate_password(username, password).await?;
             ensure_success(res, "password")?;
         }
         "publickey" | "ssh_key" => {
+            // Resolve username (publickey doesn't support blank/interactive username)
+            let username =
+                username_opt.ok_or_else(|| crate::ServerError::Other("Username required for publickey authentication".to_string()))?;
+
             if let Some(id) = cred_id {
                 let db = state_store::server_db().await?;
                 let pool = db.into_pool();
@@ -283,6 +503,10 @@ async fn authenticate_relay_session<H: client::Handler>(
             }
         }
         "agent" => {
+            // Resolve username (agent doesn't support blank/interactive username)
+            let username =
+                username_opt.ok_or_else(|| crate::ServerError::Other("Username required for agent authentication".to_string()))?;
+
             #[cfg(unix)]
             {
                 use russh::keys::agent::client::AgentClient;
@@ -389,6 +613,8 @@ pub async fn connect_to_relay_channel(
     relay_name: &str,
     base_username: &str,
     term_size: (u32, u32),
+    prompt_tx: Option<tokio::sync::mpsc::UnboundedSender<AuthPromptEvent>>,
+    auth_rx: Option<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<String>>>,
 ) -> Result<russh::Channel<russh::client::Msg>> {
     let db = state_store::server_db().await?;
     let pool = db.into_pool();
@@ -426,17 +652,42 @@ pub async fn connect_to_relay_channel(
 
     let cfg = build_client_config(&options);
 
+    let auth_rx = auth_rx.map(Arc::new);
+
+    // Bridge simple prompt events (for web) to AppAction channel expected by auth flow
+    let (action_tx, mut action_rx_forward) = if prompt_tx.is_some() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<tui_core::AppAction>();
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
+
     let handler = SharedRelayHandler {
         expected_key: options.get("hostkey.openssh").map(|v| v.expose_secret().clone()),
         relay_name: relay.name.clone(),
-        warning_callback: Box::new(|msg| async move {
-            eprintln!("Warning: {}", msg);
+        warning_callback: std::sync::Arc::new(|msg| {
+            Box::pin(async move {
+                eprintln!("Warning: {}", msg);
+            })
         }),
+        action_tx: action_tx.clone(),
+        auth_rx: auth_rx.clone(),
     };
 
     let mut session = client::connect(cfg, (relay.ip.as_str(), relay.port as u16), handler).await?;
 
-    authenticate_relay_session(&mut session, &options, base_username).await?;
+    // If we're bridging prompts, forward AuthPrompt actions to the caller's channel.
+    if let (Some(mut rx), Some(ptx)) = (action_rx_forward.take(), prompt_tx) {
+        tokio::spawn(async move {
+            while let Some(action) = rx.recv().await {
+                if let tui_core::AppAction::AuthPrompt { prompt, echo } = action {
+                    let _ = ptx.send(AuthPromptEvent { prompt, echo });
+                }
+            }
+        });
+    }
+
+    authenticate_relay_session(&mut session, &options, base_username, &action_tx, &auth_rx, None).await?;
 
     let channel = session.channel_open_session().await?;
     channel.request_pty(true, "xterm", term_size.0, term_size.1, 0, 0, &[]).await?;
@@ -489,14 +740,20 @@ pub async fn connect_to_relay_local(relay_name: &str, base_username: &str) -> Re
     let handler = SharedRelayHandler {
         expected_key: options.get("hostkey.openssh").map(|v| v.expose_secret().clone()),
         relay_name: relay.name.clone(),
-        warning_callback: Box::new(|msg| async move {
-            eprintln!("Warning: {}", msg);
+        warning_callback: std::sync::Arc::new(|msg| {
+            Box::pin(async move {
+                eprintln!("Warning: {}", msg);
+            })
         }),
+        action_tx: None,
+        auth_rx: None,
     };
 
     let mut session = client::connect(cfg, (relay.ip.as_str(), relay.port as u16), handler).await?;
 
-    authenticate_relay_session(&mut session, &options, base_username).await?;
+    let no_action_tx: Option<tokio::sync::mpsc::UnboundedSender<tui_core::AppAction>> = None;
+    let no_auth_rx: Option<std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<String>>>> = None;
+    authenticate_relay_session(&mut session, &options, base_username, &no_action_tx, &no_auth_rx, None).await?;
 
     // Run interactive shell bridging to stdio
     let shell_opts = ssh_core::session::ShellOptions {
@@ -544,48 +801,37 @@ fn build_client_config(options: &std::collections::HashMap<String, crate::secret
     Arc::new(cfg)
 }
 
-#[derive(Clone)]
-pub struct SharedRelayHandler<F> {
+pub struct SharedRelayHandler {
     pub expected_key: Option<String>,
     pub relay_name: String,
-    pub warning_callback: Box<F>,
+    pub warning_callback: std::sync::Arc<dyn Fn(String) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>,
+    pub action_tx: Option<tokio::sync::mpsc::UnboundedSender<tui_core::AppAction>>,
+    pub auth_rx: Option<std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<String>>>>,
 }
 
-impl<F, Fut> client::Handler for SharedRelayHandler<F>
-where
-    F: Fn(String) -> Fut + Send + Sync + Clone + 'static,
-    Fut: std::future::Future<Output = ()> + Send,
-{
-    type Error = crate::ServerError;
+impl client::Handler for SharedRelayHandler {
+    type Error = russh::Error;
+
     fn check_server_key(
         &mut self,
-        key: &keys::PublicKey,
+        server_public_key: &keys::PublicKey,
     ) -> impl std::future::Future<Output = std::result::Result<bool, Self::Error>> + Send {
-        let expected = self.expected_key.clone().map(|s| s.trim().to_string());
-        let relay_name = self.relay_name.clone();
-        let presented = key.to_openssh().map(|s| s.to_string()).unwrap_or_default();
-        let presented_norm = presented.trim().to_string();
-        let algo = key.algorithm().to_string();
-        let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
+        let expected = self.expected_key.clone();
         let callback = self.warning_callback.clone();
+        let key_str_res = server_public_key.to_openssh().map(|k| k.to_string());
 
         async move {
-            if let Some(exp) = expected {
-                if exp == presented_norm {
-                    return Ok(true);
+            let key_str = match key_str_res {
+                Ok(k) => k,
+                Err(_) => return Ok(false),
+            };
+
+            if let Some(ref exp) = expected {
+                if key_str != *exp {
+                    callback(format!("HOST KEY MISMATCH: expected '{}', got '{}'", exp, key_str)).await;
+                    return Ok(false);
                 }
-                callback(format!(
-                    "Relay host key mismatch for '{}'! Expected: {}, Presented: {}",
-                    relay_name, exp, presented_norm
-                ))
-                .await;
-                return Ok(false);
             }
-            callback(format!(
-                "No stored host key for relay '{}'. Key type: {}, Fingerprint: {}. Accepted this session only.",
-                relay_name, algo, fingerprint
-            ))
-            .await;
             Ok(true)
         }
     }

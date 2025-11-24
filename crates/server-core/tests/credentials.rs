@@ -25,7 +25,7 @@ async fn credential_crud_and_assignment_guard() -> Result<()> {
     }
 
     // Create password credential
-    let _id = server_core::create_password_credential("cred1", Some("user1"), "pw1").await?;
+    let _id = server_core::create_password_credential("cred1", Some("user1"), "pw1", "fixed", true).await?;
 
     // Assign to host
     server_core::assign_credential("h1", "cred1").await?;

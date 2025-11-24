@@ -34,13 +34,17 @@ pub async fn list_relay_hosts() -> Result<Vec<RelayHostInfo>> {
             .await
             .map_err(|e| anyhow!("{}", e))?;
 
-        let decode_non_secret = |raw: &str| {
-            server_core::secrets::decrypt_string_if_encrypted(raw)
-                .map(|s| s.0.expose_secret().to_string())
-                .unwrap_or_else(|_| raw.to_string())
+        let decode_value = |raw: &str, is_secure: bool| {
+            if is_secure {
+                server_core::secrets::decrypt_string_if_encrypted(raw)
+                    .map(|s| s.0.expose_secret().to_string())
+                    .unwrap_or_else(|_| raw.to_string())
+            } else {
+                raw.to_string()
+            }
         };
 
-        let auth_source = opts.get("auth.source").map(|(v, _)| decode_non_secret(v));
+        let auth_source = opts.get("auth.source").map(|(v, s)| decode_value(v, *s));
 
         let credential_id = if let Some((auth_id, is_secure)) = opts.get("auth.id") {
             if *is_secure {
@@ -66,19 +70,7 @@ pub async fn list_relay_hosts() -> Result<Vec<RelayHostInfo>> {
                     None
                 }
             }
-            Some("inline") => {
-                let method = opts
-                    .get("auth.method")
-                    .map(|(v, _)| decode_non_secret(v))
-                    .unwrap_or_else(|| "unknown".to_string());
-
-                match method.as_str() {
-                    "password" => Some("Custom (Password)".to_string()),
-                    "publickey" => Some("Custom (SSH Key)".to_string()),
-                    "agent" => Some("Custom (Agent)".to_string()),
-                    other => Some(format!("Custom ({})", other)),
-                }
-            }
+            Some("inline") => None,
             _ => None,
         };
 
@@ -91,6 +83,7 @@ pub async fn list_relay_hosts() -> Result<Vec<RelayHostInfo>> {
                 saved_credential_id: credential_id,
                 custom_type: None,
                 username: None,
+                username_mode: None,
                 has_password: false,
                 has_private_key: false,
                 has_passphrase: false,
@@ -99,8 +92,9 @@ pub async fn list_relay_hosts() -> Result<Vec<RelayHostInfo>> {
             Some("inline") => Some(AuthWebConfig {
                 mode: "custom".to_string(),
                 saved_credential_id: None,
-                custom_type: opts.get("auth.method").map(|(v, _)| decode_non_secret(v)),
-                username: opts.get("auth.username").map(|(v, _)| decode_non_secret(v)),
+                custom_type: opts.get("auth.method").map(|(v, s)| decode_value(v, *s)),
+                username: opts.get("auth.username").map(|(v, s)| decode_value(v, *s)),
+                username_mode: opts.get("auth.username_mode").map(|(v, s)| decode_value(v, *s)),
                 has_password: opts.contains_key("auth.password"),
                 has_private_key: opts.contains_key("auth.identity"),
                 has_passphrase: opts.contains_key("auth.passphrase"),
@@ -111,6 +105,7 @@ pub async fn list_relay_hosts() -> Result<Vec<RelayHostInfo>> {
                 saved_credential_id: None,
                 custom_type: None,
                 username: None,
+                username_mode: None,
                 has_password: false,
                 has_private_key: false,
                 has_passphrase: false,
@@ -296,20 +291,38 @@ pub async fn set_custom_auth(id: i64, req: CustomAuthRequest) -> Result<()> {
 
     match req.auth_type.as_str() {
         "password" => {
-            let password = req.password.as_deref().ok_or_else(|| anyhow!("Password required"))?;
-            server_core::set_custom_password_auth(&relay.name, req.username.as_deref(), password)
-                .await
-                .map_err(|e| anyhow!("{}", e))?;
+            // Only require password if username_mode is "fixed" AND password_required is true
+            let password = if req.username_mode == "fixed" && req.password_required {
+                req.password.as_deref().ok_or_else(|| anyhow!("Password required"))?
+            } else {
+                // For interactive/passthrough modes, password is optional
+                req.password.as_deref().unwrap_or("")
+            };
+            server_core::set_custom_password_auth(
+                &relay.name,
+                req.username.as_deref(),
+                password,
+                &req.username_mode,
+                req.password_required,
+            )
+            .await
+            .map_err(|e| anyhow!("{}", e))?;
         }
         "ssh_key" => {
             let private_key = req.private_key.as_deref().ok_or_else(|| anyhow!("Private key required"))?;
-            server_core::set_custom_ssh_key_auth(&relay.name, req.username.as_deref(), private_key, req.passphrase.as_deref())
-                .await
-                .map_err(|e| anyhow!("{}", e))?;
+            server_core::set_custom_ssh_key_auth(
+                &relay.name,
+                req.username.as_deref(),
+                private_key,
+                req.passphrase.as_deref(),
+                &req.username_mode,
+            )
+            .await
+            .map_err(|e| anyhow!("{}", e))?;
         }
         "agent" => {
             let public_key = req.public_key.as_deref().ok_or_else(|| anyhow!("Public key required"))?;
-            server_core::set_custom_agent_auth(&relay.name, req.username.as_deref(), public_key)
+            server_core::set_custom_agent_auth(&relay.name, req.username.as_deref(), public_key, &req.username_mode)
                 .await
                 .map_err(|e| anyhow!("{}", e))?;
         }

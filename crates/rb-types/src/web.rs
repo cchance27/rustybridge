@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::ClaimType;
 
+// TODO: custom_type, username_mode should be enums to strongly type with proper impl's for display, from, to etc.
+
 /// Authentication configuration for UI editing
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AuthWebConfig {
@@ -11,6 +13,7 @@ pub struct AuthWebConfig {
     pub saved_credential_id: Option<i64>,
     pub custom_type: Option<String>, // "password", "ssh_key", "agent"
     pub username: Option<String>,
+    pub username_mode: Option<String>,
     // Presence flags only; sensitive data is never returned to the web client
     pub has_password: bool,
     pub has_private_key: bool,
@@ -38,6 +41,8 @@ pub struct CredentialInfo {
     pub name: String,
     pub kind: String, // "password", "ssh_key", "agent"
     pub username: Option<String>,
+    pub username_mode: String,   // "fixed", "blank", "passthrough"
+    pub password_required: bool, // only relevant for password type
     pub has_secret: bool,
     pub assigned_relays: Vec<String>,
 }
@@ -156,6 +161,8 @@ pub struct CreateCredentialRequest {
     pub name: String,
     pub kind: String,
     pub username: Option<String>,
+    pub username_mode: String,       // "fixed", "blank", "passthrough"
+    pub password_required: bool,     // only relevant for password type
     pub password: Option<String>,    // for password type
     pub private_key: Option<String>, // for ssh_key type
     pub public_key: Option<String>,  // for agent type
@@ -178,6 +185,8 @@ pub struct UpdateCredentialRequest {
     pub name: String,
     pub kind: String,
     pub username: Option<String>,
+    pub username_mode: String,   // "fixed", "blank", "passthrough"
+    pub password_required: bool, // only relevant for password type
     pub password: Option<String>,
     pub private_key: Option<String>,
     pub public_key: Option<String>,
@@ -188,7 +197,9 @@ pub struct UpdateCredentialRequest {
 pub struct CustomAuthRequest {
     pub auth_type: String, // "password", "ssh_key", "agent"
     pub username: Option<String>,
+    pub username_mode: String, // "fixed", "blank", "passthrough"
     pub password: Option<String>,
+    pub password_required: bool,
     pub private_key: Option<String>,
     pub passphrase: Option<String>,
     pub public_key: Option<String>,

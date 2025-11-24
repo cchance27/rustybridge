@@ -408,6 +408,8 @@ pub struct RelayCredentialRow {
     pub nonce: Vec<u8>,
     pub secret: Vec<u8>,
     pub meta: Option<String>,
+    pub username_mode: String,
+    pub password_required: bool,
 }
 
 pub async fn insert_relay_credential(
@@ -418,13 +420,15 @@ pub async fn insert_relay_credential(
     nonce: &[u8],
     secret: &[u8],
     meta: Option<&str>,
+    username_mode: &str,
+    password_required: bool,
 ) -> DbResult<i64> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
     sqlx::query(
-        "INSERT INTO relay_credentials (name, kind, salt, nonce, secret, meta, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO relay_credentials (name, kind, salt, nonce, secret, meta, username_mode, password_required, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(name)
     .bind(kind)
@@ -432,6 +436,8 @@ pub async fn insert_relay_credential(
     .bind(nonce)
     .bind(secret)
     .bind(meta)
+    .bind(username_mode)
+    .bind(password_required as i64)
     .bind(now)
     .bind(now)
     .execute(pool)
@@ -452,23 +458,27 @@ pub async fn delete_relay_credential_by_name(pool: &SqlitePool, name: &str) -> D
 }
 
 pub async fn get_relay_credential_by_name(pool: &SqlitePool, name: &str) -> DbResult<Option<RelayCredentialRow>> {
-    let row = sqlx::query("SELECT id, name, kind, salt, nonce, secret, meta FROM relay_credentials WHERE name = ?")
-        .bind(name)
-        .fetch_optional(pool)
-        .await?;
+    let row = sqlx::query(
+        "SELECT id, name, kind, salt, nonce, secret, meta, username_mode, password_required FROM relay_credentials WHERE name = ?",
+    )
+    .bind(name)
+    .fetch_optional(pool)
+    .await?;
     Ok(row.map(map_cred_row))
 }
 
 pub async fn get_relay_credential_by_id(pool: &SqlitePool, id: i64) -> DbResult<Option<RelayCredentialRow>> {
-    let row = sqlx::query("SELECT id, name, kind, salt, nonce, secret, meta FROM relay_credentials WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
+    let row = sqlx::query(
+        "SELECT id, name, kind, salt, nonce, secret, meta, username_mode, password_required FROM relay_credentials WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
     Ok(row.map(map_cred_row))
 }
 
-pub async fn list_relay_credentials(pool: &SqlitePool) -> DbResult<Vec<(i64, String, String, Option<String>)>> {
-    let rows = sqlx::query("SELECT id, name, kind, meta FROM relay_credentials ORDER BY name")
+pub async fn list_relay_credentials(pool: &SqlitePool) -> DbResult<Vec<(i64, String, String, Option<String>, String, bool)>> {
+    let rows = sqlx::query("SELECT id, name, kind, meta, username_mode, password_required FROM relay_credentials ORDER BY name")
         .fetch_all(pool)
         .await?;
     Ok(rows
@@ -479,6 +489,8 @@ pub async fn list_relay_credentials(pool: &SqlitePool) -> DbResult<Vec<(i64, Str
                 r.get::<String, _>("name"),
                 r.get::<String, _>("kind"),
                 r.get::<Option<String>, _>("meta"),
+                r.get::<String, _>("username_mode"),
+                r.get::<i64, _>("password_required") != 0,
             )
         })
         .collect())
@@ -493,6 +505,8 @@ fn map_cred_row(r: sqlx::sqlite::SqliteRow) -> RelayCredentialRow {
         nonce: r.get("nonce"),
         secret: r.get("secret"),
         meta: r.get("meta"),
+        username_mode: r.get("username_mode"),
+        password_required: r.get::<i64, _>("password_required") != 0,
     }
 }
 
@@ -511,17 +525,21 @@ pub async fn update_relay_credential(
     nonce: &[u8],
     secret: &[u8],
     meta: Option<&str>,
+    username_mode: &str,
+    password_required: bool,
 ) -> DbResult<()> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    sqlx::query("UPDATE relay_credentials SET kind = ?, salt = ?, nonce = ?, secret = ?, meta = ?, updated_at = ? WHERE id = ?")
+    sqlx::query("UPDATE relay_credentials SET kind = ?, salt = ?, nonce = ?, secret = ?, meta = ?, username_mode = ?, password_required = ?, updated_at = ? WHERE id = ?")
         .bind(kind)
         .bind(salt)
         .bind(nonce)
         .bind(secret)
         .bind(meta)
+        .bind(username_mode)
+        .bind(password_required as i64)
         .bind(now)
         .bind(id)
         .execute(pool)
@@ -905,13 +923,14 @@ async fn init_pool(location: DbLocation) -> DbResult<DbHandle> {
     // Check and fix permissions on existing database files
     if let Some(ref path) = location.path
         && !location.freshly_created
-            && let Ok(changed) = ensure_secure_permissions(path)
-                && changed {
-                    warn!(
-                        db = %path.display(),
-                        "Fixed insecure database file permissions to 0600"
-                    );
-                }
+        && let Ok(changed) = ensure_secure_permissions(path)
+        && changed
+    {
+        warn!(
+            db = %path.display(),
+            "Fixed insecure database file permissions to 0600"
+        );
+    }
 
     Ok(DbHandle {
         pool,

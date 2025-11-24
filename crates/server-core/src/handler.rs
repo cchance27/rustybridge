@@ -1,6 +1,6 @@
 //! SSH handler implementation that drives per-connection state and the echo TUI.
 
-use std::{net::SocketAddr, time::Instant};
+use std::{net::SocketAddr, sync::Arc, time::Instant};
 
 use russh::{
     Channel, ChannelId, CryptoVec, Pty, server::{self as ssh_server, Auth, Session}
@@ -18,6 +18,10 @@ pub(super) struct ServerHandler {
     username: Option<String>,
     relay_target: Option<String>,
     relay_handle: Option<crate::relay::RelayHandle>,
+    pending_relay: Option<
+        tokio::sync::oneshot::Receiver<Result<(crate::relay::RelayHandle, tokio::sync::mpsc::UnboundedSender<String>), russh::Error>>,
+    >,
+    prompt_sink_active: bool,
     channel: Option<ChannelId>,
     closed: bool,
     connected_at: Instant,
@@ -29,6 +33,14 @@ pub(super) struct ServerHandler {
     // Channel for background tasks (e.g., hostkey fetch) to inject actions
     action_tx: tokio::sync::mpsc::UnboundedSender<AppAction>,
     action_rx: tokio::sync::mpsc::UnboundedReceiver<AppAction>,
+    // Interactive auth plumbing
+    auth_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    pending_auth: Option<AuthPromptState>,
+}
+
+struct AuthPromptState {
+    buffer: Vec<u8>,
+    echo: bool,
 }
 
 impl ServerHandler {
@@ -41,6 +53,8 @@ impl ServerHandler {
             username: None,
             relay_target: None,
             relay_handle: None,
+            pending_relay: None,
+            prompt_sink_active: false,
             channel: None,
             closed: false,
             connected_at: Instant::now(),
@@ -51,6 +65,8 @@ impl ServerHandler {
             size_updates,
             action_tx,
             action_rx,
+            auth_tx: None,
+            pending_auth: None,
         }
     }
 
@@ -358,29 +374,70 @@ impl ServerHandler {
                                     }
                                 };
                                 let server_handle = session.handle();
+                                let server_handle_for_prompt = server_handle.clone();
+                                let server_handle_for_error = server_handle.clone();
                                 let size_rx = self.size_updates.subscribe();
                                 let initial_size = self.view_size();
-                                match crate::relay::start_bridge(
-                                    server_handle,
-                                    channel,
-                                    &host,
-                                    &username,
-                                    initial_size,
-                                    size_rx,
-                                    &options,
-                                    self.peer_addr,
-                                )
-                                .await
-                                {
-                                    Ok(handle) => {
-                                        self.relay_handle = Some(handle);
-                                        Ok(())
+                                let (auth_tx, auth_rx) = tokio::sync::mpsc::unbounded_channel();
+                                self.auth_tx = Some(auth_tx.clone());
+                                let action_tx = self.action_tx.clone();
+                                let peer = self.peer_addr;
+                                let options_arc = Arc::new(options);
+                                let host_clone = host.clone();
+                                let username_clone = username.clone();
+
+                                // Spawn background connect; result delivered via oneshot
+                                let (tx_done, rx_done) = tokio::sync::oneshot::channel();
+                                tokio::spawn(async move {
+                                    let res = crate::relay::start_bridge(
+                                        server_handle,
+                                        channel,
+                                        &host_clone,
+                                        &username_clone,
+                                        initial_size,
+                                        size_rx,
+                                        options_arc.as_ref(),
+                                        peer,
+                                        Some(action_tx),
+                                        Some(tokio::sync::Mutex::new(auth_rx)),
+                                        Some((server_handle_for_prompt, channel)),
+                                    )
+                                    .await
+                                    .map(|h| (h, auth_tx));
+
+                                    match res {
+                                        Ok(ok) => {
+                                            let _ = tx_done.send(Ok(ok));
+                                        }
+                                        Err(e) => {
+                                            // Inform client immediately
+                                            let mut payload = CryptoVec::new();
+                                            payload.extend(format!("failed to start relay: {e}\r\n").as_bytes());
+                                            let _ = server_handle_for_error.data(channel, payload).await;
+                                            let _ = server_handle_for_error.close(channel).await;
+                                            let _ = tx_done.send(Err(russh::Error::IO(std::io::Error::other(e))));
+                                        }
                                     }
-                                    Err(err) => {
-                                        let _ = self.send_line(session, channel, &format!("failed to start relay: {err}"));
-                                        self.handle_exit(session, channel)
+                                });
+
+                                self.prompt_sink_active = true;
+                                self.pending_relay = Some(rx_done);
+
+                                // Drain any immediate AuthPrompt actions queued during connect spawn
+                                while let Ok(action) = self.action_rx.try_recv() {
+                                    if let AppAction::AuthPrompt { prompt, echo } = action {
+                                        if !self.prompt_sink_active {
+                                            let _ = self.send_bytes(session, channel, prompt.as_bytes());
+                                            if echo {
+                                                let _ = self.send_bytes(session, channel, b" ");
+                                            }
+                                        }
+                                        self.pending_auth = Some(AuthPromptState { buffer: Vec::new(), echo });
+                                    } else {
+                                        // re-queue other actions by pushing back into action_rx? drop for now
                                     }
                                 }
+                                Ok(())
                             }
                             Ok(false) => {
                                 warn!(
@@ -516,6 +573,127 @@ impl ssh_server::Handler for ServerHandler {
             self.process_action(action, session, channel).await?;
         }
 
+        // If a relay connect is pending, poll its completion
+        if let Some(rx) = self.pending_relay.as_mut() {
+            match rx.try_recv() {
+                Ok(Ok((handle, auth_tx))) => {
+                    self.relay_handle = Some(handle);
+                    self.auth_tx = Some(auth_tx);
+                    self.pending_relay = None;
+                    self.prompt_sink_active = false; // relay established; prompts will come from remote shell now
+                }
+                Ok(Err(err)) => {
+                    let _ = self.send_line(session, channel, &format!("failed to start relay: {}", err));
+                    self.pending_relay = None;
+                    return self.handle_exit(session, channel);
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    let _ = self.send_line(session, channel, "failed to start relay: channel closed");
+                    self.pending_relay = None;
+                    return self.handle_exit(session, channel);
+                }
+            }
+        }
+
+        // If an auth prompt is active, capture input directly and bypass TUI apps
+        if self.pending_auth.is_some() {
+            let mut done = false;
+            let mut response_to_send: Option<String> = None;
+            let mut echo_out: Vec<u8> = Vec::new();
+            let _echo_enabled = {
+                let auth = self.pending_auth.as_mut().unwrap();
+                let echo_flag = auth.echo;
+                for b in data {
+                    match *b {
+                        0x03 => {
+                            // Ctrl+C: cancel prompt and close session
+                            let _ = self.send_bytes(session, channel, b"\r\n^C\r\n");
+                            self.pending_auth = None;
+                            return self.handle_exit(session, channel);
+                        }
+                        0x04 => {
+                            // Ctrl+D: treat like cancel/EOF
+                            let _ = self.send_bytes(session, channel, b"\r\n^D\r\n");
+                            self.pending_auth = None;
+                            return self.handle_exit(session, channel);
+                        }
+                        0x7f | 0x08 => {
+                            // Backspace/delete
+                            if let Some(_ch) = auth.buffer.pop() {
+                                if echo_flag {
+                                    echo_out.extend_from_slice(b"\x08 \x08");
+                                }
+                            }
+                        }
+                        0x15 => {
+                            // Ctrl+U: clear entire line
+                            let count = auth.buffer.len();
+                            auth.buffer.clear();
+                            if echo_flag && count > 0 {
+                                for _ in 0..count {
+                                    echo_out.extend_from_slice(b"\x08");
+                                }
+                                for _ in 0..count {
+                                    echo_out.extend_from_slice(b" ");
+                                }
+                                for _ in 0..count {
+                                    echo_out.extend_from_slice(b"\x08");
+                                }
+                            }
+                        }
+                        0x17 => {
+                            // Ctrl+W: delete word back to whitespace
+                            let mut removed = 0usize;
+                            while let Some(ch) = auth.buffer.pop() {
+                                removed += 1;
+                                if ch.is_ascii_whitespace() {
+                                    break;
+                                }
+                            }
+                            if echo_flag && removed > 0 {
+                                for _ in 0..removed {
+                                    echo_out.extend_from_slice(b"\x08 \x08");
+                                }
+                            }
+                        }
+                        b'\r' | b'\n' => {
+                            response_to_send = Some(String::from_utf8_lossy(&auth.buffer).to_string());
+                            done = true;
+                            break;
+                        }
+                        byte => {
+                            auth.buffer.push(byte);
+                            if echo_flag {
+                                echo_out.push(byte);
+                            }
+                        }
+                    }
+                }
+                echo_flag
+            }; // drop mutable borrow of pending_auth
+
+            if !echo_out.is_empty() {
+                let _ = self.send_bytes(session, channel, &echo_out);
+            }
+
+            if let Some(resp) = response_to_send {
+                if let Some(tx) = self.auth_tx.as_ref() {
+                    let _ = tx.send(resp);
+                }
+            }
+            if done {
+                // Add a single newline after submit so next prompt/output is on a new line
+                let _ = self.send_bytes(session, channel, b"\r\n");
+                // If auth failed elsewhere, force a flush by sending an empty data packet
+                if self.pending_relay.is_none() && self.relay_handle.is_none() {
+                    let _ = self.send_bytes(session, channel, b"");
+                }
+                self.pending_auth = None;
+            }
+            return Ok(());
+        }
+
         if let Some(relay) = self.relay_handle.as_ref() {
             if !data.is_empty() {
                 relay.send(data.to_vec());
@@ -607,7 +785,8 @@ impl ServerHandler {
                 self.relay_target = Some(name.clone());
                 self.drop_terminal(); // Stop TUI
                 self.leave_alt_screen(session, channel)?; // Leave alt screen
-                self.connect_to_relay(session, channel, &name).await?; // Now Connect
+                // Kick off background connect; prompts/results handled in data()
+                self.connect_to_relay(session, channel, &name).await?;
             }
             AppAction::FetchHostkey { id, name } => {
                 let status = tui_core::app::StatusLine {
@@ -698,6 +877,23 @@ impl ServerHandler {
                     app_session.set_status(Some(status));
                     self.render_terminal(session, channel)?;
                 }
+            }
+            AppAction::AuthPrompt { prompt, echo } => {
+                // Send prompt to the user's terminal and start capturing input
+                if !self.prompt_sink_active {
+                    let _ = self.send_bytes(session, channel, prompt.as_bytes());
+                    if echo {
+                        let _ = self.send_bytes(session, channel, b" ");
+                    }
+                }
+                if let Some(app_session) = self.app_session.as_mut() {
+                    app_session.set_status_message(Some(prompt.clone()));
+                    self.render_terminal(session, channel)?;
+                }
+                self.pending_auth = Some(AuthPromptState { buffer: Vec::new(), echo });
+            }
+            AppAction::BackendEvent(_) => {
+                // Backend events are internal signals, not handled in server mode
             }
             AppAction::Continue => {
                 // no background reloads; status and fetches are session-scoped

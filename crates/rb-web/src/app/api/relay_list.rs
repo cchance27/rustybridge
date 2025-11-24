@@ -2,11 +2,9 @@
 use anyhow::Context;
 use dioxus::prelude::*;
 use rb_types::RelayInfo;
-#[cfg(feature = "server")]
-use rb_types::auth::{ClaimLevel, ClaimType};
 
 #[cfg(feature = "server")]
-use crate::server::auth::guards::{WebAuthSession, ensure_authenticated, ensure_claim};
+use crate::server::auth::guards::{WebAuthSession, ensure_authenticated};
 
 #[get(
     "/api/relays/list",
@@ -14,7 +12,8 @@ use crate::server::auth::guards::{WebAuthSession, ensure_authenticated, ensure_c
     pool: axum::Extension<sqlx::SqlitePool>
 )]
 pub async fn list_user_relays() -> Result<Vec<RelayInfo>> {
-    ensure_claim(&auth, &ClaimType::Relays(ClaimLevel::View))?;
+    // NOTE: We don't restrict this to relays:view claim because that claim
+    // is to view ALL Relays for management not for connections.
     let user = ensure_authenticated(&auth)?;
     let username = user.username;
 

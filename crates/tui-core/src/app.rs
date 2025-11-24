@@ -101,7 +101,22 @@ pub enum AppAction {
     Error(String),
     /// Review a fetched hostkey
     ReviewHostkey(crate::apps::management::HostkeyReview),
+    /// Display an authentication prompt to the user (for keyboard-interactive auth)
+    AuthPrompt { prompt: String, echo: bool },
+    /// Opaque backend event (used for internal signaling like connection completion)
+    BackendEvent(BackendEventPayload),
 }
+
+#[derive(Debug, Clone)]
+pub struct BackendEventPayload(pub std::sync::Arc<dyn std::any::Any + Send + Sync>);
+
+impl PartialEq for BackendEventPayload {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for BackendEventPayload {}
 
 // Backward compatibility constants (deprecated)
 pub const CONTINUE: AppAction = AppAction::Continue;

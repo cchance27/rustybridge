@@ -20,7 +20,7 @@ async fn agent_credential_store() -> Result<()> {
     let privk = russh::keys::PrivateKey::random(&mut osrng, russh::keys::Algorithm::Ed25519)?;
     let pubk = privk.public_key().to_openssh()?.to_string();
 
-    let _id = server_core::create_agent_credential("credAgent", Some("userA"), &pubk).await?;
+    let _id = server_core::create_agent_credential("credAgent", Some("userA"), &pubk, "fixed").await?;
     let row = sqlx::query("SELECT salt, nonce, secret FROM relay_credentials WHERE name='credAgent'")
         .fetch_one(&pool)
         .await?;

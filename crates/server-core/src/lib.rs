@@ -199,7 +199,14 @@ pub async fn set_relay_option(name: &str, key: &str, value: &str, is_secure: boo
         // These should always be encrypted
         "auth.password" | "auth.identity" | "auth.passphrase" | "hostkey.openssh" => true,
         // These can be plain text
-        "auth.source" | "auth.id" | "auth.method" | "auth.username" | "auth.agent_socket" | "auth.agent_pubkey" => false,
+        "auth.source"
+        | "auth.id"
+        | "auth.method"
+        | "auth.username"
+        | "auth.agent_socket"
+        | "auth.agent_pubkey"
+        | "auth.username_mode"
+        | "auth.password_required" => false,
         // For any other keys, respect the caller's preference (default to secure)
         _ => is_secure,
     };
@@ -684,14 +691,30 @@ pub async fn get_group_claims_server(group_name: &str) -> ServerResult<Vec<Claim
     Ok(state_store::get_group_claims(&pool, group_name).await?)
 }
 
-pub async fn create_password_credential(name: &str, username: Option<&str>, password: &str) -> ServerResult<i64> {
+pub async fn create_password_credential(
+    name: &str,
+    username: Option<&str>,
+    password: &str,
+    username_mode: &str,
+    password_required: bool,
+) -> ServerResult<i64> {
     let db = server_db().await?;
 
     let pool = db.into_pool();
     let blob = crate::secrets::encrypt_secret(password.as_bytes())?;
     let meta = username.map(|u| serde_json::json!({"username": u}).to_string());
-    let id =
-        state_store::insert_relay_credential(&pool, name, "password", &blob.salt, &blob.nonce, &blob.ciphertext, meta.as_deref()).await?;
+    let id = state_store::insert_relay_credential(
+        &pool,
+        name,
+        "password",
+        &blob.salt,
+        &blob.nonce,
+        &blob.ciphertext,
+        meta.as_deref(),
+        username_mode,
+        password_required,
+    )
+    .await?;
     info!(credential = name, kind = "password", "credential created/updated");
     Ok(id)
 }
@@ -699,68 +722,104 @@ pub async fn create_password_credential(name: &str, username: Option<&str>, pass
 pub async fn create_ssh_key_credential(
     name: &str,
     username: Option<&str>,
-    private_key_pem: &str,
-    cert_openssh: Option<&str>,
+    key: &str,
+    certificate: Option<&str>,
     passphrase: Option<&str>,
+    username_mode: &str,
 ) -> ServerResult<i64> {
     let db = server_db().await?;
 
     let pool = db.into_pool();
-    // Store key+cert in encrypted JSON payload
     let mut secret_obj = serde_json::Map::new();
-    secret_obj.insert("private_key".to_string(), serde_json::Value::String(private_key_pem.to_string()));
-    if let Some(cert) = cert_openssh {
-        secret_obj.insert("certificate".to_string(), serde_json::Value::String(cert.to_string()));
+    secret_obj.insert("private_key".to_string(), serde_json::Value::String(key.to_string()));
+    if let Some(c) = certificate {
+        secret_obj.insert("certificate".to_string(), serde_json::Value::String(c.to_string()));
     }
-    if let Some(pw) = passphrase {
-        secret_obj.insert("passphrase".to_string(), serde_json::Value::String(pw.to_string()));
+    if let Some(p) = passphrase {
+        secret_obj.insert("passphrase".to_string(), serde_json::Value::String(p.to_string()));
     }
     let secret_json = serde_json::Value::Object(secret_obj).to_string();
     let blob = crate::secrets::encrypt_secret(secret_json.as_bytes())?;
     let meta = username.map(|u| serde_json::json!({"username": u}).to_string());
-    let id =
-        state_store::insert_relay_credential(&pool, name, "ssh_key", &blob.salt, &blob.nonce, &blob.ciphertext, meta.as_deref()).await?;
+    let id = state_store::insert_relay_credential(
+        &pool,
+        name,
+        "ssh_key",
+        &blob.salt,
+        &blob.nonce,
+        &blob.ciphertext,
+        meta.as_deref(),
+        username_mode,
+        true, // password_required not applicable for ssh_key
+    )
+    .await?;
     info!(credential = name, kind = "ssh_key", "credential created/updated");
     Ok(id)
 }
 
-pub async fn create_agent_credential(name: &str, username: Option<&str>, public_key_openssh: &str) -> ServerResult<i64> {
-    use russh::keys::{HashAlg, PublicKey};
+pub async fn create_agent_credential(name: &str, username: Option<&str>, public_key: &str, username_mode: &str) -> ServerResult<i64> {
     let db = server_db().await?;
 
     let pool = db.into_pool();
-
-    // Validate and fingerprint
-    let pk = PublicKey::from_openssh(public_key_openssh).map_err(|e| ServerError::Crypto(format!("invalid OpenSSH public key: {e}")))?;
-    let fingerprint = pk.fingerprint(HashAlg::Sha256).to_string();
-
+    // For agent, we store the public key fingerprint/content to match against agent keys
+    // We'll store it as a JSON object in the secret
     let secret = serde_json::json!({
-        "public_key": public_key_openssh,
-        "fingerprint": fingerprint,
+        "public_key": public_key,
+        // We could also store fingerprint if we wanted to pre-calculate it
     })
     .to_string();
     let blob = crate::secrets::encrypt_secret(secret.as_bytes())?;
     let meta = username.map(|u| serde_json::json!({"username": u}).to_string());
-    let id = state_store::insert_relay_credential(&pool, name, "agent", &blob.salt, &blob.nonce, &blob.ciphertext, meta.as_deref()).await?;
+    let id = state_store::insert_relay_credential(
+        &pool,
+        name,
+        "agent",
+        &blob.salt,
+        &blob.nonce,
+        &blob.ciphertext,
+        meta.as_deref(),
+        username_mode,
+        true, // password_required not applicable for agent
+    )
+    .await?;
     info!(credential = name, kind = "agent", "credential created/updated");
     Ok(id)
 }
 
-pub async fn update_password_credential(id: i64, name: &str, username: Option<&str>, password: Option<&str>) -> ServerResult<()> {
+pub async fn update_password_credential(
+    id: i64,
+    name: &str,
+    username: Option<&str>,
+    password: Option<&str>,
+    username_mode: &str,
+    password_required: bool,
+) -> ServerResult<()> {
     let db = server_db().await?;
 
     let pool = db.into_pool();
-    let (salt, nonce, secret) = if let Some(pw) = password {
-        let blob = crate::secrets::encrypt_secret(pw.as_bytes())?;
+    let (salt, nonce, secret) = if let Some(p) = password {
+        let blob = crate::secrets::encrypt_secret(p.as_bytes())?;
         (blob.salt, blob.nonce, blob.ciphertext)
     } else {
+        // Keep existing secret
         let current = state_store::get_relay_credential_by_id(&pool, id)
             .await?
-            .ok_or_else(|| ServerError::not_found("credential", name))?;
+            .ok_or_else(|| ServerError::not_found("credential", id.to_string()))?;
         (current.salt, current.nonce, current.secret)
     };
     let meta = username.map(|u| serde_json::json!({"username": u}).to_string());
-    state_store::update_relay_credential(&pool, id, "password", &salt, &nonce, &secret, meta.as_deref()).await?;
+    state_store::update_relay_credential(
+        &pool,
+        id,
+        "password",
+        &salt,
+        &nonce,
+        &secret,
+        meta.as_deref(),
+        username_mode,
+        password_required,
+    )
+    .await?;
     info!(credential = name, kind = "password", "credential updated");
     Ok(())
 }
@@ -769,54 +828,87 @@ pub async fn update_ssh_key_credential(
     id: i64,
     name: &str,
     username: Option<&str>,
-    private_key_pem: Option<&str>,
-    cert_openssh: Option<&str>,
+    key: Option<&str>,
+    certificate: Option<&str>,
     passphrase: Option<&str>,
+    username_mode: &str,
 ) -> ServerResult<()> {
     let db = server_db().await?;
 
     let pool = db.into_pool();
-    // Store key+cert in encrypted JSON payload
-    let (salt, nonce, secret) = if let Some(key) = private_key_pem {
+    let (salt, nonce, secret) = if let Some(k) = key {
         let mut secret_obj = serde_json::Map::new();
-        secret_obj.insert("private_key".to_string(), serde_json::Value::String(key.to_string()));
-        if let Some(cert) = cert_openssh {
-            secret_obj.insert("certificate".to_string(), serde_json::Value::String(cert.to_string()));
+        secret_obj.insert("private_key".to_string(), serde_json::Value::String(k.to_string()));
+        if let Some(c) = certificate {
+            secret_obj.insert("certificate".to_string(), serde_json::Value::String(c.to_string()));
         }
-        if let Some(pw) = passphrase {
-            secret_obj.insert("passphrase".to_string(), serde_json::Value::String(pw.to_string()));
+        if let Some(p) = passphrase {
+            secret_obj.insert("passphrase".to_string(), serde_json::Value::String(p.to_string()));
         }
-        let secret_bytes = serde_json::to_vec(&secret_obj)?;
-        let blob = crate::secrets::encrypt_secret(&secret_bytes)?;
+        let secret_json = serde_json::Value::Object(secret_obj).to_string();
+        let blob = crate::secrets::encrypt_secret(secret_json.as_bytes())?;
         (blob.salt, blob.nonce, blob.ciphertext)
     } else {
+        // Keep existing secret
         let current = state_store::get_relay_credential_by_id(&pool, id)
             .await?
-            .ok_or_else(|| ServerError::not_found("credential", name))?;
+            .ok_or_else(|| ServerError::not_found("credential", id.to_string()))?;
         (current.salt, current.nonce, current.secret)
     };
     let meta = username.map(|u| serde_json::json!({"username": u}).to_string());
-    state_store::update_relay_credential(&pool, id, "ssh_key", &salt, &nonce, &secret, meta.as_deref()).await?;
+    state_store::update_relay_credential(
+        &pool,
+        id,
+        "ssh_key",
+        &salt,
+        &nonce,
+        &secret,
+        meta.as_deref(),
+        username_mode,
+        true, // password_required not applicable for ssh_key
+    )
+    .await?;
     info!(credential = name, kind = "ssh_key", "credential updated");
     Ok(())
 }
 
-pub async fn update_agent_credential(id: i64, name: &str, username: Option<&str>, public_key: Option<&str>) -> ServerResult<()> {
+pub async fn update_agent_credential(
+    id: i64,
+    name: &str,
+    username: Option<&str>,
+    public_key: Option<&str>,
+    username_mode: &str,
+) -> ServerResult<()> {
     let db = server_db().await?;
 
     let pool = db.into_pool();
-    // For agent, we just store the public key encrypted (though strictly it's public)
     let (salt, nonce, secret) = if let Some(pk) = public_key {
-        let blob = crate::secrets::encrypt_secret(pk.as_bytes())?;
+        let secret = serde_json::json!({
+            "public_key": pk,
+        })
+        .to_string();
+        let blob = crate::secrets::encrypt_secret(secret.as_bytes())?;
         (blob.salt, blob.nonce, blob.ciphertext)
     } else {
+        // Keep existing secret
         let current = state_store::get_relay_credential_by_id(&pool, id)
             .await?
-            .ok_or_else(|| ServerError::not_found("credential", name))?;
+            .ok_or_else(|| ServerError::not_found("credential", id.to_string()))?;
         (current.salt, current.nonce, current.secret)
     };
     let meta = username.map(|u| serde_json::json!({"username": u}).to_string());
-    state_store::update_relay_credential(&pool, id, "agent", &salt, &nonce, &secret, meta.as_deref()).await?;
+    state_store::update_relay_credential(
+        &pool,
+        id,
+        "agent",
+        &salt,
+        &nonce,
+        &secret,
+        meta.as_deref(),
+        username_mode,
+        true, // password_required not applicable for agent
+    )
+    .await?;
     info!(credential = name, kind = "agent", "credential updated");
     Ok(())
 }
@@ -870,7 +962,7 @@ pub async fn delete_credential(name: &str) -> ServerResult<()> {
     Ok(())
 }
 
-pub async fn list_credentials() -> ServerResult<Vec<(i64, String, String, Option<String>)>> {
+pub async fn list_credentials() -> ServerResult<Vec<(i64, String, String, Option<String>, String, bool)>> {
     let db = server_db().await?;
 
     let pool = db.into_pool();
@@ -879,8 +971,8 @@ pub async fn list_credentials() -> ServerResult<Vec<(i64, String, String, Option
 }
 
 /// List credentials with assigned relay hosts
-/// Returns (id, name, kind, username, assigned_relays)
-pub async fn list_credentials_with_assignments() -> ServerResult<Vec<(i64, String, String, Option<String>, Vec<String>)>> {
+/// Returns (id, name, kind, username, username_mode, password_required, assigned_relays)
+pub async fn list_credentials_with_assignments() -> ServerResult<Vec<(i64, String, String, Option<String>, String, bool, Vec<String>)>> {
     let db = server_db().await?;
 
     let pool = db.into_pool();
@@ -925,7 +1017,7 @@ pub async fn list_credentials_with_assignments() -> ServerResult<Vec<(i64, Strin
     }
 
     let mut result = Vec::new();
-    for (id, name, kind, meta) in creds {
+    for (id, name, kind, meta, username_mode, password_required) in creds {
         let username = meta
             .as_deref()
             .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
@@ -934,7 +1026,7 @@ pub async fn list_credentials_with_assignments() -> ServerResult<Vec<(i64, Strin
         let mut assigned_relays = assignments.remove(&id.to_string()).unwrap_or_default();
         assigned_relays.sort();
 
-        result.push((id, name, kind, username, assigned_relays));
+        result.push((id, name, kind, username, username_mode, password_required, assigned_relays));
     }
 
     Ok(result)
@@ -1070,7 +1162,13 @@ pub async fn unassign_credential(hostname: &str) -> ServerResult<()> {
 }
 
 /// Set custom password authentication for a relay (inline, not using a saved credential)
-pub async fn set_custom_password_auth(hostname: &str, username: Option<&str>, password: &str) -> ServerResult<()> {
+pub async fn set_custom_password_auth(
+    hostname: &str,
+    username: Option<&str>,
+    password: &str,
+    username_mode: &str,
+    password_required: bool,
+) -> ServerResult<()> {
     // Clear any existing auth first
     let db = server_db().await?;
     let pool = db.into_pool();
@@ -1087,6 +1185,14 @@ pub async fn set_custom_password_auth(hostname: &str, username: Option<&str>, pa
         set_relay_option(hostname, "auth.username", user, true).await?;
     }
     set_relay_option(hostname, "auth.password", password, true).await?;
+    set_relay_option(hostname, "auth.username_mode", username_mode, true).await?;
+    set_relay_option(
+        hostname,
+        "auth.password_required",
+        if password_required { "true" } else { "false" },
+        true,
+    )
+    .await?;
     info!(relay_host = hostname, "custom password auth configured");
     Ok(())
 }
@@ -1097,6 +1203,7 @@ pub async fn set_custom_ssh_key_auth(
     username: Option<&str>,
     private_key: &str,
     passphrase: Option<&str>,
+    username_mode: &str,
 ) -> ServerResult<()> {
     // Clear any existing auth first
     let db = server_db().await?;
@@ -1117,12 +1224,13 @@ pub async fn set_custom_ssh_key_auth(
     if let Some(pass) = passphrase {
         set_relay_option(hostname, "auth.passphrase", pass, true).await?;
     }
+    set_relay_option(hostname, "auth.username_mode", username_mode, true).await?;
     info!(relay_host = hostname, "custom SSH key auth configured");
     Ok(())
 }
 
 /// Set custom SSH agent authentication for a relay (inline, not using a saved credential)
-pub async fn set_custom_agent_auth(hostname: &str, username: Option<&str>, public_key: &str) -> ServerResult<()> {
+pub async fn set_custom_agent_auth(hostname: &str, username: Option<&str>, public_key: &str, username_mode: &str) -> ServerResult<()> {
     // Clear any existing auth first
     let db = server_db().await?;
     let pool = db.into_pool();
@@ -1139,6 +1247,7 @@ pub async fn set_custom_agent_auth(hostname: &str, username: Option<&str>, publi
         set_relay_option(hostname, "auth.username", user, true).await?;
     }
     set_relay_option(hostname, "auth.agent_pubkey", public_key, true).await?;
+    set_relay_option(hostname, "auth.username_mode", username_mode, true).await?;
     info!(relay_host = hostname, "custom agent auth configured");
     Ok(())
 }
@@ -1299,12 +1408,14 @@ pub async fn create_management_app_with_tab(
     }
     let credentials: Vec<tui_core::apps::management::CredentialItem> = creds_rows
         .into_iter()
-        .map(|(id, name, kind, _meta)| tui_core::apps::management::CredentialItem {
-            id,
-            name,
-            kind,
-            assigned: *counts.get(&id).unwrap_or(&0),
-        })
+        .map(
+            |(id, name, kind, _meta, _username_mode, _password_required)| tui_core::apps::management::CredentialItem {
+                id,
+                name,
+                kind,
+                assigned: *counts.get(&id).unwrap_or(&0),
+            },
+        )
         .collect();
 
     // Build host->credential label mapping
@@ -1336,7 +1447,7 @@ pub async fn create_management_app_with_tab(
     let mut cred_name_by_id: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
     // rebuild from list (we had moved creds_rows)
     let creds_rows2 = state_store::list_relay_credentials(&pool).await?;
-    for (id, name, _kind, _meta) in creds_rows2 {
+    for (id, name, _kind, _meta, _username_mode, _password_required) in creds_rows2 {
         cred_name_by_id.insert(id, name);
     }
     // Compute label
@@ -1441,12 +1552,20 @@ pub async fn handle_management_action(action: tui_core::AppAction) -> ServerResu
         tui_core::AppAction::AddCredential(spec) => {
             use tui_core::apps::management::CredentialSpec as Spec;
             match spec {
-                Spec::Password { name, username, password } => {
-                    let _ = crate::create_password_credential(&name, username.as_deref(), &password).await?;
+                Spec::Password {
+                    name,
+                    username,
+                    username_mode,
+                    password_required,
+                    password,
+                } => {
+                    let _ =
+                        crate::create_password_credential(&name, username.as_deref(), &password, &username_mode, password_required).await?;
                 }
                 Spec::SshKey {
                     name,
                     username,
+                    username_mode,
                     key_file: _,
                     value,
                     cert_file,
@@ -1465,15 +1584,17 @@ pub async fn handle_management_action(action: tui_core::AppAction) -> ServerResu
                         &key_data,
                         cert_data.as_deref(),
                         passphrase.as_deref(),
+                        &username_mode,
                     )
                     .await?;
                 }
                 Spec::Agent {
                     name,
                     username,
+                    username_mode,
                     public_key,
                 } => {
-                    let _ = crate::create_agent_credential(&name, username.as_deref(), &public_key).await?;
+                    let _ = crate::create_agent_credential(&name, username.as_deref(), &public_key, &username_mode).await?;
                 }
             }
         }

@@ -35,6 +35,8 @@ pub fn RelaysPage() -> Element {
     // Assign modal state (saved vs custom inline)
     let mut assign_mode = use_signal(|| "saved".to_string()); // "saved" | "custom"
     let mut assign_auth_type = use_signal(|| "password".to_string()); // password | ssh_key | agent
+    let mut assign_username_mode = use_signal(|| "fixed".to_string());
+    let mut assign_password_required = use_signal(|| true);
     let mut assign_username = use_signal(String::new);
     let mut assign_password = use_signal(String::new);
     let mut assign_private_key = use_signal(String::new);
@@ -91,6 +93,8 @@ pub fn RelaysPage() -> Element {
     let mut auth_mode = use_signal(|| "none".to_string()); // "none", "saved", "custom"
     let mut auth_type = use_signal(|| "password".to_string()); // "password", "ssh_key", "agent"
     let mut auth_username = use_signal(String::new);
+    let mut auth_username_mode = use_signal(|| "fixed".to_string());
+    let mut auth_password_required = use_signal(|| true);
     let mut auth_password = use_signal(String::new);
     let mut auth_private_key = use_signal(String::new);
     let mut auth_passphrase = use_signal(String::new);
@@ -155,6 +159,10 @@ pub fn RelaysPage() -> Element {
             match c.username {
                 Some(u) => auth_username.set(u),
                 None => auth_username.set(String::new()),
+            }
+            match c.username_mode {
+                Some(m) => auth_username_mode.set(m),
+                None => auth_username_mode.set("fixed".to_string()),
             }
             if c.has_password {
                 has_existing_password.set(true);
@@ -273,9 +281,9 @@ pub fn RelaysPage() -> Element {
                             "saved" if selected_cred_id > 0 => assign_relay_credential(relay_id, selected_cred_id).await,
                             "custom" => {
                                 let should_update_custom = match auth_type_val.as_str() {
-                                    "password" => !password_val.is_empty() || !is_editing,
-                                    "ssh_key" => !private_key_val.trim().is_empty() || !is_editing,
-                                    "agent" => !public_key_val.trim().is_empty() || !is_editing,
+                                    "password" => !password_val.is_empty() || !is_editing || auth_username_mode() != "fixed",
+                                    "ssh_key" => !private_key_val.trim().is_empty() || !is_editing || auth_username_mode() != "fixed",
+                                    "agent" => !public_key_val.trim().is_empty() || !is_editing || auth_username_mode() != "fixed",
                                     _ => false,
                                 };
 
@@ -289,11 +297,13 @@ pub fn RelaysPage() -> Element {
                                             } else {
                                                 Some(username_val.clone())
                                             },
+                                            username_mode: auth_username_mode(),
                                             password: if password_val.is_empty() {
                                                 None
                                             } else {
                                                 Some(password_val.clone())
                                             },
+                                            password_required: auth_password_required(),
                                             private_key: if private_key_val.is_empty() {
                                                 None
                                             } else {
@@ -406,6 +416,8 @@ pub fn RelaysPage() -> Element {
         assign_mode.set("saved".to_string());
         assign_auth_type.set("password".to_string());
         assign_username.set(String::new());
+        assign_username_mode.set("fixed".to_string());
+        assign_password_required.set(true);
         assign_password.set(String::new());
         assign_private_key.set(String::new());
         assign_public_key.set(String::new());
@@ -434,26 +446,23 @@ pub fn RelaysPage() -> Element {
                     errors.insert("credential".to_string(), "Select a credential".to_string());
                 }
             }
-            "custom" => match auth_type_val.as_str() {
-                "password" => {
-                    if password_val.trim().is_empty() {
-                        errors.insert("password".to_string(), "Password is required".to_string());
-                    }
-                }
-                "ssh_key" => {
-                    if private_key_val.trim().is_empty() {
-                        errors.insert("private_key".to_string(), "Private key is required".to_string());
-                    }
-                }
-                "agent" => {
-                    if public_key_val.trim().is_empty() {
-                        errors.insert("public_key".to_string(), "Public key is required".to_string());
-                    }
-                }
-                _ => {
-                    errors.insert("auth_type".to_string(), "Invalid auth type".to_string());
-                }
-            },
+            "custom" => {
+                // Use shared validation utility
+                let field_errors = crate::app::utils::validate_credential_fields(
+                    &auth_type_val,
+                    &assign_username_mode(),
+                    &username_val,
+                    assign_password_required(),
+                    &password_val,
+                    &private_key_val,
+                    &public_key_val,
+                    false, // not editing
+                    false, // no existing password
+                    false, // no existing private key
+                    false, // no existing public key
+                );
+                errors.extend(field_errors);
+            }
             _ => {}
         }
 
@@ -476,11 +485,13 @@ pub fn RelaysPage() -> Element {
                             } else {
                                 Some(username_val.clone())
                             },
+                            username_mode: assign_username_mode(),
                             password: if password_val.is_empty() {
                                 None
                             } else {
                                 Some(password_val.clone())
                             },
+                            password_required: assign_password_required(),
                             private_key: if private_key_val.is_empty() {
                                 None
                             } else {
@@ -624,6 +635,52 @@ pub fn RelaysPage() -> Element {
                                                                     move |_| open_clear_modal(id, name.clone(), is_inline)
                                                                 },
                                                                 "Clear"
+                                                            }
+                                                        }
+                                                    }
+
+                                                } else if let Some(config) = &host.auth_config {
+                                                    if config.mode == "custom" {
+                                                        div { class: "flex items-center gap-2",
+                                                            span { class: "badge badge-info",
+                                                                {
+                                                                    match (config.custom_type.as_deref(), config.username_mode.as_deref()) {
+                                                                        (Some("password"), Some("passthrough")) => "Custom (Passthrough)",
+                                                                        (Some("password"), Some("blank")) => "Custom (Interactive)",
+                                                                        (Some("password"), Some("fixed")) => "Custom (UserPass)",
+                                                                        (Some("password"), _) => "Custom (Password)",
+                                                                        (Some("ssh_key"), Some("passthrough")) => "Custom (SSH Key / Passthrough)",
+                                                                        (Some("ssh_key"), _) => "Custom (SSH Key)",
+                                                                        (Some("agent"), Some("passthrough")) => "Custom (Agent / Passthrough)",
+                                                                        (Some("agent"), _) => "Custom (Agent)",
+                                                                        _ => "Custom",
+                                                                    }
+                                                                }
+                                                            }
+                                                            Protected {
+                                                                claim: Some(ClaimType::Relays(ClaimLevel::Edit)),
+                                                                button {
+                                                                    class: "btn btn-xs btn-ghost",
+                                                                    onclick: {
+                                                                        let id = host.id;
+                                                                        let name = host.name.clone();
+                                                                        move |_| open_clear_modal(id, name.clone(), true)
+                                                                    },
+                                                                    "Clear"
+                                                                }
+                                                            }
+                                                        }
+                                                    } else {
+                                                        Protected {
+                                                            claim: Some(ClaimType::Relays(ClaimLevel::Edit)),
+                                                            button {
+                                                                class: "btn btn-xs btn-primary",
+                                                                onclick: {
+                                                                    let id = host.id;
+                                                                    let name = host.name.clone();
+                                                                    move |_| open_assign_modal(id, name.clone())
+                                                                },
+                                                                "Assign"
                                                             }
                                                         }
                                                     }
@@ -792,29 +849,49 @@ pub fn RelaysPage() -> Element {
                                 "none" => true,
                                 "saved" => selected_credential_id() > 0,
                                 "custom" => {
-                                    match auth_type().as_str() {
-                                        "password" => {
-                                            if auth_password().is_empty() {
-                                                editing_id().is_some() && has_existing_password()
-                                            } else {
-                                                true
+                                    let username_mode_val = auth_username_mode();
+                                    let password_required_val = auth_password_required();
+
+                                    // Validate username for fixed mode
+                                    let username_valid = if username_mode_val == "fixed" {
+                                        !auth_username().trim().is_empty()
+                                    } else {
+                                        true // username not required for interactive/passthrough
+                                    };
+
+                                    if !username_valid {
+                                        false
+                                    } else {
+                                        match auth_type().as_str() {
+                                            "password" => {
+                                                // Only require password if username_mode is "fixed" AND password_required is true
+                                                if username_mode_val == "fixed" && password_required_val {
+                                                    if auth_password().is_empty() {
+                                                        editing_id().is_some() && has_existing_password()
+                                                    } else {
+                                                        true
+                                                    }
+                                                } else {
+                                                    // For interactive/passthrough or non-required, always valid
+                                                    true
+                                                }
                                             }
-                                        }
-                                        "ssh_key" => {
-                                            if auth_private_key().trim().is_empty() {
-                                                editing_id().is_some() && has_existing_private_key()
-                                            } else {
-                                                true
+                                            "ssh_key" => {
+                                                if auth_private_key().trim().is_empty() {
+                                                    editing_id().is_some() && has_existing_private_key()
+                                                } else {
+                                                    true
+                                                }
                                             }
-                                        }
-                                        "agent" => {
-                                            if auth_public_key().trim().is_empty() {
-                                                editing_id().is_some() && has_existing_public_key()
-                                            } else {
-                                                true
+                                            "agent" => {
+                                                if auth_public_key().trim().is_empty() {
+                                                    editing_id().is_some() && has_existing_public_key()
+                                                } else {
+                                                    true
+                                                }
                                             }
+                                            _ => false,
                                         }
-                                        _ => false,
                                     }
                                 }
                                 _ => false,
@@ -949,6 +1026,10 @@ pub fn RelaysPage() -> Element {
                                         on_type_change: move |v| auth_type.set(v),
                                         username: auth_username(),
                                         on_username_change: move |v| auth_username.set(v),
+                                        username_mode: auth_username_mode(),
+                                        on_username_mode_change: move |v| auth_username_mode.set(v),
+                                        password_required: auth_password_required(),
+                                        on_password_required_change: move |v| auth_password_required.set(v),
                                         password: auth_password(),
                                         on_password_change: move |v| auth_password.set(v),
                                         private_key: auth_private_key(),
@@ -1071,13 +1152,58 @@ pub fn RelaysPage() -> Element {
                                         cred_type: assign_auth_type(),
                                         on_type_change: move |v| assign_auth_type.set(v),
                                         username: assign_username(),
-                                        on_username_change: move |v| assign_username.set(v),
+                                        on_username_change: move |v| {
+                                            assign_username.set(v);
+                                            if assign_validation_errors().contains_key("username") {
+                                                let mut errs = assign_validation_errors();
+                                                errs.remove("username");
+                                                assign_validation_errors.set(errs);
+                                            }
+                                        },
+                                        username_mode: assign_username_mode(),
+                                        on_username_mode_change: move |v: String| {
+                                            assign_username_mode.set(v.clone());
+                                            // If username_mode is not "fixed", force password_required to false
+                                            if v != "fixed" {
+                                                assign_password_required.set(false);
+                                                assign_password.set(String::new()); // Clear password field
+                                            }
+                                        },
+                                        password_required: assign_password_required(),
+                                        on_password_required_change: move |v| {
+                                            assign_password_required.set(v);
+                                            // Clear password field when unchecking "stored"
+                                            if !v {
+                                                assign_password.set(String::new());
+                                            }
+                                        },
                                         password: assign_password(),
-                                    on_password_change: move |v| assign_password.set(v),
-                                    private_key: assign_private_key(),
-                                    on_private_key_change: move |v| assign_private_key.set(v),
-                                    public_key: assign_public_key(),
-                                    on_public_key_change: move |v| assign_public_key.set(v),
+                                        on_password_change: move |v| {
+                                            assign_password.set(v);
+                                            if assign_validation_errors().contains_key("password") {
+                                                let mut errs = assign_validation_errors();
+                                                errs.remove("password");
+                                                assign_validation_errors.set(errs);
+                                            }
+                                        },
+                                        private_key: assign_private_key(),
+                                        on_private_key_change: move |v| {
+                                            assign_private_key.set(v);
+                                            if assign_validation_errors().contains_key("private_key") {
+                                                let mut errs = assign_validation_errors();
+                                                errs.remove("private_key");
+                                                assign_validation_errors.set(errs);
+                                            }
+                                        },
+                                        public_key: assign_public_key(),
+                                        on_public_key_change: move |v| {
+                                            assign_public_key.set(v);
+                                            if assign_validation_errors().contains_key("public_key") {
+                                                let mut errs = assign_validation_errors();
+                                                errs.remove("public_key");
+                                                assign_validation_errors.set(errs);
+                                            }
+                                        },
                                         passphrase: assign_passphrase(),
                                         on_passphrase_change: move |v| assign_passphrase.set(v),
                                         validation_errors: assign_validation_errors(),
@@ -1086,8 +1212,8 @@ pub fn RelaysPage() -> Element {
                                         has_existing_password: false,
                                         has_existing_private_key: false,
                                         has_existing_public_key: false,
-                                    show_type_selector: true,
-                                }
+                                        show_type_selector: true,
+                                    }
                             }
                         }
                     }

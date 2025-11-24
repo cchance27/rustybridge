@@ -19,7 +19,7 @@ async fn assign_writes_encrypted_values_and_unassign_removes() -> Result<()> {
     sqlx::query("INSERT INTO relay_hosts (name, ip, port) VALUES ('h4', '127.0.0.1', 22)")
         .execute(&pool)
         .await?;
-    server_core::create_password_credential("credA", Some("uA"), "pwA").await?;
+    server_core::create_password_credential("credA", Some("uA"), "pwA", "fixed", true).await?;
 
     server_core::assign_credential("h4", "credA").await?;
 

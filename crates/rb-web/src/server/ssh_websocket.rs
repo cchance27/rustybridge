@@ -11,7 +11,7 @@ use russh::ChannelMsg;
 #[cfg(feature = "server")]
 use serde::Serialize;
 #[cfg(feature = "server")]
-use server_core::relay::connect_to_relay_channel;
+use server_core::relay::{AuthPromptEvent, connect_to_relay_channel};
 #[cfg(feature = "server")]
 use state_store::{fetch_relay_host_by_name, user_has_relay_access};
 
@@ -145,16 +145,95 @@ async fn handle_socket(socket: WebSocket, relay_name: String, username: String) 
 
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
-    // Connect to the relay
-    let mut channel = match connect_to_relay_channel(&relay_name, &username, (80, 24)).await {
-        Ok(ch) => {
-            tracing::info!("Successfully connected to relay: {}", relay_name);
-            ch
-        }
-        Err(e) => {
-            tracing::error!("Failed to connect to relay {}: {}", relay_name, e);
-            let _ = ws_sender.send(Message::Text(format!("Failed to connect: {}", e).into())).await;
-            return;
+    // Channels for interactive auth prompts
+    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel::<AuthPromptEvent>();
+    let (auth_tx, auth_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let auth_rx_mutex = tokio::sync::Mutex::new(auth_rx);
+
+    // Drive interactive auth prompts over the WebSocket while connecting
+    let mut connect_fut = Box::pin(connect_to_relay_channel(
+        &relay_name,
+        &username,
+        (80, 24),
+        Some(prompt_tx.clone()),
+        Some(auth_rx_mutex),
+    ));
+
+    // Prompt/response loop that runs until connect finishes
+    struct PendingPrompt {
+        buf: Vec<u8>,
+        echo: bool,
+    }
+    let mut pending_prompt: Option<PendingPrompt> = None;
+    let mut channel = loop {
+        tokio::select! {
+            res = &mut connect_fut => {
+                match res {
+                    Ok(ch) => {
+                        tracing::info!("Successfully connected to relay: {}", relay_name);
+                        break ch;
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to connect to relay {}: {}", relay_name, e);
+                        let _ = ws_sender.send(Message::Text(format!("Authentication failed: {}", e).into())).await;
+                        let _ = ws_sender.send(Message::Close(None)).await;
+                        return;
+                    }
+                }
+            }
+            Some(action) = prompt_rx.recv() => {
+                // Send prompt to the web terminal; attach addon will render it as text
+                let _ = ws_sender.send(Message::Text(action.prompt.clone().into())).await;
+                pending_prompt = Some(PendingPrompt { echo: action.echo, buf: Vec::new() });
+            }
+            maybe_msg = ws_receiver.next() => {
+                if let Some(Ok(msg)) = maybe_msg {
+                    if let Some(mut pending) = pending_prompt.take() {
+                        let mut handled = true;
+                        let mut newly_received: Vec<u8> = Vec::new();
+                        match msg {
+                            Message::Text(txt) => {
+                                newly_received.extend_from_slice(txt.as_bytes());
+                                pending.buf.extend_from_slice(txt.as_bytes());
+                            }
+                            Message::Binary(data) => {
+                                newly_received.extend_from_slice(&data);
+                                pending.buf.extend_from_slice(&data);
+                            }
+                            _ => handled = false,
+                        }
+
+                        // Echo back only the newly received chunk if echo is enabled
+                        if handled && pending.echo && !newly_received.is_empty() {
+                            let _ = ws_sender.send(Message::Binary(newly_received.clone().into())).await;
+                        }
+
+                        if handled {
+                            if let Some(pos) = pending
+                                .buf
+                                .iter()
+                                .position(|b| *b == b'\n' || *b == b'\r')
+                            {
+                                let line = pending.buf[..pos].to_vec();
+                                let resp = String::from_utf8_lossy(&line).to_string();
+                                let _ = auth_tx.send(resp);
+                                // Separate prompts from next output only after password prompts (echo == false)
+                                if !pending.echo {
+                                    let _ = ws_sender.send(Message::Binary(b"\r\n\r\n".to_vec().into())).await;
+                                }
+                            } else {
+                                // No newline yet; continue accumulating
+                                pending_prompt = Some(pending);
+                            }
+                        } else {
+                            pending_prompt = Some(pending);
+                        }
+                    }
+                } else {
+                    tracing::warn!("WebSocket closed before relay authentication completed");
+                    return;
+                }
+            }
         }
     };
 
