@@ -286,9 +286,16 @@ pub fn encrypt_secret_with(plaintext: &[u8], master: &[u8]) -> ServerResult<Encr
     hkdf.expand(b"rb-secret-v2", &mut key)
         .map_err(|_| ServerError::Crypto("HKDF expansion failed".to_string()))?;
 
+    // Add random padding (1-32 bytes) for length obfuscation
+    let mut padded_pt = plaintext.to_vec();
+    let pad_len = rand::thread_rng().gen_range(1..=32) as u8;
+    let padding = random_bytes(pad_len as usize);
+    padded_pt.extend_from_slice(&padding);
+    padded_pt.push(pad_len); // Store padding length as last byte
+
     let cipher = XChaCha20Poly1305::new(Key::from_slice(&key));
     let ct = cipher
-        .encrypt(XNonce::from_slice(&nonce), plaintext)
+        .encrypt(XNonce::from_slice(&nonce), padded_pt.as_slice())
         .map_err(|e| ServerError::secret_op("encrypt", e.to_string()))?;
     Ok(EncryptedBlob {
         salt,
@@ -411,6 +418,29 @@ pub fn normalize_master_input(input: &str) -> Vec<u8> {
         return decoded;
     }
     input.as_bytes().to_vec()
+}
+
+/// Derive a master key from a passphrase using the same Argon2id KDF as load_master_key.
+/// This is used for secret rotation to ensure compatibility.
+pub fn derive_master_key_from_passphrase(passphrase: &str) -> ServerResult<Vec<u8>> {
+    let salt = get_or_create_master_salt()?;
+    // Hardened Argon2id: 64MB memory, 4 iterations, 1 lane (matches load_master_key)
+    let params = Params::new(64 * 1024, 4, 1, Some(32)).map_err(|e| ServerError::Crypto(e.to_string()))?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+
+    let salt_string = SaltString::encode_b64(&salt).map_err(|e| ServerError::Crypto(format!("invalid salt: {e}")))?;
+    let hash = argon2
+        .hash_password(passphrase.as_bytes(), &salt_string)
+        .map_err(|e| ServerError::Crypto(format!("kdf failed: {e}")))?;
+
+    let raw = hash
+        .hash
+        .ok_or_else(|| ServerError::Crypto("argon2 produced no hash".to_string()))?;
+    let bytes = raw.as_bytes();
+    if bytes.len() < 32 {
+        return Err(ServerError::Crypto("argon2 output too short".to_string()));
+    }
+    Ok(bytes[..32].to_vec())
 }
 
 #[cfg(test)]

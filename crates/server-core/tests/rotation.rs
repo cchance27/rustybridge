@@ -50,7 +50,9 @@ async fn rotation_reencrypts_credentials_and_options() -> Result<()> {
     .await?
     .get("value");
     assert_ne!(before_opt, after_opt);
-    let pt_opt = server_core::secrets::decrypt_string_with(&after_opt, b"new-secret");
+    // Derive the new master key from passphrase (matches rotation logic)
+    let new_master = server_core::secrets::derive_master_key_from_passphrase("new-secret").unwrap();
+    let pt_opt = server_core::secrets::decrypt_string_with(&after_opt, &new_master);
     assert_eq!(&**pt_opt.unwrap().expose_secret(), "abc123");
 
     let after_cred: (Vec<u8>, Vec<u8>, Vec<u8>) = {
@@ -60,7 +62,7 @@ async fn rotation_reencrypts_credentials_and_options() -> Result<()> {
         (row.get("salt"), row.get("nonce"), row.get("secret"))
     };
     assert_ne!(before_cred.2, after_cred.2);
-    let dec = server_core::secrets::decrypt_secret_with(&after_cred.0, &after_cred.1, &after_cred.2, b"new-secret").unwrap();
+    let dec = server_core::secrets::decrypt_secret_with(&after_cred.0, &after_cred.1, &after_cred.2, &new_master).unwrap();
     assert_eq!(String::from_utf8(dec.expose_secret().clone()).unwrap(), "pw-xyz");
 
     Ok(())

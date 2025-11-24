@@ -13,6 +13,7 @@ mod server_manager;
 
 use std::{sync::Arc, time::Duration};
 
+use base64::Engine;
 use rb_types::{
     auth::ClaimType, web::{PrincipalKind, RelayAccessPrincipal}
 };
@@ -1033,8 +1034,28 @@ pub async fn list_credentials_with_assignments() -> ServerResult<Vec<(i64, Strin
 }
 
 pub async fn rotate_secrets_key(old_input: &str, new_input: &str) -> ServerResult<()> {
-    let old_master = crate::secrets::normalize_master_input(old_input);
-    let new_master = crate::secrets::normalize_master_input(new_input);
+    // Trim inputs to match load_master_key behavior (prevents rotation failures with whitespace)
+    let old_input = old_input.trim();
+    let new_input = new_input.trim();
+
+    // Derive master keys properly - if input looks like a passphrase, use Argon2id KDF
+    let old_master = if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(old_input)
+        && decoded.len() == 32
+    {
+        decoded
+    } else {
+        // It's a passphrase, derive using Argon2id (matches load_master_key)
+        crate::secrets::derive_master_key_from_passphrase(old_input)?
+    };
+
+    let new_master = if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(new_input)
+        && decoded.len() == 32
+    {
+        decoded
+    } else {
+        // It's a passphrase, derive using Argon2id (matches load_master_key)
+        crate::secrets::derive_master_key_from_passphrase(new_input)?
+    };
 
     let db = server_db().await?;
 
