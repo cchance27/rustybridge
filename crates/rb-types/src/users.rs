@@ -13,6 +13,7 @@ pub struct UserInfo {
 /// Enhanced user info with group memberships.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UserGroupInfo {
+    pub id: i64,
     /// Username.
     pub username: String,
     /// List of group names the user belongs to.

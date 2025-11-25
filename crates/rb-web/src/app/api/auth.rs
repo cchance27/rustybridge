@@ -7,7 +7,11 @@ use rb_types::auth::{AuthUserInfo, LoginRequest, LoginResponse};
 #[cfg(feature = "server")]
 use crate::server::auth::WebAuthSession;
 
-#[post("/api/auth/login", auth: WebAuthSession, pool: axum::Extension<sqlx::SqlitePool>)]
+#[post(
+    "/api/auth/login",
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>,
+)]
 pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
     use rb_types::auth::AuthDecision;
     use server_core::auth::authenticate_password;
@@ -42,6 +46,8 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
                     username: request.username,
                     claims,
                     has_management_access,
+                    name: None,
+                    picture: None,
                 }),
             })
         }
@@ -54,9 +60,15 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
     }
 }
 
-#[post("/api/auth/logout", auth: WebAuthSession)]
+#[post(
+    "/api/auth/logout",
+    auth: WebAuthSession,
+)]
 pub async fn logout() -> Result<()> {
-    auth.logout_user();
+    if auth.is_authenticated() {
+        auth.logout_user();
+    }
+
     Ok(())
 }
 
@@ -71,6 +83,8 @@ pub async fn get_current_user() -> Result<Option<AuthUserInfo>> {
                 username: user.username,
                 claims: user.claims,
                 has_management_access,
+                name: user.name,
+                picture: user.picture,
             }))
         } else {
             Ok(None)

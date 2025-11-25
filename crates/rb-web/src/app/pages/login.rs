@@ -144,6 +144,31 @@ pub fn LoginPage() -> Element {
                                     }
                                 }
                             }
+
+                            div { class: "divider", "OR" }
+
+                            div { class: "flex flex-col gap-2",
+                                a {
+                                    href: "/api/auth/oidc/login",
+                                    class: "btn btn-outline btn-primary w-full gap-2",
+                                    // Simple OIDC icon (user-circle)
+                                    // TODO: Replace with provider icon if available in database or name if available
+                                    // TODO: Multiple provider support with logo and icons.
+                                    svg {
+                                        class: "w-5 h-5",
+                                        fill: "none",
+                                        view_box: "0 0 24 24",
+                                        stroke: "currentColor",
+                                        path {
+                                            stroke_linecap: "round",
+                                            stroke_linejoin: "round",
+                                            stroke_width: "2",
+                                            d: "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+                                        }
+                                    }
+                                    "Login with SSO"
+                                }
+                            }
                         }
                     }
                 }

@@ -6,7 +6,9 @@ use rb_types::{
 };
 
 use crate::{
-    app::api::{groups::*, users::*}, components::{
+    app::{
+        api::{groups::*, users::*}, auth::oidc::{OidcLinkStatus, get_user_oidc_status, unlink_user_oidc}
+    }, components::{
         Layout, Modal, MultiFab, Protected, RequireAuth, StructuredTooltip, Table, TableActions, Toast, ToastMessage, ToastType, TooltipSection
     }
 };
@@ -57,6 +59,16 @@ pub fn AccessPage() -> Element {
     let mut delete_confirm_open = use_signal(|| false);
     let mut delete_target_type = use_signal(String::new); // "user" or "group"
     let mut delete_target_name = use_signal(String::new);
+
+    // OIDC unlink modal state
+    let mut oidc_unlink_modal_open = use_signal(|| false);
+    #[allow(unused_mut)] // we require this mute in the current setup, but clippy complains
+    let mut oidc_unlink_user_id = use_signal(|| 0i64);
+    #[allow(unused_mut)] // we require this mute in the current setup, but clippy complains
+    let mut oidc_unlink_username = use_signal(String::new);
+
+    // Signal to trigger OIDC status refresh after unlink
+    let mut oidc_refresh_trigger = use_signal(|| 0u32);
 
     // FAB handlers
     let open_add_user = move |_| {
@@ -540,7 +552,7 @@ pub fn AccessPage() -> Element {
                                 match users() {
                                     Some(Ok(user_list)) => rsx! {
                                         Table {
-                                            headers: vec!["Username", "Groups", "Relays", "Actions"],
+                                            headers: vec!["Username", "Groups", "Relays", "OIDC", "Actions"],
                                             for user in user_list {
                                                 tr {
                                                     td { "{user.username}" }
@@ -580,6 +592,16 @@ pub fn AccessPage() -> Element {
                                                                     {if user.relays.len() == 1 { "relay" } else { "relays" }}
                                                                 }
                                                             }
+                                                        }
+                                                    }
+                                                    td {
+                                                        OidcStatusCell {
+                                                            user_id: user.id,
+                                                            username: user.username.clone(),
+                                                            oidc_refresh_trigger,
+                                                            oidc_unlink_user_id,
+                                                            oidc_unlink_username,
+                                                            oidc_unlink_modal_open,
                                                         }
                                                     }
                                                     td { class: "text-right",
@@ -768,6 +790,53 @@ pub fn AccessPage() -> Element {
                     MultiFab {
                         on_add_user: open_add_user,
                         on_add_group: open_add_group
+                    }
+                }
+
+                // OIDC Unlink Modal
+                Modal {
+                    open: oidc_unlink_modal_open(),
+                    on_close: move |_| oidc_unlink_modal_open.set(false),
+                    title: "Unlink OIDC Account",
+                    actions: rsx! {
+                        button {
+                            class: "btn btn-error",
+                            onclick: move |_| {
+                                let user_id = oidc_unlink_user_id();
+                                spawn(async move {
+                                    match unlink_user_oidc(user_id).await {
+                                        Ok(_) => {
+                                            oidc_unlink_modal_open.set(false);
+                                            toast.set(Some(ToastMessage {
+                                                message: format!("OIDC account unlinked for user '{}'", oidc_unlink_username()),
+                                                toast_type: ToastType::Success,
+                                            }));
+                                            // Trigger OIDC status refresh for all users
+                                            oidc_refresh_trigger.set(oidc_refresh_trigger() + 1);
+                                            users.restart();
+                                        }
+                                        Err(e) => {
+                                            oidc_unlink_modal_open.set(false);
+                                            toast.set(Some(ToastMessage {
+                                                message: format!("Failed to unlink OIDC: {}", e),
+                                                toast_type: ToastType::Error,
+                                            }));
+                                        }
+                                    }
+                                });
+                            },
+                            "Unlink"
+                        }
+                    },
+                    div { class: "flex flex-col gap-4",
+                        p {
+                            "Are you sure you want to unlink the OIDC account for user "
+                            strong { "'{oidc_unlink_username()}'" }
+                            "?"
+                        }
+                        p { class: "text-sm text-warning",
+                            "⚠️ This user will no longer be able to log in via OIDC."
+                        }
                     }
                 }
 
@@ -1083,5 +1152,82 @@ pub fn AccessPage() -> Element {
                 }
             }
         }
+    }
+}
+
+#[component]
+fn OidcStatusCell(
+    user_id: i64,
+    username: String,
+    oidc_refresh_trigger: Signal<u32>,
+    oidc_unlink_user_id: Signal<i64>,
+    oidc_unlink_username: Signal<String>,
+    oidc_unlink_modal_open: Signal<bool>,
+) -> Element {
+    // Track per-user OIDC status; kept inside its own component to satisfy Dioxus hook ordering rules.
+    let mut oidc_status = use_signal(|| None::<OidcLinkStatus>);
+
+    // Refresh when the shared trigger bumps (e.g., after unlink) or on initial mount.
+    use_effect(move || {
+        let trigger = oidc_refresh_trigger();
+        spawn(async move {
+            let _ = trigger;
+            match get_user_oidc_status(user_id).await {
+                Ok(status) => oidc_status.set(Some(status)),
+                Err(_) => oidc_status.set(None),
+            }
+        });
+    });
+
+    if let Some(status) = oidc_status()
+        && status.is_linked
+    {
+        let username_clone = username.clone();
+        return rsx! {
+            button {
+                class: "group relative badge badge-success gap-2 cursor-pointer hover:badge-error transition-colors",
+                onclick: move |_| {
+                    oidc_unlink_user_id.set(user_id);
+                    oidc_unlink_username.set(username_clone.clone());
+                    oidc_unlink_modal_open.set(true);
+                },
+                span { class: "group-hover:hidden flex items-center gap-1",
+                    "Linked"
+                    svg {
+                        xmlns: "http://www.w3.org/2000/svg",
+                        class: "h-3 w-3",
+                        fill: "none",
+                        view_box: "0 0 24 24",
+                        stroke: "currentColor",
+                        path {
+                            stroke_linecap: "round",
+                            stroke_linejoin: "round",
+                            stroke_width: "2",
+                            d: "M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                        }
+                    }
+                }
+                span { class: "hidden group-hover:flex items-center gap-1",
+                    "Unlink"
+                    svg {
+                        xmlns: "http://www.w3.org/2000/svg",
+                        class: "h-3 w-3",
+                        fill: "none",
+                        view_box: "0 0 24 24",
+                        stroke: "currentColor",
+                        path {
+                            stroke_linecap: "round",
+                            stroke_linejoin: "round",
+                            stroke_width: "2",
+                            d: "M6 18L18 6M6 6l12 12"
+                        }
+                    }
+                }
+            }
+        };
+    }
+
+    rsx! {
+        span { class: "badge badge-ghost", "Not linked" }
     }
 }

@@ -88,7 +88,14 @@ pub async fn list_users() -> Result<Vec<UserGroupInfo>, ServerFnError> {
             .map(|c| c.to_string().parse().unwrap_or(ClaimType::Custom(c.to_string())))
             .collect();
 
+        // Get user ID
+        let user_id = state_store::get_user_id(&pool, &username)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?
+            .ok_or_else(|| ServerFnError::new(format!("User {} not found", username)))?;
+
         result.push(UserGroupInfo {
+            id: user_id,
             username,
             groups,
             relays,

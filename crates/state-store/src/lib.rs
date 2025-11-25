@@ -64,6 +64,7 @@ pub fn server_db_dir() -> PathBuf {
 // Server-side relay host access
 // -----------------------------
 
+#[cfg(feature = "server")]
 pub async fn fetch_relay_host_by_name(pool: &SqlitePool, name: &str) -> DbResult<Option<RelayInfo>> {
     if let Some(row) = sqlx::query_as::<_, RelayInfo>("SELECT id, name, ip, port FROM relay_hosts WHERE name = ?")
         .bind(name)
@@ -81,6 +82,7 @@ pub async fn fetch_relay_host_by_name(pool: &SqlitePool, name: &str) -> DbResult
     }
 }
 
+#[cfg(feature = "server")]
 pub async fn fetch_relay_host_by_id(pool: &SqlitePool, id: i64) -> DbResult<Option<RelayInfo>> {
     if let Some(row) = sqlx::query_as::<_, RelayInfo>("SELECT id, name, ip, port FROM relay_hosts WHERE id = ?")
         .bind(id)
@@ -98,6 +100,7 @@ pub async fn fetch_relay_host_by_id(pool: &SqlitePool, id: i64) -> DbResult<Opti
     }
 }
 
+#[cfg(feature = "server")]
 pub async fn fetch_relay_host_options(
     pool: &SqlitePool,
     relay_host_id: i64,
@@ -114,6 +117,7 @@ pub async fn fetch_relay_host_options(
 }
 
 /// Return true if the user has access to the relay host either directly or via any group membership.
+#[cfg(feature = "server")]
 pub async fn user_has_relay_access(pool: &SqlitePool, username: &str, relay_host_id: i64) -> DbResult<bool> {
     // Direct user ACL
     let direct = sqlx::query_scalar::<_, i64>(
@@ -148,6 +152,7 @@ pub async fn user_has_relay_access(pool: &SqlitePool, username: &str, relay_host
 }
 
 /// List all relay hosts, optionally filtered by username access
+#[cfg(feature = "server")]
 pub async fn list_relay_hosts(pool: &SqlitePool, username: Option<&str>) -> DbResult<Vec<RelayInfo>> {
     let rows = match username {
         Some(user) => {
@@ -187,6 +192,7 @@ pub async fn list_relay_hosts(pool: &SqlitePool, username: Option<&str>) -> DbRe
         .collect())
 }
 
+#[cfg(feature = "server")]
 pub async fn insert_relay_host(pool: &SqlitePool, name: &str, ip: &str, port: i64) -> DbResult<i64> {
     sqlx::query("INSERT INTO relay_hosts (name, ip, port) VALUES (?, ?, ?)")
         .bind(name)
@@ -201,6 +207,7 @@ pub async fn insert_relay_host(pool: &SqlitePool, name: &str, ip: &str, port: i6
     Ok(row.get::<i64, _>("id"))
 }
 
+#[cfg(feature = "server")]
 pub async fn update_relay_host(pool: &SqlitePool, id: i64, name: &str, ip: &str, port: i64) -> DbResult<()> {
     sqlx::query("UPDATE relay_hosts SET name = ?, ip = ?, port = ? WHERE id = ?")
         .bind(name)
@@ -212,11 +219,13 @@ pub async fn update_relay_host(pool: &SqlitePool, id: i64, name: &str, ip: &str,
     Ok(())
 }
 
+#[cfg(feature = "server")]
 pub async fn delete_relay_host_by_id(pool: &SqlitePool, id: i64) -> DbResult<()> {
     sqlx::query("DELETE FROM relay_hosts WHERE id = ?").bind(id).execute(pool).await?;
     Ok(())
 }
 
+#[cfg(feature = "server")]
 pub async fn fetch_relay_access_principals(pool: &SqlitePool, relay_host_id: i64) -> DbResult<Vec<RelayAclPrincipal>> {
     let rows = sqlx::query(
         "SELECT principal_kind, principal_name FROM relay_host_acl WHERE relay_host_id = ? ORDER BY principal_kind, principal_name",
@@ -233,6 +242,7 @@ pub async fn fetch_relay_access_principals(pool: &SqlitePool, relay_host_id: i64
         .collect())
 }
 
+#[cfg(feature = "server")]
 pub async fn fetch_user_id_by_name(pool: &SqlitePool, username: &str) -> DbResult<Option<i64>> {
     let row = sqlx::query("SELECT id FROM users WHERE username = ?")
         .bind(username)
@@ -241,6 +251,31 @@ pub async fn fetch_user_id_by_name(pool: &SqlitePool, username: &str) -> DbResul
     Ok(row.map(|r| r.get::<i64, _>("id")))
 }
 
+/// Basic authentication row for a user.
+#[cfg(feature = "server")]
+#[derive(Debug, Clone)]
+pub struct UserAuthRecord {
+    pub id: i64,
+    pub username: String,
+    pub password_hash: Option<String>,
+}
+
+/// Fetch a user's auth record by ID (id, username, password hash).
+#[cfg(feature = "server")]
+pub async fn fetch_user_auth_record(pool: &SqlitePool, user_id: i64) -> DbResult<Option<UserAuthRecord>> {
+    let row = sqlx::query("SELECT id, username, password_hash FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+
+    Ok(row.map(|r| UserAuthRecord {
+        id: r.get("id"),
+        username: r.get("username"),
+        password_hash: r.get("password_hash"),
+    }))
+}
+
+#[cfg(feature = "server")]
 pub async fn fetch_group_id_by_name(pool: &SqlitePool, name: &str) -> DbResult<Option<i64>> {
     let row = sqlx::query("SELECT id FROM groups WHERE name = ?")
         .bind(name)
@@ -249,6 +284,7 @@ pub async fn fetch_group_id_by_name(pool: &SqlitePool, name: &str) -> DbResult<O
     Ok(row.map(|r| r.get::<i64, _>("id")))
 }
 
+#[cfg(feature = "server")]
 pub async fn create_group(pool: &SqlitePool, name: &str) -> DbResult<i64> {
     sqlx::query("INSERT INTO groups (name, created_at) VALUES (?, ?)")
         .bind(name)
@@ -262,16 +298,19 @@ pub async fn create_group(pool: &SqlitePool, name: &str) -> DbResult<i64> {
     Ok(row.get::<i64, _>("id"))
 }
 
+#[cfg(feature = "server")]
 pub async fn delete_group_by_name(pool: &SqlitePool, name: &str) -> DbResult<()> {
     sqlx::query("DELETE FROM groups WHERE name = ?").bind(name).execute(pool).await?;
     Ok(())
 }
 
+#[cfg(feature = "server")]
 pub async fn list_groups(pool: &SqlitePool) -> DbResult<Vec<String>> {
     let rows = sqlx::query("SELECT name FROM groups ORDER BY name").fetch_all(pool).await?;
     Ok(rows.into_iter().map(|r| r.get::<String, _>("name")).collect())
 }
 
+#[cfg(feature = "server")]
 pub async fn add_user_to_group(pool: &SqlitePool, username: &str, group_name: &str) -> DbResult<()> {
     let user_id = fetch_user_id_by_name(pool, username).await?.ok_or(DbError::UserNotFound {
         username: username.to_string(),
@@ -287,6 +326,7 @@ pub async fn add_user_to_group(pool: &SqlitePool, username: &str, group_name: &s
     Ok(())
 }
 
+#[cfg(feature = "server")]
 pub async fn remove_user_from_group(pool: &SqlitePool, username: &str, group_name: &str) -> DbResult<()> {
     let user_id = fetch_user_id_by_name(pool, username).await?.ok_or(DbError::UserNotFound {
         username: username.to_string(),
@@ -302,6 +342,7 @@ pub async fn remove_user_from_group(pool: &SqlitePool, username: &str, group_nam
     Ok(())
 }
 
+#[cfg(feature = "server")]
 pub async fn list_user_groups(pool: &SqlitePool, username: &str) -> DbResult<Vec<String>> {
     let rows = sqlx::query(
         "SELECT g.name FROM groups g JOIN user_groups ug ON g.id = ug.group_id JOIN users u ON u.id = ug.user_id WHERE u.username = ? ORDER BY g.name",
@@ -312,6 +353,7 @@ pub async fn list_user_groups(pool: &SqlitePool, username: &str) -> DbResult<Vec
     Ok(rows.into_iter().map(|r| r.get::<String, _>("name")).collect())
 }
 
+#[cfg(feature = "server")]
 pub async fn list_group_members(pool: &SqlitePool, group_name: &str) -> DbResult<Vec<String>> {
     let rows = sqlx::query(
         "SELECT u.username FROM users u JOIN user_groups ug ON u.id = ug.user_id JOIN groups g ON g.id = ug.group_id WHERE g.name = ? ORDER BY u.username",
@@ -322,6 +364,7 @@ pub async fn list_group_members(pool: &SqlitePool, group_name: &str) -> DbResult
     Ok(rows.into_iter().map(|r| r.get::<String, _>("username")).collect())
 }
 
+#[cfg(feature = "server")]
 pub async fn grant_relay_access_principal(
     pool: &SqlitePool,
     relay_host_id: i64,
@@ -353,6 +396,7 @@ pub async fn grant_relay_access_principal(
     Ok(())
 }
 
+#[cfg(feature = "server")]
 pub async fn revoke_relay_access_principal(
     pool: &SqlitePool,
     relay_host_id: i64,
@@ -368,6 +412,7 @@ pub async fn revoke_relay_access_principal(
     Ok(())
 }
 
+#[cfg(feature = "server")]
 pub async fn fetch_user_password_hash(pool: &SqlitePool, username: &str) -> DbResult<Option<String>> {
     let row = sqlx::query("SELECT password_hash FROM users WHERE username = ?")
         .bind(username)
@@ -376,16 +421,19 @@ pub async fn fetch_user_password_hash(pool: &SqlitePool, username: &str) -> DbRe
     Ok(row.map(|r| r.get::<String, _>("password_hash")))
 }
 
+#[cfg(feature = "server")]
 pub async fn count_users(pool: &SqlitePool) -> DbResult<i64> {
     let row = sqlx::query("SELECT COUNT(*) as cnt FROM users").fetch_one(pool).await?;
     Ok(row.get::<i64, _>("cnt"))
 }
 
+#[cfg(feature = "server")]
 pub async fn list_usernames(pool: &SqlitePool) -> DbResult<Vec<String>> {
     let rows = sqlx::query("SELECT username FROM users ORDER BY username").fetch_all(pool).await?;
     Ok(rows.into_iter().map(|r| r.get::<String, _>("username")).collect())
 }
 
+#[cfg(feature = "server")]
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_relay_credential(
     pool: &SqlitePool,
@@ -424,6 +472,7 @@ pub async fn insert_relay_credential(
     Ok(row.get::<i64, _>("id"))
 }
 
+#[cfg(feature = "server")]
 pub async fn delete_relay_credential_by_name(pool: &SqlitePool, name: &str) -> DbResult<()> {
     sqlx::query("DELETE FROM relay_credentials WHERE name = ?")
         .bind(name)
@@ -432,6 +481,7 @@ pub async fn delete_relay_credential_by_name(pool: &SqlitePool, name: &str) -> D
     Ok(())
 }
 
+#[cfg(feature = "server")]
 pub async fn get_relay_credential_by_name(pool: &SqlitePool, name: &str) -> DbResult<Option<RelayCredentialRow>> {
     let row = sqlx::query(
         "SELECT id, name, kind, salt, nonce, secret, meta, username_mode, password_required FROM relay_credentials WHERE name = ?",
@@ -442,6 +492,7 @@ pub async fn get_relay_credential_by_name(pool: &SqlitePool, name: &str) -> DbRe
     Ok(row.map(map_cred_row))
 }
 
+#[cfg(feature = "server")]
 pub async fn get_relay_credential_by_id(pool: &SqlitePool, id: i64) -> DbResult<Option<RelayCredentialRow>> {
     let row = sqlx::query(
         "SELECT id, name, kind, salt, nonce, secret, meta, username_mode, password_required FROM relay_credentials WHERE id = ?",
@@ -452,6 +503,7 @@ pub async fn get_relay_credential_by_id(pool: &SqlitePool, id: i64) -> DbResult<
     Ok(row.map(map_cred_row))
 }
 
+#[cfg(feature = "server")]
 pub async fn list_relay_credentials(pool: &SqlitePool) -> DbResult<Vec<(i64, String, String, Option<String>, String, bool)>> {
     let rows = sqlx::query("SELECT id, name, kind, meta, username_mode, password_required FROM relay_credentials ORDER BY name")
         .fetch_all(pool)
@@ -471,6 +523,7 @@ pub async fn list_relay_credentials(pool: &SqlitePool) -> DbResult<Vec<(i64, Str
         .collect())
 }
 
+#[cfg(feature = "server")]
 fn map_cred_row(r: sqlx::sqlite::SqliteRow) -> RelayCredentialRow {
     RelayCredentialRow {
         id: r.get("id"),
@@ -492,6 +545,7 @@ fn current_ts() -> i64 {
         .as_secs() as i64
 }
 
+#[cfg(feature = "server")]
 #[allow(clippy::too_many_arguments)]
 pub async fn update_relay_credential(
     pool: &SqlitePool,
@@ -523,6 +577,7 @@ pub async fn update_relay_credential(
     Ok(())
 }
 
+#[cfg(feature = "server")]
 pub async fn delete_relay_credential_by_id(pool: &SqlitePool, id: i64) -> DbResult<()> {
     sqlx::query("DELETE FROM relay_credentials WHERE id = ?")
         .bind(id)
@@ -535,6 +590,7 @@ pub async fn delete_relay_credential_by_id(pool: &SqlitePool, id: i64) -> DbResu
 // RBAC: Roles & Claims
 // -----------------------------
 
+#[cfg(feature = "server")]
 pub async fn create_role(pool: &SqlitePool, name: &str, description: Option<&str>) -> DbResult<i64> {
     let now = current_ts();
     sqlx::query("INSERT INTO roles (name, description, created_at) VALUES (?, ?, ?)")
@@ -550,11 +606,13 @@ pub async fn create_role(pool: &SqlitePool, name: &str, description: Option<&str
     Ok(row.get::<i64, _>("id"))
 }
 
+#[cfg(feature = "server")]
 pub async fn delete_role(pool: &SqlitePool, name: &str) -> DbResult<()> {
     sqlx::query("DELETE FROM roles WHERE name = ?").bind(name).execute(pool).await?;
     Ok(())
 }
 
+#[cfg(feature = "server")]
 pub async fn list_roles(pool: &SqlitePool) -> DbResult<Vec<Role>> {
     let rows = sqlx::query_as::<_, Role>("SELECT id, name, description, created_at FROM roles ORDER BY name")
         .fetch_all(pool)
@@ -562,6 +620,7 @@ pub async fn list_roles(pool: &SqlitePool) -> DbResult<Vec<Role>> {
     Ok(rows)
 }
 
+#[cfg(feature = "server")]
 pub async fn assign_role_to_user(pool: &SqlitePool, username: &str, role_name: &str) -> DbResult<()> {
     let user_id = fetch_user_id_by_name(pool, username).await?.ok_or(DbError::UserNotFound {
         username: username.to_string(),
@@ -577,6 +636,7 @@ pub async fn assign_role_to_user(pool: &SqlitePool, username: &str, role_name: &
     Ok(())
 }
 
+#[cfg(feature = "server")]
 pub async fn revoke_role_from_user(pool: &SqlitePool, username: &str, role_name: &str) -> DbResult<()> {
     let user_id = fetch_user_id_by_name(pool, username).await?.ok_or(DbError::UserNotFound {
         username: username.to_string(),
@@ -592,6 +652,7 @@ pub async fn revoke_role_from_user(pool: &SqlitePool, username: &str, role_name:
     Ok(())
 }
 
+#[cfg(feature = "server")]
 pub async fn add_claim_to_role(pool: &SqlitePool, role_name: &str, claim: &ClaimType) -> DbResult<()> {
     let role_id = fetch_role_id_by_name(pool, role_name).await?.ok_or(DbError::GroupNotFound {
         group: role_name.to_string(),
@@ -604,6 +665,7 @@ pub async fn add_claim_to_role(pool: &SqlitePool, role_name: &str, claim: &Claim
     Ok(())
 }
 
+#[cfg(feature = "server")]
 pub async fn remove_claim_from_role(pool: &SqlitePool, role_name: &str, claim: &ClaimType) -> DbResult<()> {
     let role_id = fetch_role_id_by_name(pool, role_name).await?.ok_or(DbError::GroupNotFound {
         group: role_name.to_string(),
@@ -615,6 +677,8 @@ pub async fn remove_claim_from_role(pool: &SqlitePool, role_name: &str, claim: &
         .await?;
     Ok(())
 }
+
+#[cfg(feature = "server")]
 pub async fn get_user_claims(pool: &SqlitePool, username: &str) -> DbResult<Vec<ClaimType>> {
     let user_id = fetch_user_id_by_name(pool, username).await?.ok_or(DbError::UserNotFound {
         username: username.to_string(),
@@ -665,6 +729,7 @@ pub async fn get_user_claims(pool: &SqlitePool, username: &str) -> DbResult<Vec<
     Ok(all_claims.into_iter().filter_map(|s| ClaimType::from_str(&s).ok()).collect())
 }
 
+#[cfg(feature = "server")]
 pub async fn add_claim_to_user(pool: &SqlitePool, username: &str, claim: &ClaimType) -> DbResult<()> {
     let user_id = fetch_user_id_by_name(pool, username).await?.ok_or(DbError::UserNotFound {
         username: username.to_string(),
@@ -677,6 +742,7 @@ pub async fn add_claim_to_user(pool: &SqlitePool, username: &str, claim: &ClaimT
     Ok(())
 }
 
+#[cfg(feature = "server")]
 pub async fn remove_claim_from_user(pool: &SqlitePool, username: &str, claim: &ClaimType) -> DbResult<()> {
     let user_id = fetch_user_id_by_name(pool, username).await?.ok_or(DbError::UserNotFound {
         username: username.to_string(),
@@ -689,6 +755,7 @@ pub async fn remove_claim_from_user(pool: &SqlitePool, username: &str, claim: &C
     Ok(())
 }
 
+#[cfg(feature = "server")]
 pub async fn add_claim_to_group(pool: &SqlitePool, group_name: &str, claim: &ClaimType) -> DbResult<()> {
     let group_id = fetch_group_id_by_name(pool, group_name).await?.ok_or(DbError::GroupNotFound {
         group: group_name.to_string(),
@@ -701,6 +768,7 @@ pub async fn add_claim_to_group(pool: &SqlitePool, group_name: &str, claim: &Cla
     Ok(())
 }
 
+#[cfg(feature = "server")]
 pub async fn remove_claim_from_group(pool: &SqlitePool, group_name: &str, claim: &ClaimType) -> DbResult<()> {
     let group_id = fetch_group_id_by_name(pool, group_name).await?.ok_or(DbError::GroupNotFound {
         group: group_name.to_string(),
@@ -713,6 +781,7 @@ pub async fn remove_claim_from_group(pool: &SqlitePool, group_name: &str, claim:
     Ok(())
 }
 
+#[cfg(feature = "server")]
 pub async fn get_group_claims(pool: &SqlitePool, group_name: &str) -> DbResult<Vec<ClaimType>> {
     let group_id = fetch_group_id_by_name(pool, group_name).await?.ok_or(DbError::GroupNotFound {
         group: group_name.to_string(),
@@ -725,12 +794,180 @@ pub async fn get_group_claims(pool: &SqlitePool, group_name: &str) -> DbResult<V
     Ok(claims.into_iter().filter_map(|s| ClaimType::from_str(&s).ok()).collect())
 }
 
+/// Latest OIDC profile (name/picture) for a user, if linked.
+#[cfg(feature = "server")]
+#[derive(Debug, Clone, Default)]
+pub struct OidcProfile {
+    pub name: Option<String>,
+    pub picture: Option<String>,
+}
+
+#[cfg(feature = "server")]
+pub async fn get_latest_oidc_profile(pool: &SqlitePool, user_id: i64) -> DbResult<Option<OidcProfile>> {
+    let profile = sqlx::query("SELECT name, picture FROM user_oidc_links WHERE user_id = ? ORDER BY created_at DESC LIMIT 1")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+
+    Ok(profile.map(|row| OidcProfile {
+        name: row.get("name"),
+        picture: row.get("picture"),
+    }))
+}
+
+/// OIDC link row for a user (latest entry).
+#[cfg(feature = "server")]
+#[derive(Debug, Clone)]
+pub struct OidcLinkInfo {
+    pub user_id: i64,
+    pub provider_id: String,
+    pub subject_id: String,
+    pub email: Option<String>,
+    pub name: Option<String>,
+    pub picture: Option<String>,
+}
+
+/// Fetch the latest OIDC link (if any) for a given user.
+#[cfg(feature = "server")]
+pub async fn get_oidc_link_for_user(pool: &SqlitePool, user_id: i64) -> DbResult<Option<OidcLinkInfo>> {
+    let row = sqlx::query(
+        r#"
+        SELECT user_id, provider_id, subject_id, email, name, picture
+        FROM user_oidc_links
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| OidcLinkInfo {
+        user_id: r.get("user_id"),
+        provider_id: r.get("provider_id"),
+        subject_id: r.get("subject_id"),
+        email: r.get("email"),
+        name: r.get("name"),
+        picture: r.get("picture"),
+    }))
+}
+
+/// Locate a user id by OIDC provider + subject.
+#[cfg(feature = "server")]
+pub async fn find_user_id_by_oidc_subject(pool: &SqlitePool, provider_id: &str, subject_id: &str) -> DbResult<Option<i64>> {
+    let result = sqlx::query_scalar::<_, i64>("SELECT user_id FROM user_oidc_links WHERE provider_id = ? AND subject_id = ?")
+        .bind(provider_id)
+        .bind(subject_id)
+        .fetch_optional(pool)
+        .await?;
+
+    Ok(result)
+}
+
+/// Upsert (link) an OIDC account to a user.
+#[cfg(feature = "server")]
+#[allow(clippy::too_many_arguments)]
+pub async fn upsert_oidc_link(
+    pool: &SqlitePool,
+    user_id: i64,
+    provider_id: &str,
+    subject_id: &str,
+    email: &Option<String>,
+    name: &Option<String>,
+    picture: &Option<String>,
+) -> DbResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO user_oidc_links (user_id, provider_id, subject_id, email, name, picture)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, provider_id) DO UPDATE SET
+            subject_id = excluded.subject_id,
+            email = excluded.email,
+            name = excluded.name,
+            picture = excluded.picture
+        "#,
+    )
+    .bind(user_id)
+    .bind(provider_id)
+    .bind(subject_id)
+    .bind(email)
+    .bind(name)
+    .bind(picture)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// Update stored OIDC profile fields by provider/subject (no user_id change).
+#[cfg(feature = "server")]
+pub async fn update_oidc_profile_by_subject(
+    pool: &SqlitePool,
+    provider_id: &str,
+    subject_id: &str,
+    email: &Option<String>,
+    name: &Option<String>,
+    picture: &Option<String>,
+) -> DbResult<()> {
+    sqlx::query("UPDATE user_oidc_links SET email = ?, name = ?, picture = ? WHERE provider_id = ? AND subject_id = ?")
+        .bind(email)
+        .bind(name)
+        .bind(picture)
+        .bind(provider_id)
+        .bind(subject_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+/// Remove OIDC link for the specified user; returns affected rows.
+#[cfg(feature = "server")]
+pub async fn delete_oidc_link_for_user(pool: &SqlitePool, user_id: i64) -> DbResult<u64> {
+    let res = sqlx::query("DELETE FROM user_oidc_links WHERE user_id = ?")
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
+}
+
+#[cfg(feature = "server")]
 pub async fn fetch_role_id_by_name(pool: &SqlitePool, name: &str) -> DbResult<Option<i64>> {
     let row = sqlx::query("SELECT id FROM roles WHERE name = ?")
         .bind(name)
         .fetch_optional(pool)
         .await?;
     Ok(row.map(|r| r.get::<i64, _>("id")))
+}
+
+#[cfg(feature = "server")]
+pub async fn get_server_option(pool: &SqlitePool, key: &str) -> DbResult<Option<String>> {
+    let row = sqlx::query("SELECT value FROM server_options WHERE key = ?")
+        .bind(key)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|r| r.get("value")))
+}
+
+#[cfg(feature = "server")]
+pub async fn set_server_option(pool: &SqlitePool, key: &str, value: &str) -> DbResult<()> {
+    sqlx::query("INSERT OR REPLACE INTO server_options (key, value) VALUES (?, ?)")
+        .bind(key)
+        .bind(value)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Get user ID by username
+#[cfg(feature = "server")]
+pub async fn get_user_id(pool: &SqlitePool, username: &str) -> DbResult<Option<i64>> {
+    let result = sqlx::query_scalar::<_, i64>("SELECT id FROM users WHERE username = ?")
+        .bind(username)
+        .fetch_optional(pool)
+        .await?;
+    Ok(result)
 }
 
 /// Establish a pooled SQLite connection for client-side state (host keys, etc.).

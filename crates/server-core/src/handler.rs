@@ -532,6 +532,66 @@ impl ssh_server::Handler for ServerHandler {
         }
     }
 
+    async fn auth_publickey(&mut self, user: &str, public_key: &russh::keys::PublicKey) -> Result<Auth, Self::Error> {
+        let login: LoginTarget = parse_login_target(user);
+        // TODO: Implement public key authentication
+        // let username = &login.username; // Unused for now
+
+        let key_bytes = match public_key.to_bytes() {
+            Ok(b) => b,
+            Err(e) => {
+                warn!("Failed to encode SSH key: {}", e);
+                return Ok(Auth::reject());
+            }
+        };
+
+        match ssh_key::PublicKey::from_bytes(&key_bytes) {
+            Ok(parsed_key) => {
+                // Check if it's a certificate using algorithm() or key_data()
+                // ssh-key 0.6 PublicKey has is_certificate() method?
+                // Let's try parsed_key.algorithm().is_certificate() again, or check KeyData variants.
+                // If KeyData::Certificate is missing, maybe we need to enable a feature in ssh-key?
+                // But let's try parsed_key.key_data().is_certificate() if available.
+                // Actually, let's try to match on KeyData again but maybe I had a typo?
+                // Or maybe I should use `parsed_key.is_certificate()`?
+                // I'll try `parsed_key.algorithm().is_certificate()` again, maybe I missed something.
+                // Wait, `Algorithm` enum has `is_certificate()`?
+                // I'll assume `ssh_key::Algorithm` has `is_certificate`.
+
+                if parsed_key.algorithm().as_str().contains("-cert-") {
+                    // CA Validation Logic
+                    // Placeholder: Reject certs for now until we have CA config
+                    warn!("SSH Certificate auth attempted but CA not configured");
+                    Ok(Auth::reject())
+                } else {
+                    // Standard Public Key Logic
+                    if let Ok(handle) = state_store::server_db().await {
+                        let _pool = handle.into_pool();
+                        // Placeholder
+                        warn!("Standard SSH Key auth attempted but not implemented yet");
+                        Ok(Auth::reject())
+                    } else {
+                        Ok(Auth::reject())
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to parse SSH key: {}", e);
+                Ok(Auth::reject())
+            }
+        }
+    }
+
+    async fn auth_keyboard_interactive(
+        &mut self,
+        user: &str,
+        submethods: &str,
+        _response: Option<russh::server::Response<'_>>,
+    ) -> Result<Auth, Self::Error> {
+        warn!("Keyboard interactive auth attempted (user={}, submethods={})", user, submethods);
+        Ok(Auth::reject())
+    }
+
     async fn auth_succeeded(&mut self, _session: &mut Session) -> Result<(), Self::Error> {
         info!(
             peer = %display_addr(self.peer_addr),

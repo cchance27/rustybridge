@@ -1,6 +1,6 @@
 use axum_session_auth::Authentication;
 use rb_types::auth::ClaimType;
-use sqlx::{Row, SqlitePool};
+use sqlx::SqlitePool;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, Eq, Hash, PartialEq)]
 pub struct WebUser {
@@ -8,6 +8,8 @@ pub struct WebUser {
     pub username: String,
     pub password_hash: Option<String>,
     pub claims: Vec<ClaimType>,
+    pub name: Option<String>,
+    pub picture: Option<String>,
 }
 
 impl std::fmt::Display for WebUser {
@@ -31,20 +33,32 @@ impl Authentication<WebUser, i64, SqlitePool> for WebUser {
     async fn load_user(userid: i64, pool: Option<&SqlitePool>) -> Result<WebUser, anyhow::Error> {
         let pool = pool.ok_or_else(|| anyhow::anyhow!("No database pool provided"))?;
 
-        let row = sqlx::query("SELECT id, username, password_hash FROM users WHERE id = ?")
-            .bind(userid)
-            .fetch_optional(pool)
+        let user = state_store::fetch_user_auth_record(pool, userid)
             .await?
             .ok_or_else(|| anyhow::anyhow!("User not found"))?;
 
-        let username: String = row.get("username");
-        let claims = state_store::get_user_claims(pool, &username).await.unwrap_or_default();
+        let claims = state_store::get_user_claims(pool, &user.username).await.unwrap_or_default();
+
+        // Fetch OIDC profile info if available (prioritize most recently updated link if multiple)
+        let oidc_profile = state_store::get_latest_oidc_profile(pool, userid).await?;
+
+        let (name, picture) = oidc_profile.map(|profile| (profile.name, profile.picture)).unwrap_or((None, None));
+
+        tracing::info!(
+            "Loaded user {} (id={}): name={:?}, picture={:?}",
+            user.username,
+            user.id,
+            name,
+            picture
+        );
 
         Ok(WebUser {
-            id: row.get("id"),
-            username,
-            password_hash: row.get("password_hash"),
+            id: user.id,
+            username: user.username,
+            password_hash: user.password_hash,
             claims,
+            name,
+            picture,
         })
     }
 

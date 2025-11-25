@@ -3,6 +3,9 @@ use password_hash::{PasswordHash, PasswordVerifier};
 use rand::rngs::OsRng;
 use rb_types::auth::{AuthDecision, LoginTarget};
 
+pub mod oidc;
+pub mod ssh_cert;
+
 use crate::error::{ServerError, ServerResult};
 
 pub fn parse_login_target(input: &str) -> LoginTarget {
@@ -70,7 +73,7 @@ pub fn hash_password(password: &str) -> ServerResult<String> {
     let salt = SaltString::generate(&mut OsRng);
     let hashed = Argon2::default()
         .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| ServerError::PasswordHash(format!("failed to hash password: {e}")))?
+        .map_err(ServerError::from)?
         .to_string();
     Ok(hashed)
 }

@@ -27,8 +27,11 @@ hkdf.workspace = true
 sha2.workspace = true
 tui-core.workspace = true
 futures = "0.3"
-anyhow.workspace = true
 async-trait.workspace = true
+openidconnect = { workspace = true, features = ["reqwest"] }
+ssh-key.workspace = true
+ssh-encoding = "0.2"
+reqwest.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true

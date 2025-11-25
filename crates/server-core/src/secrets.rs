@@ -39,7 +39,7 @@ fn load_master_key() -> ServerResult<SecretVec<u8>> {
                 .decode(&key_b64)
                 .map_err(|e| ServerError::Base64(format!("RB_SERVER_SECRETS_KEY must be base64-encoded 32 bytes: {e}")))?;
             if master.len() != 32 {
-                return Err(ServerError::InvalidMasterSecret);
+                return Err(ServerError::InvalidMasterSecret("Master key must be exactly 32 bytes".to_string()));
             }
             return Ok(SecretVec::new(Box::new(master)));
         }
@@ -180,7 +180,7 @@ pub fn encrypt_secret(plaintext: &[u8]) -> ServerResult<EncryptedBlob> {
     let cipher = XChaCha20Poly1305::new(Key::from_slice(&key));
     let ct = cipher
         .encrypt(XNonce::from_slice(&nonce), padded_pt.as_slice())
-        .map_err(|e| ServerError::secret_op("encrypt", e.to_string()))?;
+        .map_err(|e| ServerError::secret_op(format!("encrypt failed: {}", e)))?;
 
     Ok(EncryptedBlob {
         salt,
@@ -208,7 +208,7 @@ pub fn decrypt_secret(salt: &[u8], nonce: &[u8], ciphertext: &[u8]) -> ServerRes
             // Fall back to v1 decryption for backward compatibility
             match decrypt_secret_v1(salt, nonce, ciphertext) {
                 Ok(pt) => Ok((pt, true)), // true = legacy v1 secret
-                Err(_) => Err(ServerError::secret_op("decrypt", "decryption failed (v2 and v1)".to_string())),
+                Err(_) => Err(ServerError::secret_op("decryption failed (v2 and v1)")),
             }
         }
     }
@@ -235,7 +235,7 @@ fn decrypt_secret_v1(salt: &[u8], nonce: &[u8], ciphertext: &[u8]) -> ServerResu
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key.expose_secret()));
     let pt = cipher
         .decrypt(XNonce::from_slice(nonce), ciphertext)
-        .map_err(|e| ServerError::secret_op("decrypt", e.to_string()))?;
+        .map_err(|e| ServerError::secret_op(format!("decrypt failed: {}", e)))?;
     Ok(SecretVec::new(Box::new(pt)))
 }
 
@@ -256,7 +256,7 @@ fn derive_record_key_v1(salt: &[u8]) -> ServerResult<SecretVec<u8>> {
             return kdf_argon2(pass.as_bytes(), salt);
         }
     }
-    Err(ServerError::InvalidMasterSecret)
+    Err(ServerError::InvalidMasterSecret("No master secret configured".to_string()))
 }
 
 /// Argon2 KDF helper for v1 decryption
@@ -291,7 +291,7 @@ pub fn encrypt_secret_with(plaintext: &[u8], master: &[u8]) -> ServerResult<Encr
     let cipher = XChaCha20Poly1305::new(Key::from_slice(&key));
     let ct = cipher
         .encrypt(XNonce::from_slice(&nonce), padded_pt.as_slice())
-        .map_err(|e| ServerError::secret_op("encrypt", e.to_string()))?;
+        .map_err(|e| ServerError::secret_op(format!("encrypt failed: {}", e)))?;
     Ok(EncryptedBlob {
         salt,
         nonce,
@@ -307,7 +307,7 @@ pub fn decrypt_secret_with(salt: &[u8], nonce: &[u8], ciphertext: &[u8], master:
     let cipher = XChaCha20Poly1305::new(Key::from_slice(&key));
     let pt = cipher
         .decrypt(XNonce::from_slice(nonce), ciphertext)
-        .map_err(|e| ServerError::secret_op("decrypt", e.to_string()))?;
+        .map_err(|e| ServerError::secret_op(format!("decrypt failed: {}", e)))?;
 
     Ok(remove_padding(pt))
 }
@@ -438,6 +438,11 @@ pub fn derive_master_key_from_passphrase(passphrase: &str) -> ServerResult<Vec<u
     Ok(bytes[..32].to_vec())
 }
 
+pub fn require_master_secret() -> ServerResult<()> {
+    // Just trigger the lazy load to check
+    MASTER_KEY.as_ref().map(|_| ()).map_err(|e| ServerError::Crypto(e.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use serial_test::serial;
@@ -535,9 +540,4 @@ mod tests {
         assert_eq!(decrypted.expose_secret(), "LegacyData");
         assert!(is_legacy);
     }
-}
-
-pub fn require_master_secret() -> ServerResult<()> {
-    // Just trigger the lazy load to check
-    MASTER_KEY.as_ref().map(|_| ()).map_err(|e| ServerError::Crypto(e.to_string()))
 }

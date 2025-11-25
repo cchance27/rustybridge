@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::{
-    app::auth::context::use_auth_provider, pages::{AccessPage, CredentialsPage, DashboardPage, LoginPage, LogoutPage, NotFoundPage, RelaysPage}
+    app::auth::context::use_auth_provider, pages::{AccessPage, CredentialsPage, DashboardPage, LoginPage, LogoutPage, NotFoundPage, OidcErrorPage, RelaysPage}
 };
 
 /// Root shell: wraps the router and global providers.
@@ -36,6 +36,8 @@ pub enum Routes {
     LoginPage {},
     #[route("/logout")]
     LogoutPage {},
+    #[route("/oidc/error")]
+    OidcErrorPage {},
     #[route("/:..route")]
     NotFoundPage { route: Vec<String> },
 }

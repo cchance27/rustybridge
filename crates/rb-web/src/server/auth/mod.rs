@@ -12,11 +12,19 @@ pub use guards::*;
 use rb_types::auth::{AuthDecision, AuthUserInfo, LoginRequest, LoginResponse};
 pub use types::*;
 
+pub mod oidc;
+pub mod oidc_link;
+pub mod oidc_unlink;
+
 #[post("/api/auth/login", 
     auth: WebAuthSession,
-    pool: axum::Extension<sqlx::SqlitePool>)]
+    pool: axum::Extension<sqlx::SqlitePool>,
+    session: axum_session::Session<axum_session_sqlx::SessionSqlitePool>)]
 pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
-    use state_store::get_user_claims;
+    use state_store::{get_latest_oidc_profile, get_user_claims};
+
+    // Touch the session to ensure it exists before we mutate auth state (avoids axum_session warnings)
+    let _ = session.get_session_id();
 
     // Authenticate user
     let login_target = server_core::auth::parse_login_target(&request.username);
@@ -36,6 +44,16 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
 
             let has_management_access = claims.iter().any(|c| c == "*" || c.to_string().ends_with(":view"));
 
+            // Fetch latest OIDC profile info if available
+            let oidc_profile = get_latest_oidc_profile(&pool, user_id)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+            let (name, picture) = oidc_profile.map(|p| (p.name, p.picture)).unwrap_or((None, None));
+
+            // Clear auth cache for this user so refreshed profile info loads on next request
+            auth.cache_clear_user(user_id);
+
             // Login user with AuthSession
             auth.login_user(user_id);
 
@@ -47,6 +65,8 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
                     username: request.username,
                     claims,
                     has_management_access,
+                    name,
+                    picture,
                 }),
             })
         }
@@ -59,9 +79,16 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
     }
 }
 
-#[post("/api/auth/logout", auth: WebAuthSession)]
+#[post(
+    "/api/auth/logout",
+    auth: WebAuthSession,
+)]
 pub async fn logout() -> Result<()> {
-    auth.logout_user();
+    // Touch session so backing store entry exists before logout_user mutates it.
+    if auth.is_authenticated() {
+        auth.logout_user();
+    }
+
     Ok(())
 }
 
@@ -76,6 +103,8 @@ pub async fn get_current_user() -> Result<Option<AuthUserInfo>> {
                 username: user.username,
                 claims: user.claims,
                 has_management_access,
+                name: user.name,
+                picture: user.picture,
             }))
         } else {
             Ok(None)

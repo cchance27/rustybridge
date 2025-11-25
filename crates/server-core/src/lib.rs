@@ -945,10 +945,10 @@ pub async fn delete_credential(name: &str) -> ServerResult<()> {
             }
         }
         if resolved.expose_secret() == &target_id_str {
-            return Err(ServerError::not_permitted(
-                format!("delete credential '{name}'"),
-                "credential is assigned to at least one host; unassign it first (--unassign-credential --hostname <HOST>)",
-            ));
+            return Err(ServerError::not_permitted(format!(
+                "Cannot delete credential '{}': credential is assigned to at least one host; unassign it first (--unassign-credential --hostname <HOST>)",
+                name
+            )));
         }
     }
     state_store::delete_relay_credential_by_name(&pool, name).await?;
@@ -1880,10 +1880,10 @@ pub async fn delete_credential_by_id(id: i64) -> ServerResult<()> {
             let host_id: i64 = row.get("relay_host_id");
             let host = state_store::fetch_relay_host_by_id(&pool, host_id).await?;
             let host_name = host.map(|h| h.name).unwrap_or_else(|| "unknown".to_string());
-            return Err(ServerError::not_permitted(
-                "delete_credential",
-                format!("credential is in use by relay host '{}'", host_name),
-            ));
+            return Err(ServerError::not_permitted(format!(
+                "Cannot delete credential: credential is in use by relay host '{}'",
+                host_name
+            )));
         }
     }
 

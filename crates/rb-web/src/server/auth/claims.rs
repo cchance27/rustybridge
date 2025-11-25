@@ -46,6 +46,8 @@ mod tests {
             username: "test".to_string(),
             password_hash: None,
             claims,
+            name: None,
+            picture: None,
         }
     }
 

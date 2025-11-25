@@ -7,6 +7,8 @@ edition = "2021"
 sqlx = ["dep:sqlx"]
 secrecy = ["dep:secrecy"]
 clap = ["dep:clap"]
+openidconnect = ["dep:openidconnect"]
+ssh-key = ["dep:ssh-key"]
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
@@ -15,3 +17,5 @@ sqlx = { workspace = true, default-features = false, features = [
 ], optional = true }
 secrecy = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
+openidconnect = { workspace = true, optional = true }
+ssh-key = { workspace = true, optional = true }

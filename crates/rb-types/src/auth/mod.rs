@@ -2,6 +2,7 @@ mod claims;
 
 pub use claims::{ClaimLevel, ClaimType};
 use serde::{Deserialize, Serialize};
+pub mod oidc;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 /// Login payload submitted to authentication endpoints.
@@ -34,6 +35,10 @@ pub struct AuthUserInfo {
     pub claims: Vec<ClaimType>,
     /// Convenience flag for UI gating (has any management claims).
     pub has_management_access: bool,
+    /// User's display name from OIDC.
+    pub name: Option<String>,
+    /// User's profile picture URL from OIDC.
+    pub picture: Option<String>,
 }
 
 /// Parsed login target in `user[:relay]` form used by server-side auth flows.

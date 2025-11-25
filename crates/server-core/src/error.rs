@@ -1,113 +1,96 @@
 use thiserror::Error;
 
-/// Errors that can occur in server-core operations
 #[derive(Error, Debug)]
 pub enum ServerError {
-    /// Database error
-    #[error("database error: {0}")]
-    Database(#[from] state_store::DbError),
+    #[error("Database error: {0}")]
+    Database(#[from] sqlx::Error),
 
-    /// SSH error
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
     #[error("SSH error: {0}")]
     Ssh(#[from] russh::Error),
 
-    /// I/O error
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
+    #[error("OIDC error: {0}")]
+    Oidc(String),
 
-    /// Cryptographic error
-    #[error("cryptographic error: {0}")]
+    #[error("OIDC discovery error: {0}")]
+    OidcDiscovery(#[from] openidconnect::DiscoveryError<openidconnect::reqwest::Error<reqwest::Error>>),
+
+    #[error("OIDC configuration error: {0}")]
+    OidcConfig(#[from] openidconnect::ConfigurationError),
+
+    #[error("OIDC request error: {0}")]
+    OidcRequest(#[from] openidconnect::reqwest::Error<reqwest::Error>),
+
+    #[error("OIDC url parse error: {0}")]
+    OidcUrlParse(#[from] openidconnect::url::ParseError),
+
+    #[error("SSH Key error: {0}")]
+    SshKey(#[from] ssh_key::Error),
+
+    #[error("Cryptography error: {0}")]
     Crypto(String),
 
-    /// Secret encryption/decryption failed
-    #[error("failed to {operation} secret: {reason}")]
-    SecretOperation { operation: String, reason: String },
+    #[error("Base64 error: {0}")]
+    Base64(String),
 
-    /// Invalid master key or passphrase
-    #[error("invalid master key or passphrase")]
-    InvalidMasterSecret,
-
-    /// Missing required environment variable
-    #[error("missing required environment variable: {0}")]
-    MissingEnvVar(String),
-
-    /// Invalid configuration
-    #[error("invalid configuration: {0}")]
+    #[error("Invalid configuration: {0}")]
     InvalidConfig(String),
 
-    /// Resource not found
-    #[error("{resource} not found: {name}")]
-    NotFound { resource: String, name: String },
-
-    /// Resource already exists
-    #[error("{resource} already exists: {name}")]
-    AlreadyExists { resource: String, name: String },
-
-    /// Operation not permitted
-    #[error("{operation} not permitted: {reason}")]
-    NotPermitted { operation: String, reason: String },
-
-    /// Invalid endpoint format
-    #[error("invalid endpoint format: {0}")]
+    #[error("Invalid endpoint: {0}")]
     InvalidEndpoint(String),
 
-    /// Password hashing failed
-    #[error("password hashing failed: {0}")]
-    PasswordHash(String),
+    #[error("{0} '{1}' not found")]
+    NotFound(String, String),
 
-    /// JSON serialization/deserialization error
+    #[error("{0} '{1}' already exists")]
+    AlreadyExists(String, String),
+
+    #[error("State store error: {0}")]
+    StateStore(#[from] state_store::DbError),
+
+    #[error("Password hash error: {0}")]
+    PasswordHash(#[from] password_hash::Error),
+
+    #[error("Internal error: {0}")]
+    Internal(String),
+
+    #[error("Other error: {0}")]
+    Other(String),
+
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
-    /// Base64 encoding/decoding error
-    #[error("base64 error: {0}")]
-    Base64(String),
+    #[error("Permission denied: {0}")]
+    NotPermitted(String),
 
-    /// Generic error with context
-    #[error("{0}")]
-    Other(String),
+    #[error("Invalid master secret: {0}")]
+    InvalidMasterSecret(String),
+
+    #[error("Missing environment variable: {0}")]
+    MissingEnvVar(String),
+
+    #[error("Secret operation failed: {0}")]
+    SecretOp(String),
 }
-
-/// Result type alias for server-core operations
-pub type ServerResult<T> = Result<T, ServerError>;
 
 impl ServerError {
-    /// Create a not found error
-    pub fn not_found(resource: impl Into<String>, name: impl Into<String>) -> Self {
-        Self::NotFound {
-            resource: resource.into(),
-            name: name.into(),
-        }
+    pub fn not_found(kind: &str, name: impl AsRef<str>) -> Self {
+        Self::NotFound(kind.to_string(), name.as_ref().to_string())
     }
 
-    /// Create an already exists error
-    pub fn already_exists(resource: impl Into<String>, name: impl Into<String>) -> Self {
-        Self::AlreadyExists {
-            resource: resource.into(),
-            name: name.into(),
-        }
+    pub fn already_exists(kind: &str, name: impl AsRef<str>) -> Self {
+        Self::AlreadyExists(kind.to_string(), name.as_ref().to_string())
     }
 
-    /// Create a not permitted error
-    pub fn not_permitted(operation: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self::NotPermitted {
-            operation: operation.into(),
-            reason: reason.into(),
-        }
+    pub fn not_permitted(msg: impl Into<String>) -> Self {
+        Self::NotPermitted(msg.into())
     }
 
-    /// Create a secret operation error
-    pub fn secret_op(operation: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self::SecretOperation {
-            operation: operation.into(),
-            reason: reason.into(),
-        }
+    pub fn secret_op(msg: impl Into<String>) -> Self {
+        Self::SecretOp(msg.into())
     }
 }
 
-// Allow conversion from sqlx::Error
-impl From<sqlx::Error> for ServerError {
-    fn from(err: sqlx::Error) -> Self {
-        ServerError::Database(state_store::DbError::from(err))
-    }
-}
+pub type ServerResult<T> = Result<T, ServerError>;
