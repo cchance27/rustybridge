@@ -1,4 +1,16 @@
 @import "tailwindcss";
+
+@layer base {
+  /* Prevent xterm helper nodes from stretching the document when they end up at the body level */
+  html, body {
+    overflow-x: hidden;
+  }
+
+  /* Keep the hidden measurement element inside the viewport to avoid huge scroll widths */
+  .xterm-char-measure-element {
+    left: 0 !important;
+  }
+}
 @source "./src/**/*.{rs,html,css}";
 
 @plugin "daisyui" {

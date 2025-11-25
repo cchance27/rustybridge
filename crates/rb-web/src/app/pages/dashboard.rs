@@ -62,7 +62,7 @@ pub fn DashboardPage() -> Element {
                     }
 
                     // Terminal
-                    div { class: "flex-1 min-h-0 max-w-full",
+                    div { class: "flex-1 min-h-0 max-w-full min-w-0 overflow-hidden",
                         Terminal {
                             id: "main-terminal",
                             fit: true,

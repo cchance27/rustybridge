@@ -163,14 +163,8 @@ pub fn Terminal(props: TerminalProps) -> Element {
 
                     let host = web_sys::window()
                         .and_then(|w| w.location().host().ok())
-                        .map(|h| {
-                            // Prefer IPv4 loopback when running on localhost to avoid IPv6-only resolution
-                            if h.starts_with("localhost:") {
-                                h.replacen("localhost", "127.0.0.1", 1)
-                            } else {
-                                h
-                            }
-                        })
+                        // Preserve the original host so the session cookie remains same-origin.
+                        // Rewriting localhost -> 127.0.0.1 caused auth cookies to be dropped (SameSite).
                         .unwrap_or_else(|| "127.0.0.1:8080".to_string());
 
                     let ws_url = format!("{}://{}/api/ssh/{}", protocol, host, relay_name);
@@ -290,7 +284,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
     rsx! {
         div {
             id: "{props.id}",
-            class: "w-full relative overflow-hidden h-full max-w-full min-h-[400px] bg-[#1e1e1e] rounded-lg overflow-hidden shadow-lg border border-gray-700 block",
+            class: "w-full min-w-0 relative overflow-hidden h-full max-w-full min-h-[400px] bg-[#1e1e1e] rounded-lg overflow-hidden shadow-lg border border-gray-700 block",
             onmounted: move |_| mounted.set(true),
             if !script_started() {
                 span { class: "text-gray-500", "Loading Terminal..." }

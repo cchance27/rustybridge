@@ -10,7 +10,7 @@ use secrecy::ExposeSecret;
 use serde_json::Value as JsonValue;
 use ssh_core::{crypto::default_preferred, forwarding::ForwardingManager, session::run_shell};
 use tokio::sync::{mpsc, watch};
-use tracing::{info, warn};
+use tracing::{info, trace, warn};
 
 pub struct RelayHandle {
     pub session: russh::client::Handle<SharedRelayHandler>,
@@ -299,7 +299,7 @@ async fn prompt_for_input(
         .ok_or_else(|| crate::ServerError::Other("interactive auth response channel unavailable".to_string()))?;
 
     // Fire the prompt to the UI; ignore send errors because the receiver might have gone away.
-    tracing::warn!("sending interactive prompt: '{}', echo={}", prompt, echo);
+    trace!("sending interactive prompt: '{}', echo={}", prompt, echo);
     let prompt_str = if echo { prompt.to_string() } else { format!("\r\n{}", prompt) };
     let _ = tx.send(tui_core::AppAction::AuthPrompt { prompt: prompt_str, echo });
 
@@ -323,7 +323,7 @@ async fn prompt_for_input(
     }
 
     let trimmed = response.trim_end_matches(['\r', '\n']).to_string();
-    tracing::warn!(
+    warn!(
         "received interactive response (len={}, echo={} prompt='{}')",
         trimmed.len(),
         echo,
@@ -369,7 +369,7 @@ async fn authenticate_relay_session<H: client::Handler>(
             let username = match username_opt {
                 Some(u) => u,
                 None if interactive_available => {
-                    tracing::warn!(
+                    warn!(
                         "relay auth prompting for username (base_user={}, cred_id={:?})",
                         base_username,
                         resolved_cred.map(|c| c.id)
@@ -414,7 +414,7 @@ async fn authenticate_relay_session<H: client::Handler>(
                 }
             }
 
-            tracing::info!(
+            info!(
                 "relay auth password path pre-prompt (cred_id={:?}, inline_pw_present={}, password_required={}, interactive_available={})",
                 resolved_cred.map(|c| c.id),
                 password.is_some(),
@@ -425,7 +425,7 @@ async fn authenticate_relay_session<H: client::Handler>(
             let password = match password {
                 Some(pw) => pw,
                 None if interactive_available => {
-                    tracing::warn!(
+                    info!(
                         "relay auth prompting for password (user={}, cred_id={:?}, password_required={}, username_mode={})",
                         username,
                         resolved_cred.map(|c| c.id),
@@ -445,7 +445,7 @@ async fn authenticate_relay_session<H: client::Handler>(
                 }
             };
 
-            tracing::info!(
+            info!(
                 "relay auth attempting password method (user={}, cred_id={:?}, username_mode={}, password_required={}, interactive_available={})",
                 username,
                 resolved_cred.map(|c| c.id),
