@@ -3,9 +3,9 @@ use std::{
 };
 
 use rb_types::{
-    RelayInfo, web::{PrincipalKind, RelayAclPrincipal}
+    access::{PrincipalKind, RelayAclPrincipal}, relay::RelayInfo, state::DbLocation
 };
-use sqlx::{Row, SqlitePool, migrate::Migrator, prelude::FromRow, sqlite::SqlitePoolOptions};
+use sqlx::{Row, SqlitePool, migrate::Migrator, sqlite::SqlitePoolOptions};
 use tokio::sync::OnceCell;
 use tracing::warn;
 use url::Url;
@@ -14,6 +14,7 @@ mod error;
 pub use error::{DbError, DbResult};
 // Re-export claim types from rb-types
 use rb_types::auth::ClaimType;
+use rb_types::state::{DbHandle, RelayCredentialRow, Role};
 
 #[cfg(test)]
 mod tests_rbac;
@@ -57,20 +58,6 @@ pub fn display_server_db_path() -> String {
 #[cfg(feature = "server")]
 pub fn server_db_dir() -> PathBuf {
     default_server_path().parent().unwrap_or(Path::new(".")).to_path_buf()
-}
-
-#[derive(Clone)]
-pub struct DbHandle {
-    pub pool: SqlitePool,
-    pub url: String,
-    pub path: Option<PathBuf>,
-    pub freshly_created: bool,
-}
-
-impl DbHandle {
-    pub fn into_pool(self) -> SqlitePool {
-        self.pool
-    }
 }
 
 // -----------------------------
@@ -399,19 +386,7 @@ pub async fn list_usernames(pool: &SqlitePool) -> DbResult<Vec<String>> {
     Ok(rows.into_iter().map(|r| r.get::<String, _>("username")).collect())
 }
 
-#[derive(Debug, Clone)]
-pub struct RelayCredentialRow {
-    pub id: i64,
-    pub name: String,
-    pub kind: String,
-    pub salt: Vec<u8>,
-    pub nonce: Vec<u8>,
-    pub secret: Vec<u8>,
-    pub meta: Option<String>,
-    pub username_mode: String,
-    pub password_required: bool,
-}
-
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_relay_credential(
     pool: &SqlitePool,
     name: &str,
@@ -517,6 +492,7 @@ fn current_ts() -> i64 {
         .as_secs() as i64
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn update_relay_credential(
     pool: &SqlitePool,
     id: i64,
@@ -558,14 +534,6 @@ pub async fn delete_relay_credential_by_id(pool: &SqlitePool, id: i64) -> DbResu
 // -----------------------------
 // RBAC: Roles & Claims
 // -----------------------------
-
-#[derive(Debug, Clone, FromRow)]
-pub struct Role {
-    pub id: i64,
-    pub name: String,
-    pub description: Option<String>,
-    pub created_at: i64,
-}
 
 pub async fn create_role(pool: &SqlitePool, name: &str, description: Option<&str>) -> DbResult<i64> {
     let now = current_ts();
@@ -998,8 +966,4 @@ fn display_path(handle: &DbHandle) -> String {
         .unwrap_or_else(|| handle.url.clone())
 }
 
-struct DbLocation {
-    url: String,
-    path: Option<PathBuf>,
-    freshly_created: bool,
-}
+// DbLocation now lives in rb-types::state for shared use

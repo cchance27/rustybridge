@@ -2,6 +2,7 @@
 
 use std::{net::SocketAddr, sync::Arc, time::Instant};
 
+use rb_types::auth::{AuthDecision, LoginTarget};
 use russh::{
     Channel, ChannelId, CryptoVec, Pty, server::{self as ssh_server, Auth, Session}
 };
@@ -10,17 +11,20 @@ use tokio::sync::watch;
 use tracing::{info, warn};
 use tui_core::{AppAction, AppSession, backend::RemoteBackend, utils::desired_rect};
 
-use crate::auth::{self, AuthDecision, LoginTarget, parse_login_target};
+use crate::{
+    auth::{authenticate_password, parse_login_target}, relay::RelayHandle
+};
+
+type PendingRelay =
+    tokio::sync::oneshot::Receiver<Result<(crate::relay::RelayHandle, tokio::sync::mpsc::UnboundedSender<String>), russh::Error>>;
 
 /// Tracks the lifecycle of a single SSH session, including authentication, PTY events, and TUI I/O.
 pub(super) struct ServerHandler {
     pub(super) peer_addr: Option<SocketAddr>,
     username: Option<String>,
     relay_target: Option<String>,
-    relay_handle: Option<crate::relay::RelayHandle>,
-    pending_relay: Option<
-        tokio::sync::oneshot::Receiver<Result<(crate::relay::RelayHandle, tokio::sync::mpsc::UnboundedSender<String>), russh::Error>>,
-    >,
+    relay_handle: Option<RelayHandle>,
+    pending_relay: Option<PendingRelay>,
     prompt_sink_active: bool,
     channel: Option<ChannelId>,
     closed: bool,
@@ -501,7 +505,7 @@ impl ssh_server::Handler for ServerHandler {
 
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
         let login: LoginTarget = parse_login_target(user);
-        let decision = auth::authenticate_password(&login, password)
+        let decision = authenticate_password(&login, password)
             .await
             .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
 
@@ -620,10 +624,10 @@ impl ssh_server::Handler for ServerHandler {
                         }
                         0x7f | 0x08 => {
                             // Backspace/delete
-                            if let Some(_ch) = auth.buffer.pop() {
-                                if echo_flag {
-                                    echo_out.extend_from_slice(b"\x08 \x08");
-                                }
+                            if let Some(_ch) = auth.buffer.pop()
+                                && echo_flag
+                            {
+                                echo_out.extend_from_slice(b"\x08 \x08");
                             }
                         }
                         0x15 => {
@@ -677,10 +681,10 @@ impl ssh_server::Handler for ServerHandler {
                 let _ = self.send_bytes(session, channel, &echo_out);
             }
 
-            if let Some(resp) = response_to_send {
-                if let Some(tx) = self.auth_tx.as_ref() {
-                    let _ = tx.send(resp);
-                }
+            if let Some(resp) = response_to_send
+                && let Some(tx) = self.auth_tx.as_ref()
+            {
+                let _ = tx.send(resp);
             }
             if done {
                 // Add a single newline after submit so next prompt/output is on a new line

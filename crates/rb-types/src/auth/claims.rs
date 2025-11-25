@@ -2,6 +2,7 @@ use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
+/// CRUD-like claim levels applied to resource types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum ClaimLevel {
@@ -51,6 +52,7 @@ impl FromStr for ClaimLevel {
     }
 }
 
+/// Claim kinds the RBAC system understands; serialized as `type:level`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(tag = "type", content = "level", rename_all = "lowercase")]
 pub enum ClaimType {

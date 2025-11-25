@@ -3,19 +3,14 @@
 //! This crate contains lightweight type definitions that are shared across
 //! the entire RustyBridge application, including server-side and client-side (WASM) code.
 
-use serde::{Deserialize, Serialize};
-#[cfg(feature = "sqlx")]
-use sqlx::FromRow;
-
+pub mod access;
 pub mod auth;
+pub mod client;
+pub mod config;
+pub mod credentials;
+pub mod net;
+pub mod relay;
+pub mod ssh;
+pub mod state;
+pub mod users;
 pub mod validation;
-pub mod web;
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "sqlx", derive(FromRow))]
-pub struct RelayInfo {
-    pub id: i64,
-    pub name: String,
-    pub ip: String,
-    pub port: i64,
-}

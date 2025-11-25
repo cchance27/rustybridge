@@ -1,7 +1,7 @@
 #[cfg(feature = "server")]
 use anyhow::Context;
 use dioxus::prelude::*;
-use rb_types::RelayInfo;
+use rb_types::relay::RelayInfo;
 
 #[cfg(feature = "server")]
 use crate::server::auth::guards::{WebAuthSession, ensure_authenticated};

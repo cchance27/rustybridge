@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use rb_types::web::{GrantAccessRequest, PrincipalKind};
+use rb_types::access::{GrantAccessRequest, PrincipalKind};
 
 use crate::app::api::{access::*, groups::list_groups, users::list_users};
 

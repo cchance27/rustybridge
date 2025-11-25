@@ -57,7 +57,7 @@ pub fn CredentialBadge(
     let has_name = name.is_some();
     let clear_available = on_clear.is_some();
 
-    let on_clear_handler = on_clear.clone();
+    let on_clear_handler = on_clear;
 
     let content = if compound && show_type && !type_label.is_empty() {
         // Overlapped two-tone pill
@@ -135,11 +135,10 @@ pub fn CredentialBadge(
             onmouseenter: move |_| hover.set(true),
             onmouseleave: move |_| hover.set(false),
             onclick: move |_| {
-                if clear_available {
-                    if let Some(handler) = on_clear_handler.as_ref() {
+                if clear_available
+                    && let Some(handler) = on_clear_handler.as_ref() {
                         handler.call(());
                     }
-                }
             },
             {content}
         }

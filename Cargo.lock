@@ -742,6 +742,7 @@ name = "client-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "rb-types",
  "rpassword",
  "russh",
  "secrecy",
@@ -4143,6 +4144,8 @@ dependencies = [
 name = "rb-types"
 version = "0.1.0"
 dependencies = [
+ "clap",
+ "secrecy",
  "serde",
  "sqlx",
 ]
@@ -5198,6 +5201,7 @@ dependencies = [
  "md5 0.8.0",
  "once_cell",
  "rand 0.8.5",
+ "rb-types",
  "rsa",
  "russh",
  "rustix 1.1.2",

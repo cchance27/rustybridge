@@ -9,7 +9,7 @@ use rb_cli::{
         CredsCmd, CredsCreateCmd, GroupMembersCmd, GroupsCmd, HostsAccessCmd, HostsCmd, HostsCredsCmd, HostsOptionsCmd, RolesCmd, SecretsCmd, ServerArgs, ServerSubcommand, UsersCmd
     }, tui_input
 };
-use rb_types::web::PrincipalKind;
+use rb_types::access::PrincipalKind;
 use rb_web::run_web_server;
 use server_core::{
     add_group, add_relay_host, add_role_claim, add_user, add_user_to_group_server, assign_credential, assign_role, create_agent_credential, create_password_credential, create_role, delete_credential, delete_role, grant_relay_access, list_access, list_credentials, list_group_members_server, list_groups, list_hosts, list_options, list_roles, list_user_groups_server, list_users, refresh_target_hostkey, remove_group, remove_role_claim, remove_user, remove_user_from_group_server, revoke_relay_access, revoke_role, rotate_secrets_key, run_ssh_server, set_relay_option, unassign_credential, unset_relay_option

@@ -13,6 +13,4 @@ pub mod server;
 pub use app::{components, pages};
 pub use app_root::Routes;
 #[cfg(feature = "server")]
-pub use server::config::{WebServerConfig, WebTlsConfig};
-#[cfg(feature = "server")]
 pub use server::run_web_server;

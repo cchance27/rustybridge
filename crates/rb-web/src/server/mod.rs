@@ -5,14 +5,9 @@ pub mod ssh_websocket;
 use axum::Router;
 use dioxus::prelude::*;
 
-#[cfg(feature = "server")]
-use crate::WebServerConfig;
-#[cfg(feature = "server")]
-pub mod config;
-
 /// Start the Dioxus fullstack web server with Axum integration.
 #[cfg(feature = "server")]
-pub async fn run_web_server(config: WebServerConfig, app: fn() -> Element) -> anyhow::Result<()> {
+pub async fn run_web_server(config: rb_types::config::WebServerConfig, app: fn() -> Element) -> anyhow::Result<()> {
     use axum_session::{SessionLayer, SessionStore};
     use axum_session_auth::AuthSessionLayer;
     use axum_session_sqlx::SessionSqlitePool;

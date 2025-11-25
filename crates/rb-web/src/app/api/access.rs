@@ -1,9 +1,9 @@
 #[cfg(feature = "server")]
 use axum::Extension;
 use dioxus::prelude::*;
+use rb_types::access::{GrantAccessRequest, PrincipalKind, RelayAccessPrincipal};
 #[cfg(feature = "server")]
 use rb_types::auth::{ClaimLevel, ClaimType};
-use rb_types::web::{GrantAccessRequest, PrincipalKind, RelayAccessPrincipal};
 
 #[cfg(feature = "server")]
 use crate::server::auth::guards::{WebAuthSession, ensure_claim};
@@ -15,7 +15,6 @@ use crate::server::auth::guards::{WebAuthSession, ensure_claim};
 )]
 pub async fn list_relay_access(relay_id: i64) -> Result<Vec<RelayAccessPrincipal>, ServerFnError> {
     ensure_claim(&auth, &ClaimType::Relays(ClaimLevel::View)).map_err(|e| ServerFnError::new(e.to_string()))?;
-    use rb_types::web::RelayAccessPrincipal;
     use state_store::fetch_relay_access_principals;
 
     let principals = fetch_relay_access_principals(&pool, relay_id)

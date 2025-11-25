@@ -2,11 +2,13 @@ use std::sync::Arc;
 
 // Internal Result type alias
 type Result<T> = crate::ServerResult<T>;
-use rb_types::RelayInfo;
+use rb_types::{
+    auth::AuthPromptEvent, relay::RelayInfo, ssh::{ForwardingConfig, NewlineMode}
+};
 use russh::{ChannelMsg, CryptoVec, client, keys};
 use secrecy::ExposeSecret;
 use serde_json::Value as JsonValue;
-use ssh_core::crypto::default_preferred;
+use ssh_core::{crypto::default_preferred, forwarding::ForwardingManager, session::run_shell};
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 
@@ -14,13 +16,6 @@ pub struct RelayHandle {
     pub session: russh::client::Handle<SharedRelayHandler>,
     pub channel_id: russh::ChannelId,
     pub input_tx: mpsc::UnboundedSender<Vec<u8>>,
-}
-
-/// Minimal prompt event used by non-TUI frontends (e.g., Web UI) to drive interactive auth.
-#[derive(Debug, Clone)]
-pub struct AuthPromptEvent {
-    pub prompt: String,
-    pub echo: bool,
 }
 
 /// Resolved credential data fetched from the database and decrypted.
@@ -257,7 +252,8 @@ async fn fetch_and_resolve_credential(
     let username = match cred.username_mode.as_str() {
         "passthrough" => Some(base_username.to_string()),
         "blank" => None, // Interactive username prompt
-        _ => { // fixed and others
+        _ => {
+            // fixed and others
             // Try to get username from meta JSON, fallback to base_username
             if let Some(meta) = cred.meta
                 && let Ok(json) = serde_json::from_str::<JsonValue>(&meta)
@@ -402,7 +398,9 @@ async fn authenticate_relay_session<H: client::Handler>(
                             .map_err(|_| crate::ServerError::Crypto("credential secret is not valid UTF-8".to_string()))?,
                     );
                     // If the stored password is empty, treat it as None so we prompt interactively
-                    if let Some(ref p) = password && p.is_empty() {
+                    if let Some(ref p) = password
+                        && p.is_empty()
+                    {
                         password = None;
                     }
                 }
@@ -779,14 +777,14 @@ pub async fn connect_to_relay_local(relay_name: &str, base_username: &str) -> Re
 
     // Run interactive shell bridging to stdio
     let shell_opts = ssh_core::session::ShellOptions {
-        newline_mode: ssh_core::terminal::NewlineMode::default(),
+        newline_mode: NewlineMode::default(),
         local_echo: false,
         forward_agent: false, // TODO: support forwarding agent if requested
-        forwarding: ssh_core::forwarding::ForwardingManager::new(ssh_core::forwarding::ForwardingConfig::default()),
+        forwarding: ForwardingManager::new(ForwardingConfig::default()),
     };
 
     let session = Arc::new(session);
-    ssh_core::session::run_shell(&session, shell_opts)
+    run_shell(&session, shell_opts)
         .await
         .map_err(|e| crate::ServerError::Other(e.to_string()))?;
 
@@ -823,10 +821,12 @@ fn build_client_config(options: &std::collections::HashMap<String, crate::secret
     Arc::new(cfg)
 }
 
+type WarningCallback = std::sync::Arc<dyn Fn(String) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>;
+
 pub struct SharedRelayHandler {
     pub expected_key: Option<String>,
     pub relay_name: String,
-    pub warning_callback: std::sync::Arc<dyn Fn(String) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>,
+    pub warning_callback: WarningCallback,
     pub action_tx: Option<tokio::sync::mpsc::UnboundedSender<tui_core::AppAction>>,
     pub auth_rx: Option<std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<String>>>>,
 }
@@ -848,7 +848,9 @@ impl client::Handler for SharedRelayHandler {
                 Err(_) => return Ok(false),
             };
 
-            if let Some(ref exp) = expected && key_str != *exp {
+            if let Some(ref exp) = expected
+                && key_str != *exp
+            {
                 callback(format!("HOST KEY MISMATCH: expected '{}', got '{}'", exp, key_str)).await;
                 return Ok(false);
             }

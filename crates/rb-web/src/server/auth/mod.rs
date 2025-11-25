@@ -9,7 +9,7 @@ pub mod types;
 pub use claims::*;
 use dioxus::prelude::*;
 pub use guards::*;
-use rb_types::auth::{AuthUserInfo, LoginRequest, LoginResponse};
+use rb_types::auth::{AuthDecision, AuthUserInfo, LoginRequest, LoginResponse};
 pub use types::*;
 
 #[post("/api/auth/login", 
@@ -21,7 +21,7 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
     // Authenticate user
     let login_target = server_core::auth::parse_login_target(&request.username);
     match server_core::auth::authenticate_password(&login_target, &request.password).await {
-        Ok(server_core::auth::AuthDecision::Accept) => {
+        Ok(AuthDecision::Accept) => {
             // Get user ID and claims
 
             use rb_types::auth::AuthUserInfo;
@@ -50,7 +50,7 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
                 }),
             })
         }
-        Ok(server_core::auth::AuthDecision::Reject) => Ok(LoginResponse {
+        Ok(AuthDecision::Reject) => Ok(LoginResponse {
             success: false,
             message: "Invalid username or password".to_string(),
             user: None,

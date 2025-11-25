@@ -9,12 +9,14 @@ use crate::server::auth::WebAuthSession;
 
 #[post("/api/auth/login", auth: WebAuthSession, pool: axum::Extension<sqlx::SqlitePool>)]
 pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
+    use rb_types::auth::AuthDecision;
+    use server_core::auth::authenticate_password;
     use state_store::get_user_claims;
 
     // Authenticate user
     let login_target = server_core::auth::parse_login_target(&request.username);
-    match server_core::auth::authenticate_password(&login_target, &request.password).await {
-        Ok(server_core::auth::AuthDecision::Accept) => {
+    match authenticate_password(&login_target, &request.password).await {
+        Ok(AuthDecision::Accept) => {
             // Get user ID and claims
 
             use rb_types::auth::AuthUserInfo;
@@ -43,7 +45,7 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
                 }),
             })
         }
-        Ok(server_core::auth::AuthDecision::Reject) => Ok(LoginResponse {
+        Ok(AuthDecision::Reject) => Ok(LoginResponse {
             success: false,
             message: "Invalid username or password".to_string(),
             user: None,

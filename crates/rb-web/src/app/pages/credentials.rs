@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use dioxus::prelude::*;
 use rb_types::{
-    auth::{ClaimLevel, ClaimType}, validation::{CredentialValidationInput, ValidationError}, web::{CreateCredentialRequest, UpdateCredentialRequest}
+    auth::{ClaimLevel, ClaimType}, credentials::{CreateCredentialRequest, UpdateCredentialRequest}, validation::{CredentialValidationInput, ValidationError}
 };
 
 use crate::{
@@ -123,7 +123,7 @@ pub fn CredentialsPage() -> Element {
             password: &password_val,
             private_key: &private_key_val,
             public_key: &public_key_val,
-            is_editing: is_editing,
+            is_editing,
             has_existing_password: effective_has_existing_password,
             has_existing_private_key: has_existing_private_key(),
             has_existing_public_key: has_existing_public_key(),

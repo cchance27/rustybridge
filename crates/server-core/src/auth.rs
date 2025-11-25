@@ -1,14 +1,9 @@
 use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
 use password_hash::{PasswordHash, PasswordVerifier};
 use rand::rngs::OsRng;
+use rb_types::auth::{AuthDecision, LoginTarget};
 
 use crate::error::{ServerError, ServerResult};
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LoginTarget {
-    pub username: String,
-    pub relay: Option<String>,
-}
 
 pub fn parse_login_target(input: &str) -> LoginTarget {
     if let Some((user, relay)) = input.split_once(':') {
@@ -22,11 +17,6 @@ pub fn parse_login_target(input: &str) -> LoginTarget {
             relay: None,
         }
     }
-}
-
-pub enum AuthDecision {
-    Accept,
-    Reject,
 }
 
 pub async fn authenticate_password(login: &LoginTarget, password: &str) -> ServerResult<AuthDecision> {

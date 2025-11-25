@@ -2,10 +2,9 @@ use std::{env, path::PathBuf, sync::Mutex};
 
 use anyhow::{Result, anyhow};
 use clap::{CommandFactory, Parser};
-use client_core::ClientConfig;
 use rb_cli::client_cli::ClientArgs;
+use rb_types::{client::ClientConfig, ssh::LocaleMode};
 use serial_test::serial;
-use ssh_core::forwarding::LocaleMode;
 
 static ENV_GUARD: Mutex<()> = Mutex::new(());
 

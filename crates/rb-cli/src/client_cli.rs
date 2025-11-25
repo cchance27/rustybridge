@@ -1,12 +1,12 @@
 use std::{collections::HashMap, env, path::PathBuf, time::Duration};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 use clap::{ArgAction, Parser, ValueEnum};
-use client_core::{ClientConfig, ClientIdentity};
-use secrecy::SecretString;
-use ssh_core::{
-    forwarding::{self, ForwardingConfig, LocaleMode}, terminal::{NewlineMode, newline_mode_from_env}
+use rb_types::{
+    client::{ClientConfig, ClientIdentity}, net::parse_target, ssh::{ForwardingConfig, LocaleMode, NewlineMode}
 };
+use secrecy::SecretString;
+use ssh_core::{forwarding, terminal::newline_mode_from_env};
 
 #[derive(Debug, Parser)]
 #[command(name = "rb", about = "Legacy-friendly SSH client with relaxed crypto options")]
@@ -268,46 +268,6 @@ impl TryFrom<ClientArgs> for ClientConfig {
             password_prompt,
             forwarding: forwarding_config,
         })
-    }
-}
-
-struct TargetParts {
-    host: String,
-    port: u16,
-    inferred_username: Option<String>,
-}
-
-fn parse_target(input: &str) -> Result<TargetParts> {
-    let (username_part, host_part) = if let Some((user, host)) = input.rsplit_once('@') {
-        (Some(user.to_string()), host.to_string())
-    } else {
-        (None, input.to_string())
-    };
-
-    let (host, port) = if host_part.starts_with('[') {
-        parse_bracketed_host(&host_part)?
-    } else if let Some((host, port_str)) = host_part.rsplit_once(':') {
-        let port = port_str.parse::<u16>().context("invalid port")?;
-        (host.to_string(), port)
-    } else {
-        (host_part, 22)
-    };
-
-    Ok(TargetParts {
-        host,
-        port,
-        inferred_username: username_part,
-    })
-}
-
-fn parse_bracketed_host(input: &str) -> Result<(String, u16)> {
-    if let Some((host, port)) = input.rsplit_once("]:") {
-        let host = host.trim_start_matches('[');
-        let port = port.parse::<u16>().context("invalid port")?;
-        Ok((host.to_string(), port))
-    } else {
-        let host = input.trim_start_matches('[').trim_end_matches(']');
-        Ok((host.to_string(), 22))
     }
 }
 

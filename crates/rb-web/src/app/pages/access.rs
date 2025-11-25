@@ -2,7 +2,7 @@ use std::{collections::HashMap, str::FromStr as _};
 
 use dioxus::prelude::*;
 use rb_types::{
-    auth::{ClaimLevel, ClaimType}, web::{CreateUserRequest, RelayAccessSource, UpdateUserRequest}
+    access::RelayAccessSource, auth::{ClaimLevel, ClaimType}, users::{CreateUserRequest, UpdateUserRequest}
 };
 
 use crate::{

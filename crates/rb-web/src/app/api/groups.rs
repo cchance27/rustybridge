@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 #[cfg(feature = "server")]
 use rb_types::auth::ClaimLevel;
-use rb_types::{auth::ClaimType, web::GroupInfo};
+use rb_types::{auth::ClaimType, users::GroupInfo};
 
 #[cfg(feature = "server")]
 use crate::server::auth::guards::{WebAuthSession, ensure_claim};
@@ -37,7 +37,7 @@ pub async fn list_groups() -> Result<Vec<GroupInfo>, ServerFnError> {
         let mut relay_count = 0i64;
         let mut relay_names = Vec::new();
         for relay in all_relays {
-            use rb_types::web::PrincipalKind;
+            use rb_types::access::PrincipalKind;
 
             let principals = fetch_relay_access_principals(&pool, relay.id)
                 .await

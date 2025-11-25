@@ -1,17 +1,9 @@
 use std::{env, os::fd::AsFd};
 
-use clap::ValueEnum;
+use rb_types::ssh::NewlineMode;
 use russh::Pty;
 use rustix::termios::{self, ControlModes, InputModes, LocalModes, OutputModes, SpecialCodeIndex as Sc, Termios};
 use tracing::warn;
-
-#[derive(Clone, Copy, Debug, ValueEnum, Default)]
-pub enum NewlineMode {
-    #[default]
-    Lf,
-    Cr,
-    CrLf,
-}
 
 pub fn newline_mode_from_env() -> Option<NewlineMode> {
     if let Ok(mode) = env::var("RB_NL") {

@@ -3,6 +3,7 @@ use std::{
 };
 
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size as term_size};
+use rb_types::ssh::NewlineMode;
 use russh::Sig;
 use signal_hook::iterator::Signals;
 use tokio::{
@@ -11,7 +12,7 @@ use tokio::{
 
 use super::SharedSessionHandle;
 use crate::{
-    forwarding::ForwardingManager, logging, terminal::{NewlineMode, current_pty_modes, map_input}
+    forwarding::ForwardingManager, logging, terminal::{current_pty_modes, map_input}
 };
 
 #[derive(Clone)]

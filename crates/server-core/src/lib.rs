@@ -11,11 +11,11 @@ pub use relay::connect_to_relay_local;
 pub mod secrets;
 mod server_manager;
 
-use std::{sync::Arc, time::Duration};
+use std::{env::VarError, sync::Arc, time::Duration};
 
 use base64::Engine;
 use rb_types::{
-    auth::ClaimType, web::{PrincipalKind, RelayAccessPrincipal}
+    access::{PrincipalKind, RelayAccessPrincipal}, auth::ClaimType, config::ServerConfig, relay::RelayInfo, state::Role
 };
 use russh::{
     MethodKind, MethodSet, keys::{
@@ -66,18 +66,11 @@ fn hostkey_fetch_timeout() -> ServerResult<Duration> {
             }
             Ok(Duration::from_secs_f64(normalized))
         }
-        Err(std::env::VarError::NotPresent) => Ok(Duration::from_secs_f64(DEFAULT_FETCH_HOSTKEY_TIMEOUT_SECS)),
-        Err(std::env::VarError::NotUnicode(_)) => Err(ServerError::InvalidConfig(format!(
+        Err(VarError::NotPresent) => Ok(Duration::from_secs_f64(DEFAULT_FETCH_HOSTKEY_TIMEOUT_SECS)),
+        Err(VarError::NotUnicode(_)) => Err(ServerError::InvalidConfig(format!(
             "{FETCH_HOSTKEY_TIMEOUT_ENV} contains invalid UTF-8"
         ))),
     }
-}
-
-#[derive(Clone)]
-pub struct ServerConfig {
-    pub bind: String,
-    pub port: u16,
-    pub roll_hostkey: bool,
 }
 
 /// Launch the embedded SSH server using the parsed CLI configuration.
@@ -333,7 +326,7 @@ async fn fetch_and_optionally_store_hostkey(pool: &sqlx::SqlitePool, name: &str,
     Ok(())
 }
 
-pub async fn list_hosts() -> ServerResult<Vec<rb_types::RelayInfo>> {
+pub async fn list_hosts() -> ServerResult<Vec<RelayInfo>> {
     let db = server_db().await?;
 
     let pool = db.into_pool();
@@ -606,7 +599,7 @@ pub async fn delete_role(name: &str) -> ServerResult<()> {
     Ok(())
 }
 
-pub async fn list_roles() -> ServerResult<Vec<state_store::Role>> {
+pub async fn list_roles() -> ServerResult<Vec<Role>> {
     let db = server_db().await?;
 
     let pool = db.into_pool();

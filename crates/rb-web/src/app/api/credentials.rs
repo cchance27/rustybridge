@@ -3,7 +3,7 @@ use anyhow::anyhow;
 use dioxus::prelude::*;
 #[cfg(feature = "server")]
 use rb_types::auth::{ClaimLevel, ClaimType};
-use rb_types::web::{CreateCredentialRequest, CredentialInfo, UpdateCredentialRequest};
+use rb_types::credentials::{CreateCredentialRequest, CredentialInfo, UpdateCredentialRequest};
 
 #[cfg(feature = "server")]
 use crate::server::auth::guards::{WebAuthSession, ensure_claim};
@@ -139,7 +139,7 @@ pub async fn update_credential(id: i64, req: UpdateCredentialRequest) -> Result<
     // If password_required is changing from false to true, don't treat empty password as "existing"
     // This forces the user to enter a password when enabling password_required
     let has_existing_password = if req.kind == "password" {
-        has_secret && !(req.password_required && !existing.password_required)
+        (existing.password_required || !req.password_required) && has_secret
     } else {
         has_secret
     };

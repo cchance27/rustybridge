@@ -25,6 +25,7 @@ cbc.workspace = true
 md5.workspace = true
 hex.workspace = true
 base64.workspace = true
+rb-types = { path = "../rb-types", features = ["clap"] }
 
 [dev-dependencies]
 rand.workspace = true

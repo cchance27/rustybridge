@@ -3,6 +3,9 @@ use std::fs;
 use std::{collections::HashSet, env, net::SocketAddr, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
+use rb_types::ssh::{
+    DynamicSocksForward, EnvEntry, ForwardingConfig, LocalTcpForward, LocalUnixForward, LocaleMode, RemoteTcpForward, RemoteUnixForward, SubsystemRequest
+};
 use russh::{Channel, ChannelStream, client};
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
@@ -15,84 +18,6 @@ use crate::session::{SessionHandle, SharedSessionHandle};
 
 // Internal Result type alias for convenience
 type Result<T> = crate::SshResult<T>;
-
-#[derive(Clone, Debug, Default)]
-pub struct ForwardingConfig {
-    pub local_tcp: Vec<LocalTcpForward>,
-    pub remote_tcp: Vec<RemoteTcpForward>,
-    pub dynamic_socks: Vec<DynamicSocksForward>,
-    pub local_unix: Vec<LocalUnixForward>,
-    pub remote_unix: Vec<RemoteUnixForward>,
-    pub x11: Option<X11Forward>,
-    pub subsystems: Vec<SubsystemRequest>,
-    pub env: EnvPropagation,
-}
-
-#[derive(Clone, Debug)]
-pub struct LocalTcpForward {
-    pub bind_address: Option<String>,
-    pub bind_port: u16,
-    pub target_host: String,
-    pub target_port: u16,
-}
-
-#[derive(Clone, Debug)]
-pub struct RemoteTcpForward {
-    pub bind_address: Option<String>,
-    pub bind_port: u16,
-    pub target_host: String,
-    pub target_port: u16,
-}
-
-#[derive(Clone, Debug)]
-pub struct DynamicSocksForward {
-    pub bind_address: Option<String>,
-    pub bind_port: u16,
-}
-
-#[derive(Clone, Debug)]
-pub struct LocalUnixForward {
-    pub local_socket: PathBuf,
-    pub remote_socket: PathBuf,
-}
-
-#[derive(Clone, Debug)]
-pub struct RemoteUnixForward {
-    pub remote_socket: PathBuf,
-    pub local_socket: PathBuf,
-}
-
-#[derive(Clone, Debug)]
-pub struct X11Forward {
-    pub display: Option<String>,
-    pub trusted: bool,
-    pub single_connection: bool,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct EnvPropagation {
-    pub entries: Vec<EnvEntry>,
-    pub locale_mode: LocaleMode,
-}
-
-#[derive(Clone, Debug)]
-pub struct EnvEntry {
-    pub name: String,
-    pub value: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub enum LocaleMode {
-    #[default]
-    None,
-    Lang,
-    All,
-}
-
-#[derive(Clone, Debug)]
-pub struct SubsystemRequest {
-    pub name: String,
-}
 
 pub trait ForwardStreamIo: AsyncRead + AsyncWrite + Unpin + Send {}
 
@@ -128,20 +53,6 @@ pub trait RemoteRegistrar {
     async fn request_tcpip_forward(&mut self, bind_address: String, bind_port: u16) -> Result<u32>;
     #[cfg(unix)]
     async fn request_streamlocal_forward(&mut self, remote_socket: String) -> Result<()>;
-}
-
-impl ForwardingConfig {
-    pub fn is_empty(&self) -> bool {
-        self.local_tcp.is_empty()
-            && self.remote_tcp.is_empty()
-            && self.dynamic_socks.is_empty()
-            && self.local_unix.is_empty()
-            && self.remote_unix.is_empty()
-            && self.x11.is_none()
-            && self.subsystems.is_empty()
-            && self.env.entries.is_empty()
-            && matches!(self.env.locale_mode, LocaleMode::None)
-    }
 }
 
 pub fn parse_local_tcp(spec: &str) -> crate::SshResult<LocalTcpForward> {

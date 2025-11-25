@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use dioxus::prelude::*;
 use rb_types::{
-    auth::{ClaimLevel, ClaimType}, validation::{CredentialValidationInput, ValidationError}, web::{AuthWebConfig, CreateRelayRequest, CustomAuthRequest, PrincipalKind, UpdateRelayRequest}
+    access::PrincipalKind, auth::{ClaimLevel, ClaimType}, credentials::{AuthWebConfig, CustomAuthRequest}, relay::{CreateRelayRequest, HostkeyReview, RelayHostInfo, UpdateRelayRequest}, validation::{CredentialValidationInput, ValidationError}
 };
 
 use crate::{
@@ -255,7 +255,7 @@ pub fn RelaysPage() -> Element {
         let selected_cred_id = selected_credential_id();
         let is_editing = editing_id().is_some();
         let action_word = if is_editing { "updated" } else { "created" };
-        let effective_has_existing_password = has_existing_password() && !(auth_password_required() && !auth_original_password_required());
+        let effective_has_existing_password = (auth_original_password_required() || !auth_password_required()) && has_existing_password();
 
         // Client-side validation for authentication step
         let mut auth_errors = HashMap::new();
@@ -649,7 +649,7 @@ pub fn RelaysPage() -> Element {
     };
 
     // Helper to render the credential cell consistently
-    let render_credential_cell = |host: &rb_types::web::RelayHostInfo| -> Element {
+    let render_credential_cell = |host: &RelayHostInfo| -> Element {
         let badge = if let Some(cred) = &host.credential {
             Some((
                 cred.clone(),
@@ -707,7 +707,6 @@ pub fn RelaysPage() -> Element {
                                 on_clear: Some(EventHandler::new({
                                     let id = host.id;
                                     let name = host.name.clone();
-                                    let is_inline = is_inline;
                                     move |_| open_clear_modal(id, name.clone(), is_inline)
                                 })),
                             }
@@ -717,7 +716,7 @@ pub fn RelaysPage() -> Element {
                     Protected {
                         claim: Some(ClaimType::Relays(ClaimLevel::Edit)),
                         button {
-                            class: "badge badge-primary gap-2 cursor-pointer text-[11px] hover:badge-accent",
+                            class: "badge badge-secondary gap-2 cursor-pointer text-[11px] hover:badge-accent",
                             onclick: {
                                 let id = host.id;
                                 let name = host.name.clone();

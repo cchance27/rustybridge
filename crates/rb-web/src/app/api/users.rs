@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 #[cfg(feature = "server")]
 use rb_types::auth::ClaimLevel;
 use rb_types::{
-    auth::ClaimType, web::{CreateUserRequest, UpdateUserRequest, UserGroupInfo}
+    auth::ClaimType, users::{CreateUserRequest, UpdateUserRequest, UserGroupInfo}
 };
 
 #[cfg(feature = "server")]
@@ -22,6 +22,7 @@ pub async fn list_users() -> Result<Vec<UserGroupInfo>, ServerFnError> {
     ensure_user_claim(&auth, ClaimLevel::View)?;
     use std::collections::HashMap;
 
+    use rb_types::access::RelayAccessSource;
     use server_core::{list_user_groups_server, list_users as list_users_core};
     use state_store::{fetch_relay_access_principals, get_user_claims, list_relay_hosts};
 
@@ -32,7 +33,7 @@ pub async fn list_users() -> Result<Vec<UserGroupInfo>, ServerFnError> {
 
     let mut result = Vec::new();
     for username in usernames {
-        use rb_types::web::{UserGroupInfo, UserRelayAccess};
+        use rb_types::{access::UserRelayAccess, users::UserGroupInfo};
 
         let groups = list_user_groups_server(&username)
             .await
@@ -42,7 +43,7 @@ pub async fn list_users() -> Result<Vec<UserGroupInfo>, ServerFnError> {
         let mut relay_access_map: HashMap<i64, UserRelayAccess> = HashMap::new();
 
         for relay in &all_relays {
-            use rb_types::web::PrincipalKind;
+            use rb_types::access::PrincipalKind;
 
             let principals = fetch_relay_access_principals(&pool, relay.id)
                 .await
@@ -56,16 +57,10 @@ pub async fn list_users() -> Result<Vec<UserGroupInfo>, ServerFnError> {
                 .collect();
 
             let access_source = if has_direct && !group_access.is_empty() {
-                use rb_types::web::RelayAccessSource;
-
                 Some(RelayAccessSource::Both(group_access.join(", ")))
             } else if has_direct {
-                use rb_types::web::RelayAccessSource;
-
                 Some(RelayAccessSource::Direct)
             } else if !group_access.is_empty() {
-                use rb_types::web::RelayAccessSource;
-
                 Some(RelayAccessSource::ViaGroup(group_access.join(", ")))
             } else {
                 None

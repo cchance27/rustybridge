@@ -3,7 +3,9 @@ use anyhow::anyhow;
 use dioxus::prelude::*;
 #[cfg(feature = "server")]
 use rb_types::auth::{ClaimLevel, ClaimType};
-use rb_types::web::{CreateRelayRequest, CustomAuthRequest, RelayHostInfo, UpdateRelayRequest};
+use rb_types::{
+    credentials::CustomAuthRequest, relay::{CreateRelayRequest, HostkeyReview, RelayHostInfo, UpdateRelayRequest}
+};
 #[cfg(feature = "server")]
 use secrecy::ExposeSecret;
 
@@ -28,7 +30,7 @@ pub async fn list_relay_hosts() -> Result<Vec<RelayHostInfo>> {
     let mut result = Vec::new();
 
     for host in hosts {
-        use rb_types::web::{AuthWebConfig, RelayAccessPrincipal};
+        use rb_types::{access::RelayAccessPrincipal, credentials::AuthWebConfig};
 
         let opts = state_store::fetch_relay_host_options(&pool, host.id)
             .await
@@ -243,18 +245,6 @@ pub async fn clear_relay_credential(id: i64) -> Result<()> {
 
     server_core::unassign_credential(&host.name).await.map_err(|e| anyhow!("{}", e))?;
     Ok(())
-}
-
-/// Fetch hostkey for review (step 1 of 2-step process)
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
-pub struct HostkeyReview {
-    pub host_id: i64,
-    pub host: String,
-    pub old_fingerprint: Option<String>,
-    pub old_key_type: Option<String>,
-    pub new_fingerprint: String,
-    pub new_key_type: String,
-    pub new_key_pem: String,
 }
 
 #[get(

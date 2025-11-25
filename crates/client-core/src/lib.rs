@@ -2,51 +2,17 @@ mod auth;
 pub mod error;
 mod hostkeys;
 
-use std::{borrow::Cow, path::PathBuf, sync::Arc, time::Duration};
+use std::{borrow::Cow, sync::Arc, time::Duration};
 
-use auth::{AuthPreferences, authenticate};
+use auth::authenticate;
 pub use error::{ClientError, ClientResult};
 use hostkeys::{ClientHandler, HostKeyPolicy, HostKeyVerifier};
+use rb_types::client::{AuthPreferences, ClientConfig};
 use russh::client;
-use secrecy::SecretString;
 use ssh_core::{
-    crypto::{default_preferred, legacy_preferred}, forwarding::{ForwardingConfig, ForwardingManager}, session::{self, ShellOptions, run_command, run_shell, run_subsystem}, terminal::NewlineMode
+    crypto::{default_preferred, legacy_preferred}, forwarding::ForwardingManager, session::{self, ShellOptions, run_command, run_shell, run_subsystem}
 };
 use tracing::{info, warn};
-
-#[derive(Clone)]
-pub struct ClientConfig {
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub password: Option<SecretString>,
-    pub command: Option<String>,
-    pub newline_mode: NewlineMode,
-    pub local_echo: bool,
-    pub prefer_compression: bool,
-    pub rekey_interval: Option<Duration>,
-    pub rekey_bytes: Option<usize>,
-    pub keepalive_interval: Option<Duration>,
-    pub keepalive_max: Option<usize>,
-    pub accept_hostkey_once: bool,
-    pub accept_store_hostkey: bool,
-    pub replace_hostkey: bool,
-    pub insecure: bool,
-    pub identities: Vec<ClientIdentity>,
-    pub allow_keyboard_interactive: bool,
-    pub agent_auth: bool,
-    pub forward_agent: bool,
-    pub ssh_agent_socket: Option<PathBuf>,
-    pub prompt_password: bool,
-    pub password_prompt: Option<String>,
-    pub forwarding: ForwardingConfig,
-}
-
-#[derive(Clone)]
-pub struct ClientIdentity {
-    pub key_path: PathBuf,
-    pub cert_path: Option<PathBuf>,
-}
 
 pub async fn run_client(args: ClientConfig) -> ClientResult<()> {
     let ClientConfig {

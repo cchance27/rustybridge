@@ -11,6 +11,7 @@ russh.workspace = true
 sqlx.workspace = true
 ssh-core = { path = "../ssh-core" }
 state-store = { path = "../state-store" }
+rb-types = { path = "../rb-types", features = ["secrecy", "clap"] }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true

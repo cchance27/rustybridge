@@ -6,12 +6,13 @@ use axum::{
 };
 #[cfg(feature = "server")]
 use futures::{SinkExt, StreamExt};
+use rb_types::auth::AuthPromptEvent;
 #[cfg(feature = "server")]
 use russh::ChannelMsg;
 #[cfg(feature = "server")]
 use serde::Serialize;
 #[cfg(feature = "server")]
-use server_core::relay::{AuthPromptEvent, connect_to_relay_channel};
+use server_core::relay::connect_to_relay_channel;
 #[cfg(feature = "server")]
 use state_store::{fetch_relay_host_by_name, user_has_relay_access};
 
@@ -141,14 +142,18 @@ pub async fn ssh_terminal_status(
 
 #[cfg(feature = "server")]
 async fn handle_socket(socket: WebSocket, relay_name: String, username: String) {
+    use tokio::sync::{
+        Mutex, mpsc::{self, unbounded_channel}
+    };
+
     tracing::info!("handle_socket started for relay: {} user: {}", relay_name, username);
 
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
     // Channels for interactive auth prompts
-    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel::<AuthPromptEvent>();
-    let (auth_tx, auth_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    let auth_rx_mutex = tokio::sync::Mutex::new(auth_rx);
+    let (prompt_tx, mut prompt_rx) = unbounded_channel::<AuthPromptEvent>();
+    let (auth_tx, auth_rx) = unbounded_channel::<String>();
+    let auth_rx_mutex = Mutex::new(auth_rx);
 
     // Drive interactive auth prompts over the WebSocket while connecting
     let mut connect_fut = Box::pin(connect_to_relay_channel(
@@ -237,7 +242,6 @@ async fn handle_socket(socket: WebSocket, relay_name: String, username: String) 
         }
     };
 
-    use tokio::sync::mpsc;
     // Use bounded channels to prevent OOM if one side is faster than the other
     let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(1024);
     let (output_tx, mut output_rx) = mpsc::channel::<Vec<u8>>(1024);

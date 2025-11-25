@@ -1,7 +1,8 @@
 use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, error::ErrorKind};
-use client_core::{ClientConfig, run_client};
+use client_core::run_client;
 use rb_cli::{client_cli::ClientArgs, init_tracing};
+use rb_types::client::ClientConfig;
 
 #[tokio::main]
 async fn main() -> Result<()> {

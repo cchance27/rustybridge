@@ -12,6 +12,7 @@ use chacha20poly1305::{
 use hkdf::Hkdf;
 use once_cell::sync::Lazy;
 use rand::{Rng, RngCore};
+use rb_types::credentials::EncryptedBlob;
 use secrecy::ExposeSecret;
 use sha2::Sha256;
 
@@ -28,12 +29,6 @@ const ENC_PREFIX_V1: &str = "enc:v1:";
 const ENC_PREFIX_V2: &str = "enc:v2:";
 
 static MASTER_KEY: Lazy<ServerResult<SecretVec<u8>>> = Lazy::new(load_master_key);
-
-pub struct EncryptedBlob {
-    pub salt: Vec<u8>,       // KDF salt (16 bytes)
-    pub nonce: Vec<u8>,      // XChaCha20-Poly1305 nonce (24 bytes)
-    pub ciphertext: Vec<u8>, // ciphertext + tag
-}
 
 fn load_master_key() -> ServerResult<SecretVec<u8>> {
     // Try explicit 32-byte master key (base64-encoded)

@@ -1,5 +1,6 @@
 use std::{collections::HashMap, fmt};
 
+/// High-level validation errors used by credential input checks.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ValidationError {
     Required,
@@ -19,22 +20,35 @@ impl fmt::Display for ValidationError {
     }
 }
 
+/// Input wrapper for credential validation routines.
 #[derive(Debug, Clone, Default)]
 pub struct CredentialValidationInput<'a> {
+    /// Credential kind: "password", "ssh_key", or "agent".
     pub kind: &'a str,
+    /// Username handling mode ("fixed", "blank", "passthrough").
     pub username_mode: &'a str,
+    /// Username value.
     pub username: &'a str,
+    /// Whether a password is required (password type).
     pub password_required: bool,
+    /// Password value (password type).
     pub password: &'a str,
+    /// Private key content (ssh_key type).
     pub private_key: &'a str,
+    /// Public key content (agent type).
     pub public_key: &'a str,
+    /// Whether this represents an edit/update operation.
     pub is_editing: bool,
+    /// Whether a password already exists (edit mode).
     pub has_existing_password: bool,
+    /// Whether a private key already exists (edit mode).
     pub has_existing_private_key: bool,
+    /// Whether a public key already exists (edit mode).
     pub has_existing_public_key: bool,
 }
 
 impl<'a> CredentialValidationInput<'a> {
+    /// Construct with required fields, defaulting the optional flags to safe values.
     pub fn new(kind: &'a str, username_mode: &'a str) -> Self {
         Self {
             kind,
@@ -51,6 +65,7 @@ impl<'a> CredentialValidationInput<'a> {
         }
     }
 
+    /// Validate the credential input, returning a field->error map.
     pub fn validate(&self) -> HashMap<String, ValidationError> {
         let mut errors = HashMap::new();
 
@@ -92,6 +107,7 @@ impl<'a> CredentialValidationInput<'a> {
     }
 }
 
+/// Render a human-readable string from a map of validation errors.
 pub fn format_errors(errors: &HashMap<String, ValidationError>) -> String {
     errors.iter().map(|(k, v)| format!("{}: {}", k, v)).collect::<Vec<_>>().join(", ")
 }

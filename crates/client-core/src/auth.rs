@@ -4,6 +4,7 @@ use std::{
 
 // Internal Result type alias
 type Result<T> = crate::ClientResult<T>;
+use rb_types::client::{AuthPreferences, ClientIdentity};
 use rpassword::{prompt_password, read_password};
 use russh::{
     MethodSet, client::{self, AuthResult, KeyboardInteractiveAuthResponse}, keys::{self, Certificate, HashAlg, PrivateKeyWithHashAlg}
@@ -12,19 +13,6 @@ use secrecy::{ExposeSecret, SecretString};
 use ssh_core::session::SessionHandle;
 use tokio::{fs, task};
 use tracing::{debug, info, warn};
-
-use crate::ClientIdentity;
-
-pub struct AuthPreferences<'a> {
-    pub username: &'a str,
-    pub password: Option<&'a SecretString>,
-    pub prompt_password: bool,
-    pub password_prompt: Option<&'a str>,
-    pub identities: &'a [ClientIdentity],
-    pub allow_keyboard_interactive: bool,
-    pub use_agent_auth: bool,
-    pub agent_socket: Option<&'a Path>,
-}
 
 pub async fn authenticate<H>(session: &mut SessionHandle<H>, prefs: AuthPreferences<'_>) -> Result<()>
 where
