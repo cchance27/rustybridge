@@ -25,6 +25,7 @@ pub struct AuthPromptEvent {
 
 /// Resolved credential data fetched from the database and decrypted.
 /// This struct eliminates TOCTOU issues by fetching credential data once.
+#[derive(Debug)]
 struct ResolvedCredential {
     id: i64,
     kind: String,
@@ -39,6 +40,8 @@ impl RelayHandle {
         let _ = self.input_tx.send(bytes);
     }
 }
+
+const ERR_CREDENTIAL_NOT_CONFIGURED: &str = "credential type for this host aren't configured";
 
 /// Start an outbound SSH session to the relay host and bridge IO between the remote channel and the inbound client channel.
 ///
@@ -194,10 +197,26 @@ async fn fetch_and_resolve_credential(
     options: &std::collections::HashMap<String, crate::secrets::SecretString>,
     base_username: &str,
 ) -> Result<Option<ResolvedCredential>> {
+    let auth_source = options.get("auth.source").map(|s| s.expose_secret().as_str());
+
+    match auth_source {
+        Some("inline") => {
+            // Inline authentication is handled later; nothing to resolve here.
+            return Ok(None);
+        }
+        Some("credential") => {}
+        _ => {
+            // No declared auth source; treat as misconfigured instead of falling back.
+            return Err(crate::ServerError::Other(ERR_CREDENTIAL_NOT_CONFIGURED.to_string()));
+        }
+    }
+
     // Check if we have a credential ID
     let cred_id = match options.get("auth.id").and_then(|s| s.expose_secret().parse::<i64>().ok()) {
         Some(id) => id,
-        None => return Ok(None), // No credential, use inline auth
+        None => {
+            return Err(crate::ServerError::Other(ERR_CREDENTIAL_NOT_CONFIGURED.to_string()));
+        }
     };
 
     // Fetch credential from database
@@ -238,7 +257,7 @@ async fn fetch_and_resolve_credential(
     let username = match cred.username_mode.as_str() {
         "passthrough" => Some(base_username.to_string()),
         "blank" => None, // Interactive username prompt
-        "fixed" | _ => {
+        _ => { // fixed and others
             // Try to get username from meta JSON, fallback to base_username
             if let Some(meta) = cred.meta
                 && let Ok(json) = serde_json::from_str::<JsonValue>(&meta)
@@ -307,7 +326,7 @@ async fn prompt_for_input(
         return Err(crate::ServerError::Other("interactive response too large".to_string()));
     }
 
-    let trimmed = response.trim_end_matches(|c| c == '\r' || c == '\n').to_string();
+    let trimmed = response.trim_end_matches(['\r', '\n']).to_string();
     tracing::warn!(
         "received interactive response (len={}, echo={} prompt='{}')",
         trimmed.len(),
@@ -383,10 +402,8 @@ async fn authenticate_relay_session<H: client::Handler>(
                             .map_err(|_| crate::ServerError::Crypto("credential secret is not valid UTF-8".to_string()))?,
                     );
                     // If the stored password is empty, treat it as None so we prompt interactively
-                    if let Some(ref p) = password {
-                        if p.is_empty() {
-                            password = None;
-                        }
+                    if let Some(ref p) = password && p.is_empty() {
+                        password = None;
                     }
                 }
             } else if let Some(pw) = options.get("auth.password") {
@@ -831,13 +848,28 @@ impl client::Handler for SharedRelayHandler {
                 Err(_) => return Ok(false),
             };
 
-            if let Some(ref exp) = expected {
-                if key_str != *exp {
-                    callback(format!("HOST KEY MISMATCH: expected '{}', got '{}'", exp, key_str)).await;
-                    return Ok(false);
-                }
+            if let Some(ref exp) = expected && key_str != *exp {
+                callback(format!("HOST KEY MISMATCH: expected '{}', got '{}'", exp, key_str)).await;
+                return Ok(false);
             }
             Ok(true)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn missing_auth_source_is_denied() {
+        let options: HashMap<String, crate::secrets::SecretString> = HashMap::new();
+        let err = fetch_and_resolve_credential(&options, "alice").await.unwrap_err();
+        assert!(
+            err.to_string().contains(ERR_CREDENTIAL_NOT_CONFIGURED),
+            "expected a clear denial when no auth is configured"
+        );
     }
 }
