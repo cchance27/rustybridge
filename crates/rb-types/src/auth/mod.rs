@@ -93,12 +93,37 @@ pub enum AuthDecision {
     Accept,
     Reject,
 }
-
 /// Minimal prompt event used by non-TUI frontends (e.g., Web UI) to drive interactive auth.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AuthPromptEvent {
     /// Prompt text to present to the user.
     pub prompt: String,
     /// Whether input should be echoed.
     pub echo: bool,
+}
+
+/// Basic authentication row for a user.
+#[derive(Debug, Clone)]
+pub struct UserAuthRecord {
+    pub id: i64,
+    pub username: String,
+    pub password_hash: Option<String>,
+}
+
+/// Latest OIDC profile (name/picture) for a user, if linked.
+#[derive(Debug, Clone, Default)]
+pub struct OidcProfile {
+    pub name: Option<String>,
+    pub picture: Option<String>,
+}
+
+/// OIDC link row for a user (latest entry).
+#[derive(Debug, Clone)]
+pub struct OidcLinkInfo {
+    pub user_id: i64,
+    pub provider_id: String,
+    pub subject_id: String,
+    pub email: Option<String>,
+    pub name: Option<String>,
+    pub picture: Option<String>,
 }

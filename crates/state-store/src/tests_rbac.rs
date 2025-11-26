@@ -1,4 +1,3 @@
-use rb_types::auth::ClaimLevel;
 use sqlx::SqlitePool;
 
 use crate::*;
