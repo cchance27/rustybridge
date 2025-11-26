@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::{
-    app::auth::context::use_auth_provider, pages::{AccessPage, CredentialsPage, DashboardPage, LoginPage, LogoutPage, NotFoundPage, OidcErrorPage, RelaysPage}
+    app::auth::context::use_auth_provider, pages::{AccessPage, CredentialsPage, DashboardPage, LoginPage, LogoutPage, NotFoundPage, OidcErrorPage, RelaysPage, SshSuccessPage}
 };
 
 /// Root shell: wraps the router and global providers.
@@ -38,6 +38,8 @@ pub enum Routes {
     LogoutPage {},
     #[route("/oidc/error")]
     OidcErrorPage {},
+    #[route("/auth/ssh-success")]
+    SshSuccessPage {},
     #[route("/:..route")]
     NotFoundPage { route: Vec<String> },
 }

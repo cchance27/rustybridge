@@ -3,6 +3,7 @@ mod claims;
 pub use claims::{ClaimLevel, ClaimType};
 use serde::{Deserialize, Serialize};
 pub mod oidc;
+pub mod ssh;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 /// Login payload submitted to authentication endpoints.

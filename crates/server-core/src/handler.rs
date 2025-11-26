@@ -40,6 +40,16 @@ pub(super) struct ServerHandler {
     // Interactive auth plumbing
     auth_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     pending_auth: Option<AuthPromptState>,
+    // SSH OIDC keyboard-interactive auth session code
+    pending_ssh_auth_code: Option<String>,
+    // Last time we checked SSH auth status (for rate limiting)
+    last_ssh_auth_check: Option<Instant>,
+    // Whether we've shown the initial SSH auth message
+    ssh_auth_message_shown: bool,
+    // Once set, keyboard-interactive is hard-rejected (e.g., OIDC mismatch/expired)
+    deny_keyboard_interactive: bool,
+    // Whether we've already sent a one-time failure banner for OIDC auth
+    ssh_auth_failure_banner_sent: bool,
 }
 
 struct AuthPromptState {
@@ -48,6 +58,14 @@ struct AuthPromptState {
 }
 
 impl ServerHandler {
+    fn oidc_failed_prompt() -> Auth {
+        Auth::Partial {
+            name: std::borrow::Cow::Borrowed(""),
+            instructions: std::borrow::Cow::Borrowed("OIDC Failed\r\n"),
+            prompts: std::borrow::Cow::Owned(vec![]),
+        }
+    }
+
     /// Create a handler bound to the connecting client's socket address.
     pub(super) fn new(peer_addr: Option<SocketAddr>) -> Self {
         let (size_updates, _) = watch::channel((80, 24));
@@ -71,6 +89,11 @@ impl ServerHandler {
             action_rx,
             auth_tx: None,
             pending_auth: None,
+            pending_ssh_auth_code: None,
+            last_ssh_auth_check: None,
+            ssh_auth_message_shown: false,
+            deny_keyboard_interactive: false,
+            ssh_auth_failure_banner_sent: false,
         }
     }
 
@@ -93,6 +116,18 @@ impl ServerHandler {
     fn log_disconnect(&mut self, reason: &str) {
         if self.closed {
             return;
+        }
+
+        // If an OIDC SSH auth session was in progress, mark it abandoned so it can't linger after the client drops.
+        if let Some(code) = self.pending_ssh_auth_code.take() {
+            let user = self.username.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::auth::ssh_auth::abandon_ssh_auth_session(&code).await {
+                    tracing::warn!(%code, ?user, error = %e, "failed to mark abandoned SSH OIDC session");
+                } else {
+                    tracing::info!(%code, ?user, "abandoned SSH OIDC session marked as abandoned on disconnect");
+                }
+            });
         }
         self.closed = true;
 
@@ -533,9 +568,7 @@ impl ssh_server::Handler for ServerHandler {
     }
 
     async fn auth_publickey(&mut self, user: &str, public_key: &russh::keys::PublicKey) -> Result<Auth, Self::Error> {
-        let login: LoginTarget = parse_login_target(user);
-        // TODO: Implement public key authentication
-        // let username = &login.username; // Unused for now
+        let login = parse_login_target(user);
 
         let key_bytes = match public_key.to_bytes() {
             Ok(b) => b,
@@ -545,38 +578,36 @@ impl ssh_server::Handler for ServerHandler {
             }
         };
 
-        match ssh_key::PublicKey::from_bytes(&key_bytes) {
-            Ok(parsed_key) => {
-                // Check if it's a certificate using algorithm() or key_data()
-                // ssh-key 0.6 PublicKey has is_certificate() method?
-                // Let's try parsed_key.algorithm().is_certificate() again, or check KeyData variants.
-                // If KeyData::Certificate is missing, maybe we need to enable a feature in ssh-key?
-                // But let's try parsed_key.key_data().is_certificate() if available.
-                // Actually, let's try to match on KeyData again but maybe I had a typo?
-                // Or maybe I should use `parsed_key.is_certificate()`?
-                // I'll try `parsed_key.algorithm().is_certificate()` again, maybe I missed something.
-                // Wait, `Algorithm` enum has `is_certificate()`?
-                // I'll assume `ssh_key::Algorithm` has `is_certificate`.
+        // Check if it's a certificate (future enhancement)
+        if let Ok(parsed_key) = ssh_key::PublicKey::from_bytes(&key_bytes)
+            && parsed_key.algorithm().as_str().contains("-cert-")
+        {
+            warn!("SSH Certificate auth attempted but CA not configured");
+            return Ok(Auth::reject());
+        }
 
-                if parsed_key.algorithm().as_str().contains("-cert-") {
-                    // CA Validation Logic
-                    // Placeholder: Reject certs for now until we have CA config
-                    warn!("SSH Certificate auth attempted but CA not configured");
-                    Ok(Auth::reject())
-                } else {
-                    // Standard Public Key Logic
-                    if let Ok(handle) = state_store::server_db().await {
-                        let _pool = handle.into_pool();
-                        // Placeholder
-                        warn!("Standard SSH Key auth attempted but not implemented yet");
-                        Ok(Auth::reject())
-                    } else {
-                        Ok(Auth::reject())
-                    }
-                }
+        // Standard public key authentication
+        match crate::auth::ssh_auth::verify_user_public_key(&login.username, &key_bytes).await {
+            Ok(true) => {
+                self.username = Some(login.username.clone());
+                self.relay_target = login.relay.clone();
+                info!(
+                    peer = %display_addr(self.peer_addr),
+                    user = %login.username,
+                    "public key authentication accepted"
+                );
+                Ok(Auth::Accept)
+            }
+            Ok(false) => {
+                warn!(
+                    peer = %display_addr(self.peer_addr),
+                    user = %login.username,
+                    "public key authentication rejected (key not found)"
+                );
+                Ok(Auth::reject())
             }
             Err(e) => {
-                warn!("Failed to parse SSH key: {}", e);
+                warn!("Failed to verify public key: {}", e);
                 Ok(Auth::reject())
             }
         }
@@ -585,10 +616,171 @@ impl ssh_server::Handler for ServerHandler {
     async fn auth_keyboard_interactive(
         &mut self,
         user: &str,
-        submethods: &str,
-        _response: Option<russh::server::Response<'_>>,
+        _submethods: &str,
+        response: Option<russh::server::Response<'_>>,
     ) -> Result<Auth, Self::Error> {
-        warn!("Keyboard interactive auth attempted (user={}, submethods={})", user, submethods);
+        use rb_types::auth::ssh::SshAuthStatus;
+        use russh::server::Auth;
+
+        let login = parse_login_target(user);
+
+        if self.deny_keyboard_interactive {
+            if !self.ssh_auth_failure_banner_sent {
+                // Send a one-time failure notice so the client sees why OIDC ended
+                self.ssh_auth_failure_banner_sent = true;
+                return Ok(Self::oidc_failed_prompt());
+            }
+            return Ok(Auth::reject());
+        }
+
+        // First call: no response yet, create session and send auth URL
+        if response.is_none() && self.pending_ssh_auth_code.is_none() {
+            match crate::auth::ssh_auth::create_ssh_auth_session(&login.username).await {
+                Ok(session) => {
+                    let prompt = format!("\nAuthenticate via OIDC:\n{}\n\nWaiting for authentication...", session.auth_url);
+
+                    // Store session code
+                    self.pending_ssh_auth_code = Some(session.code);
+                    self.ssh_auth_message_shown = true;
+
+                    info!(
+                        peer = %display_addr(self.peer_addr),
+                        user = %login.username,
+                        "SSH OIDC keyboard-interactive session created"
+                    );
+
+                    return Ok(Auth::Partial {
+                        name: std::borrow::Cow::Borrowed("OIDC Authentication"),
+                        instructions: std::borrow::Cow::Owned(prompt),
+                        prompts: std::borrow::Cow::Owned(vec![]),
+                    });
+                }
+                Err(e) => {
+                    warn!("Failed to create SSH auth session: {}", e);
+                    return Ok(Auth::reject());
+                }
+            }
+        }
+
+        // Subsequent calls: check status once and yield; avoids long blocking so disconnects are observed promptly.
+        if let Some(code) = &self.pending_ssh_auth_code {
+            // Rate-limit polling to avoid tight loops and CPU churn.
+            const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000);
+            let now = std::time::Instant::now();
+            if let Some(last) = self.last_ssh_auth_check {
+                let elapsed = now.duration_since(last);
+                if elapsed < POLL_INTERVAL {
+                    tokio::time::sleep(POLL_INTERVAL - elapsed).await;
+                }
+            }
+            self.last_ssh_auth_check = Some(std::time::Instant::now());
+
+            match crate::auth::ssh_auth::check_ssh_auth_session(code).await {
+                Ok(Some(session)) => match session.status {
+                    SshAuthStatus::Authenticated(auth_user_id) => {
+                        if auth_user_id == session.requested_user_id {
+                            // One-time consume on success
+                            if let Err(e) = crate::auth::ssh_auth::mark_ssh_auth_session_used(code, auth_user_id).await {
+                                warn!("Failed to mark SSH auth session as used: {}", e);
+                                return Ok(Auth::reject());
+                            }
+
+                            self.username = Some(login.username.clone());
+                            self.relay_target = login.relay.clone();
+                            self.pending_ssh_auth_code = None;
+                            self.last_ssh_auth_check = None;
+                            self.ssh_auth_message_shown = false;
+
+                            info!(
+                                peer = %display_addr(self.peer_addr),
+                                user = %login.username,
+                                user_id = %auth_user_id,
+                                "OIDC keyboard-interactive authentication accepted"
+                            );
+                            return Ok(Auth::Accept);
+                        } else {
+                            // Mismatch: reject and invalidate the session
+                            if let Err(e) = crate::auth::ssh_auth::reject_ssh_auth_session(code, Some(auth_user_id)).await {
+                                warn!("Failed to reject mismatched SSH auth session: {}", e);
+                            }
+
+                            self.pending_ssh_auth_code = None;
+                            self.last_ssh_auth_check = None;
+                            self.ssh_auth_message_shown = false;
+
+                            warn!(
+                                    peer = %display_addr(self.peer_addr),
+                                    requested_user = %login.username,
+                                requested_user_id = %session.requested_user_id,
+                                authenticated_user_id = %auth_user_id,
+                                "OIDC authentication user mismatch for SSH login"
+                            );
+                            self.deny_keyboard_interactive = true;
+                            if !self.ssh_auth_failure_banner_sent {
+                                self.ssh_auth_failure_banner_sent = true;
+                                return Ok(Self::oidc_failed_prompt());
+                            }
+                            return Ok(Auth::reject());
+                        }
+                    }
+                    SshAuthStatus::Rejected | SshAuthStatus::Expired | SshAuthStatus::Used | SshAuthStatus::Abandoned => {
+                        self.pending_ssh_auth_code = None;
+                        self.last_ssh_auth_check = None;
+                        self.ssh_auth_message_shown = false;
+                        self.deny_keyboard_interactive = true;
+                        warn!(
+                            peer = %display_addr(self.peer_addr),
+                            user = %login.username,
+                            "OIDC authentication rejected or expired"
+                        );
+                        if !self.ssh_auth_failure_banner_sent {
+                            self.ssh_auth_failure_banner_sent = true;
+                            return Ok(Self::oidc_failed_prompt());
+                        }
+                        return Ok(Auth::reject());
+                    }
+                    SshAuthStatus::Pending => {
+                        // Still waiting: don't re-prompt; just return Partial with empty fields.
+                        return Ok(Auth::Partial {
+                            name: std::borrow::Cow::Borrowed(""),
+                            instructions: std::borrow::Cow::Borrowed(""),
+                            prompts: std::borrow::Cow::Owned(vec![]),
+                        });
+                    }
+                },
+                Ok(None) => {
+                    // Session disappeared (expired/cleaned/invalid code) — no chance to succeed
+                    self.pending_ssh_auth_code = None;
+                    self.last_ssh_auth_check = None;
+                    self.ssh_auth_message_shown = false;
+                    self.deny_keyboard_interactive = true;
+                    warn!(
+                        peer = %display_addr(self.peer_addr),
+                        user = %login.username,
+                        "OIDC SSH auth session missing or expired"
+                    );
+                    if !self.ssh_auth_failure_banner_sent {
+                        self.ssh_auth_failure_banner_sent = true;
+                        return Ok(Self::oidc_failed_prompt());
+                    }
+                    return Ok(Auth::reject());
+                }
+                Err(e) => {
+                    warn!("Failed to check SSH auth session: {}", e);
+                    self.pending_ssh_auth_code = None;
+                    self.last_ssh_auth_check = None;
+                    self.ssh_auth_message_shown = false;
+                    self.deny_keyboard_interactive = true;
+                    if !self.ssh_auth_failure_banner_sent {
+                        self.ssh_auth_failure_banner_sent = true;
+                        return Ok(Self::oidc_failed_prompt());
+                    }
+                    return Ok(Auth::reject());
+                }
+            }
+        }
+
+        // Fallback: no session code available
         Ok(Auth::reject())
     }
 

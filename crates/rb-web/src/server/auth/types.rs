@@ -45,11 +45,11 @@ impl Authentication<WebUser, i64, SqlitePool> for WebUser {
         let (name, picture) = oidc_profile.map(|profile| (profile.name, profile.picture)).unwrap_or((None, None));
 
         tracing::info!(
-            "Loaded user {} (id={}): name={:?}, picture={:?}",
-            user.username,
-            user.id,
-            name,
-            picture
+            username = user.username,
+            id = user.id,
+            name = name,
+            avatar = picture.is_some(),
+            "Loaded User",
         );
 
         Ok(WebUser {

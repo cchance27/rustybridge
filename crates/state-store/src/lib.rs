@@ -941,6 +941,117 @@ pub async fn fetch_role_id_by_name(pool: &SqlitePool, name: &str) -> DbResult<Op
     Ok(row.map(|r| r.get::<i64, _>("id")))
 }
 
+// -----------------------------
+// SSH Authentication Sessions
+// -----------------------------
+
+/// Create a new SSH authentication session bound to a specific user
+#[cfg(feature = "server")]
+pub async fn create_ssh_auth_session(pool: &SqlitePool, code: &str, expires_at: i64, requested_user_id: i64) -> DbResult<()> {
+    sqlx::query("INSERT INTO ssh_auth_sessions (id, status, expires_at, requested_user_id) VALUES (?, 'pending', ?, ?)")
+        .bind(code)
+        .bind(expires_at)
+        .bind(requested_user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Get SSH authentication session status, authenticated user, and requested user
+#[cfg(feature = "server")]
+pub async fn get_ssh_auth_session(pool: &SqlitePool, code: &str) -> DbResult<Option<(String, Option<i64>, Option<i64>)>> {
+    sqlx::query_as::<_, (String, Option<i64>, Option<i64>)>("SELECT status, user_id, requested_user_id FROM ssh_auth_sessions WHERE id = ?")
+        .bind(code)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+}
+
+/// Update SSH authentication session status
+#[cfg(feature = "server")]
+pub async fn update_ssh_auth_session(pool: &SqlitePool, code: &str, status: &str, user_id: Option<i64>) -> DbResult<()> {
+    sqlx::query("UPDATE ssh_auth_sessions SET status = ?, user_id = ? WHERE id = ?")
+        .bind(status)
+        .bind(user_id)
+        .bind(code)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Cleanup expired and used SSH auth sessions
+#[cfg(feature = "server")]
+pub async fn cleanup_expired_ssh_auth_sessions(pool: &SqlitePool) -> DbResult<u64> {
+    let result =
+        sqlx::query("DELETE FROM ssh_auth_sessions WHERE expires_at < strftime('%s', 'now') OR status IN ('used', 'expired', 'rejected')")
+            .execute(pool)
+            .await?;
+    Ok(result.rows_affected())
+}
+
+// -----------------------------
+// User SSH Public Keys
+// -----------------------------
+
+/// Get all public keys for a user by username
+#[cfg(feature = "server")]
+pub async fn get_user_public_keys(pool: &SqlitePool, username: &str) -> DbResult<Vec<String>> {
+    let rows = sqlx::query_scalar::<_, String>(
+        "SELECT public_key FROM user_public_keys 
+         WHERE user_id = (SELECT id FROM users WHERE username = ?)",
+    )
+    .bind(username)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Add a public key for a user
+#[cfg(feature = "server")]
+pub async fn add_user_public_key(pool: &SqlitePool, username: &str, public_key: &str, comment: Option<&str>) -> DbResult<i64> {
+    let user_id = fetch_user_id_by_name(pool, username).await?.ok_or(DbError::UserNotFound {
+        username: username.to_string(),
+    })?;
+
+    let result = sqlx::query("INSERT INTO user_public_keys (user_id, public_key, comment) VALUES (?, ?, ?)")
+        .bind(user_id)
+        .bind(public_key)
+        .bind(comment)
+        .execute(pool)
+        .await?;
+
+    Ok(result.last_insert_rowid())
+}
+
+/// Delete a user's public key by ID
+#[cfg(feature = "server")]
+pub async fn delete_user_public_key(pool: &SqlitePool, key_id: i64) -> DbResult<()> {
+    sqlx::query("DELETE FROM user_public_keys WHERE id = ?")
+        .bind(key_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// List all public keys for a user (with full details)
+#[cfg(feature = "server")]
+pub async fn list_user_public_keys(pool: &SqlitePool, username: &str) -> DbResult<Vec<(i64, String, Option<String>, i64)>> {
+    let user_id = fetch_user_id_by_name(pool, username).await?.ok_or(DbError::UserNotFound {
+        username: username.to_string(),
+    })?;
+
+    // Cast created_at to Unix epoch seconds so callers receive a numeric value (integer).
+    let rows = sqlx::query_as::<_, (i64, String, Option<String>, i64)>(
+        "SELECT id, public_key, comment, CAST(strftime('%s', created_at) AS INTEGER) as created_at
+         FROM user_public_keys WHERE user_id = ? ORDER BY created_at DESC",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
 #[cfg(feature = "server")]
 pub async fn get_server_option(pool: &SqlitePool, key: &str) -> DbResult<Option<String>> {
     let row = sqlx::query("SELECT value FROM server_options WHERE key = ?")

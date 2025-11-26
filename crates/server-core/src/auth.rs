@@ -4,6 +4,7 @@ use rand::rngs::OsRng;
 use rb_types::auth::{AuthDecision, LoginTarget};
 
 pub mod oidc;
+pub mod ssh_auth;
 pub mod ssh_cert;
 
 use crate::error::{ServerError, ServerResult};

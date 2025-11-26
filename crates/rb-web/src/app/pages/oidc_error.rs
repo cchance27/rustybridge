@@ -108,6 +108,11 @@ pub fn OidcErrorPage() -> Element {
                     "Please log in with your username and password first, then link your OIDC account from your profile.".to_string(),
                 ),
             },
+            Some("ssh_auth_failed") => OidcError {
+                title: "SSH Authentication Failed".to_string(),
+                message: "Failed to complete SSH authentication session.".to_string(),
+                details: Some("The SSH authentication session could not be completed. Please try connecting via SSH again.".to_string()),
+            },
             _ => OidcError {
                 title: "OIDC Error".to_string(),
                 message: "An unknown error occurred during OIDC authentication.".to_string(),

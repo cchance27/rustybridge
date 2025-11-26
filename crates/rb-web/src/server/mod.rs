@@ -26,20 +26,15 @@ pub async fn run_web_server(config: rb_types::config::WebServerConfig, app: fn()
     let pool = db.into_pool();
 
     // Session Layer
-    #[cfg(debug_assertions)]
+    // OIDC redirects arrive as cross-site navigations, so SameSite must allow the
+    // callback to carry the session cookie. Lax is sufficient for top-level GET
+    // redirects while still blocking most CSRF vectors. We only mark cookies as
+    // secure when TLS is configured (avoids browsers dropping the cookie on HTTP).
     let session_config = axum_session::SessionConfig::default()
         .with_table_name("sessions")
         .with_cookie_same_site(SameSite::Lax)
         .with_http_only(true)
-        .with_secure(false)
-        .with_cookie_path("/");
-
-    #[cfg(not(debug_assertions))]
-    let session_config = axum_session::SessionConfig::default()
-        .with_table_name("sessions")
-        .with_cookie_same_site(SameSite::Strict)
-        .with_http_only(true)
-        .with_secure(true)
+        .with_secure(config.tls.is_some())
         .with_cookie_path("/");
 
     let sqlite_pool = SessionSqlitePool::from(pool.clone());

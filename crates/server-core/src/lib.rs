@@ -27,7 +27,7 @@ use server_manager::ServerManager;
 use sqlx::{Row, SqlitePool};
 use ssh_core::crypto::default_preferred;
 use state_store::{
-    add_user_to_group, create_group, delete_group_by_name, fetch_group_id_by_name, fetch_relay_access_principals, grant_relay_access_principal, list_group_members, list_groups as list_groups_db, list_user_groups, remove_user_from_group, revoke_relay_access_principal, server_db
+    add_user_public_key as add_user_public_key_db, add_user_to_group, create_group, delete_group_by_name, delete_user_public_key as delete_user_public_key_db, fetch_group_id_by_name, fetch_relay_access_principals, grant_relay_access_principal, list_group_members, list_groups as list_groups_db, list_user_groups, list_user_public_keys as list_user_public_keys_db, remove_user_from_group, revoke_relay_access_principal, server_db
 };
 use tracing::{info, warn};
 
@@ -114,7 +114,27 @@ pub async fn run_ssh_server(config: ServerConfig) -> ServerResult<()> {
 
     server_config.methods = MethodSet::empty();
     server_config.methods.push(MethodKind::Password);
+    server_config.methods.push(MethodKind::KeyboardInteractive);
+    server_config.methods.push(MethodKind::PublicKey);
     server_config.keys.push(host_key);
+
+    // Spawn background task for SSH auth session cleanup
+    let cleanup_pool = pool.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(3600)); // Every hour
+        loop {
+            interval.tick().await;
+            match state_store::cleanup_expired_ssh_auth_sessions(&cleanup_pool).await {
+                Ok(count) if count > 0 => {
+                    info!("Cleaned up {} expired/used SSH auth sessions", count);
+                }
+                Err(e) => {
+                    warn!("Failed to cleanup expired SSH auth sessions: {}", e);
+                }
+                _ => {}
+            }
+        }
+    });
 
     let mut server = ServerManager;
     info!(bind = %config.bind, port = config.port, "starting embedded SSH server");
@@ -421,6 +441,44 @@ pub async fn add_user(user: &str, password: &str) -> ServerResult<()> {
     let user_id = result.last_insert_rowid();
     let promoted = maybe_promote_first_user(&pool, user, user_id).await?;
     info!(user, first_user = promoted, "user added");
+    Ok(())
+}
+
+/// Add an SSH public key for a user (validated before storing).
+pub async fn add_user_public_key(username: &str, public_key: &str, comment: Option<&str>) -> ServerResult<i64> {
+    let db = server_db().await?;
+
+    let pool = db.into_pool();
+
+    // Basic validation to prevent storing malformed keys.
+    ssh_key::PublicKey::from_openssh(public_key).map_err(|e| ServerError::InvalidConfig(format!("invalid public key: {}", e)))?;
+
+    let id = add_user_public_key_db(&pool, username, public_key, comment).await?;
+    info!(user = username, key_id = id, "user public key added");
+    Ok(id)
+}
+
+/// List a user's public keys (id, key, comment, created_at epoch seconds).
+pub async fn list_user_public_keys(username: &str) -> ServerResult<Vec<(i64, String, Option<String>, i64)>> {
+    let db = server_db().await?;
+    let pool = db.into_pool();
+    let keys = list_user_public_keys_db(&pool, username).await?;
+    Ok(keys)
+}
+
+/// Remove a specific public key by id for a user.
+pub async fn delete_user_public_key(username: &str, key_id: i64) -> ServerResult<()> {
+    let db = server_db().await?;
+    let pool = db.into_pool();
+
+    // Ensure the key belongs to the user to avoid deleting cross-user IDs
+    let keys = list_user_public_keys_db(&pool, username).await?;
+    if keys.iter().all(|(id, _, _, _)| *id != key_id) {
+        return Err(ServerError::NotFound("public key".into(), key_id.to_string()));
+    }
+
+    delete_user_public_key_db(&pool, key_id).await?;
+    info!(user = username, key_id, "user public key deleted");
     Ok(())
 }
 
@@ -1279,6 +1337,17 @@ pub async fn clear_all_auth(hostname: &str) -> ServerResult<()> {
         .execute(&pool)
         .await?;
     info!(relay_host = hostname, "all auth settings cleared");
+    Ok(())
+}
+
+/// Set a server option key/value in the shared state database.
+/// Avoid logging values here to prevent leaking secrets (OIDC client secrets, etc.).
+pub async fn set_server_option(key: &str, value: &str) -> ServerResult<()> {
+    let db = server_db().await?;
+    let pool = db.into_pool();
+
+    state_store::set_server_option(&pool, key, value).await?;
+    info!(key, "server option updated");
     Ok(())
 }
 

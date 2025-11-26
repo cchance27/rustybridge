@@ -6,6 +6,7 @@ pub mod logout;
 pub mod not_found;
 pub mod oidc_error;
 pub mod relays;
+pub mod ssh_success;
 
 pub use access::AccessPage;
 pub use credentials::CredentialsPage;
@@ -15,3 +16,4 @@ pub use logout::LogoutPage;
 pub use not_found::NotFoundPage;
 pub use oidc_error::OidcErrorPage;
 pub use relays::RelaysPage;
+pub use ssh_success::SshSuccessPage;

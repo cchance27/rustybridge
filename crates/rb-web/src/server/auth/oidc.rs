@@ -39,9 +39,6 @@ pub async fn oidc_login(Query(query): Query<LoginQuery>, auth: WebAuthSession, p
         }
     };
 
-    // Touch the session so axum-session creates backing storage before we mutate it.
-    let session_id = auth.session.get_session_id();
-
     // Clear any stale OIDC state from prior attempts so we don't mix flows.
     auth.session.remove("oidc_csrf_token");
     auth.session.remove("oidc_nonce");
@@ -66,7 +63,7 @@ pub async fn oidc_login(Query(query): Query<LoginQuery>, auth: WebAuthSession, p
             // Hint to the session layer that the data changed so it persists immediately.
             auth.session.update();
 
-            tracing::debug!(%session_id, "OIDC login state stored in session");
+            tracing::info!("OIDC login state stored; redirecting to provider");
             Redirect::to(&auth_url).into_response()
         }
         Err(e) => {
@@ -78,11 +75,11 @@ pub async fn oidc_login(Query(query): Query<LoginQuery>, auth: WebAuthSession, p
 
 #[cfg(feature = "server")]
 pub async fn oidc_callback(Query(query): Query<AuthRequest>, auth: WebAuthSession, pool: Extension<sqlx::SqlitePool>) -> impl IntoResponse {
-    // Ensure session backing exists for this request.
-    let session_id = auth.session.get_session_id();
+    tracing::info!("OIDC callback received");
 
     // Validate CSRF token (state parameter)
     let stored_csrf: Option<String> = auth.session.get("oidc_csrf_token");
+
     match stored_csrf {
         Some(stored) if stored == query.state => {
             // Valid CSRF token, continue
@@ -94,10 +91,7 @@ pub async fn oidc_callback(Query(query): Query<AuthRequest>, auth: WebAuthSessio
         }
         None if auth.is_authenticated() => {
             // User already has an authenticated session; this is likely a replayed or stale callback after a restart.
-            tracing::warn!(
-                %session_id,
-                "OIDC callback missing CSRF token but user is already authenticated; ignoring callback"
-            );
+            tracing::warn!("OIDC callback missing CSRF token but user is already authenticated; ignoring callback");
             return Redirect::to("/").into_response();
         }
         None => {
@@ -231,12 +225,26 @@ pub async fn oidc_callback(Query(query): Query<AuthRequest>, auth: WebAuthSessio
         "User logged in via OIDC"
     );
 
-    // Check if there was an SSH code associated with this flow
     if let Some(ssh_code) = auth.session.get::<String>("oidc_ssh_code") {
-        auth.session.remove("oidc_ssh_code");
-        // TODO: Update ssh_auth_sessions table to mark this SSH session as authenticated
-        tracing::info!(ssh_code = %ssh_code, user_id = %user_id, "SSH OIDC authentication completed");
+        match server_core::auth::ssh_auth::complete_ssh_auth_session(&ssh_code, user_id).await {
+            Ok(()) => {
+                tracing::info!(
+                        ssh_code = %ssh_code,
+                        user_id = %user_id,
+                    "SSH OIDC authentication completed successfully"
+                );
+                // Redirect to SSH success page
+                return Redirect::to("/auth/ssh-success").into_response();
+            }
+            Err(e) => {
+                tracing::error!(
+                    ssh_code = %ssh_code,
+                    error = %e,
+                    "Failed to complete SSH auth session"
+                );
+                return Redirect::to("/oidc/error?error=ssh_auth_failed").into_response();
+            }
+        }
     }
-
     Redirect::to("/").into_response()
 }

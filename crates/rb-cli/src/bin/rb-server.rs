@@ -6,13 +6,13 @@ use crossterm::{
 use ratatui::prelude::*;
 use rb_cli::{
     init_tracing, server_cli::{
-        CredsCmd, CredsCreateCmd, GroupMembersCmd, GroupsCmd, HostsAccessCmd, HostsCmd, HostsCredsCmd, HostsOptionsCmd, RolesCmd, SecretsCmd, ServerArgs, ServerSubcommand, UsersCmd
+        CredsCmd, CredsCreateCmd, GroupMembersCmd, GroupsCmd, HostsAccessCmd, HostsCmd, HostsCredsCmd, HostsOptionsCmd, RolesCmd, SecretsCmd, ServerArgs, ServerSubcommand, UsersCmd, WebCmd
     }, tui_input
 };
 use rb_types::access::PrincipalKind;
 use rb_web::run_web_server;
 use server_core::{
-    add_group, add_relay_host, add_role_claim, add_user, add_user_to_group_server, assign_credential, assign_role, create_agent_credential, create_password_credential, create_role, delete_credential, delete_role, grant_relay_access, list_access, list_credentials, list_group_members_server, list_groups, list_hosts, list_options, list_roles, list_user_groups_server, list_users, refresh_target_hostkey, remove_group, remove_role_claim, remove_user, remove_user_from_group_server, revoke_relay_access, revoke_role, rotate_secrets_key, run_ssh_server, set_relay_option, unassign_credential, unset_relay_option
+    add_group, add_relay_host, add_role_claim, add_user, add_user_public_key, add_user_to_group_server, assign_credential, assign_role, create_agent_credential, create_password_credential, create_role, delete_credential, delete_role, delete_user_public_key, grant_relay_access, list_access, list_credentials, list_group_members_server, list_groups, list_hosts, list_options, list_roles, list_user_groups_server, list_user_public_keys, list_users, refresh_target_hostkey, remove_group, remove_role_claim, remove_user, remove_user_from_group_server, revoke_relay_access, revoke_role, rotate_secrets_key, run_ssh_server, set_relay_option, unassign_credential, unset_relay_option
 };
 use tui_core::{AppAction, AppSession};
 
@@ -126,6 +126,39 @@ async fn main() -> Result<()> {
                     rpassword::prompt_password(format!("Enter password for {user}: "))?
                 };
                 add_user(&user, &pass).await?;
+            }
+            UsersCmd::AddPubkey {
+                user,
+                key_file,
+                public_key,
+                comment,
+            } => {
+                let key_data = if let Some(k) = public_key {
+                    k
+                } else if let Some(path) = key_file {
+                    std::fs::read_to_string(&path)?.trim().to_string()
+                } else {
+                    return Err(anyhow!("public key is required (pass as positional or --key-file)"));
+                };
+
+                let id = add_user_public_key(&user, &key_data, comment.as_deref()).await?;
+                println!("added public key {} for {}", id, user);
+            }
+            UsersCmd::ListPubkeys { user } => {
+                let keys = list_user_public_keys(&user).await?;
+                if keys.is_empty() {
+                    println!("no public keys found for {}", user);
+                } else {
+                    for (id, key, comment, created_at) in keys {
+                        // Show a short fingerprint-like suffix for readability
+                        let suffix = key.split_whitespace().last().unwrap_or("");
+                        println!("{} {} {} {}", id, created_at, suffix, comment.unwrap_or_default());
+                    }
+                }
+            }
+            UsersCmd::RemovePubkey { user, key_id } => {
+                delete_user_public_key(&user, key_id).await?;
+                println!("removed public key {} for {}", key_id, user);
             }
             UsersCmd::Remove { user } => remove_user(&user).await?,
             UsersCmd::List => {
@@ -265,6 +298,25 @@ async fn main() -> Result<()> {
             }
             RolesCmd::AddClaim { role, claim } => add_role_claim(&role, &claim).await?,
             RolesCmd::RemoveClaim { role, claim } => remove_role_claim(&role, &claim).await?,
+        },
+        Some(ServerSubcommand::Web { cmd }) => match cmd {
+            WebCmd::Set { key, value } => {
+                use rb_cli::server_cli::WebOptionKey;
+                let (stored_key, label, is_secret) = match key {
+                    WebOptionKey::ServerUrl => ("web_base_url", "server_url", false),
+                    WebOptionKey::OidcIssuerUrl => ("oidc_issuer_url", "oidc_issuer_url", false),
+                    WebOptionKey::OidcClientId => ("oidc_client_id", "oidc_client_id", false),
+                    WebOptionKey::OidcClientSecret => ("oidc_client_secret", "oidc_client_secret", true),
+                    WebOptionKey::OidcRedirectUrl => ("oidc_redirect_url", "oidc_redirect_url", false),
+                };
+
+                server_core::set_server_option(stored_key, &value).await?;
+                if is_secret {
+                    println!("set {}=<redacted>", label);
+                } else {
+                    println!("set {}={}", label, value);
+                }
+            }
         },
     }
     Ok(())

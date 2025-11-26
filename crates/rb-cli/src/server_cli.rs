@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use rb_types::{
     auth::ClaimType, config::{ServerConfig, WebServerConfig, WebTlsConfig}
 };
@@ -130,6 +130,11 @@ pub enum ServerSubcommand {
         #[command(subcommand)]
         cmd: RolesCmd,
     },
+    /// Manage web server settings
+    Web {
+        #[command(subcommand)]
+        cmd: WebCmd,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -138,6 +143,43 @@ pub enum TuiCmd {
     RelaySelector,
     /// Launch the Management app
     Management,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WebCmd {
+    /// Set a web server option (limited to known keys)
+    Set {
+        #[arg(value_enum, value_name = "OPTION", help = "Option key to set (e.g. server-url)")]
+        key: WebOptionKey,
+        #[arg(value_name = "VALUE", help = "Value to store for the option")]
+        value: String,
+    },
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum WebOptionKey {
+    /// Base URL used to generate web/SSH OIDC links (stored as web_base_url)
+    #[value(name = "server-url")]
+    #[value(alias = "server_url")]
+    #[value(alias = "web-base-url")]
+    #[value(alias = "base-url")]
+    ServerUrl,
+    /// OIDC issuer discovery URL
+    #[value(name = "oidc-issuer-url")]
+    #[value(alias = "oidc_issuer_url")]
+    OidcIssuerUrl,
+    /// OIDC client ID
+    #[value(name = "oidc-client-id")]
+    #[value(alias = "oidc_client_id")]
+    OidcClientId,
+    /// OIDC client secret (stored as plaintext; ensure db is encrypted at rest)
+    #[value(name = "oidc-client-secret")]
+    #[value(alias = "oidc_client_secret")]
+    OidcClientSecret,
+    /// OIDC redirect/callback URL
+    #[value(name = "oidc-redirect-url")]
+    #[value(alias = "oidc_redirect_url")]
+    OidcRedirectUrl,
 }
 
 #[derive(Debug, Subcommand)]
@@ -208,6 +250,32 @@ pub enum UsersCmd {
         user: String,
         #[arg(long)]
         password: Option<String>,
+    },
+    /// Add an SSH public key to a user
+    AddPubkey {
+        /// Username to attach the public key to
+        user: String,
+        /// Read the public key from a file instead of a positional value
+        #[arg(long, value_name = "PATH", conflicts_with = "public_key")]
+        key_file: Option<PathBuf>,
+        /// Public key in OpenSSH format (e.g. "ssh-ed25519 AAAA...")
+        #[arg(value_name = "PUBLIC_KEY", required_unless_present = "key_file")]
+        public_key: Option<String>,
+        /// Optional comment/label stored alongside the key
+        #[arg(long)]
+        comment: Option<String>,
+    },
+    /// List public keys for a user
+    ListPubkeys {
+        /// Username whose keys will be listed
+        user: String,
+    },
+    /// Remove a public key by id for a user
+    RemovePubkey {
+        /// Username that owns the key (used for validation)
+        user: String,
+        /// Key id as shown by `list-pubkeys`
+        key_id: i64,
     },
     /// Remove a user (revokes all access)
     Remove { user: String },
