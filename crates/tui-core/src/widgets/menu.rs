@@ -3,6 +3,7 @@ use ratatui::{
 };
 
 /// A generic menu widget for selecting items from a list
+#[derive(Clone)]
 pub struct Menu<T> {
     items: Vec<T>,
     state: ListState,
