@@ -49,7 +49,7 @@ pub fn ProfilePage() -> Element {
         }
 
         // Basic structure check: should have at least 2 parts (type and key data)
-        let parts: Vec<&str> = key.trim().split_whitespace().collect();
+        let parts: Vec<&str> = key.split_whitespace().collect();
         if parts.len() < 2 {
             key_validation_error.set(Some(
                 "Invalid SSH key format. Key should contain the key type and key data".to_string(),

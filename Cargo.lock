@@ -6222,6 +6222,7 @@ dependencies = [
  "async-trait",
  "crossterm 0.29.0",
  "ratatui",
+ "rb-types",
  "thiserror 2.0.17",
  "tokio",
  "tracing",

@@ -31,10 +31,8 @@ pub fn EditUserModal(
         spawn(async move {
             // Need to access current value of open()
             let is_open = open();
-            if is_open {
-                if let Ok(claims) = get_user_claims(username_for_spawn).await {
-                    user_claims.set(claims);
-                }
+            if is_open && let Ok(claims) = get_user_claims(username_for_spawn).await {
+                user_claims.set(claims);
             }
         });
     });

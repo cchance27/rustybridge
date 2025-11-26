@@ -18,7 +18,7 @@ pub fn EditGroupClaimsModal(
     toast: Signal<Option<ToastMessage>>,
 ) -> Element {
     // Fetch claims when modal opens
-    let group_name = claims_group_name.clone();
+    let group_name = claims_group_name;
     use_effect(move || {
         let name = group_name();
         if group_claims_modal_open() && !name.is_empty() {

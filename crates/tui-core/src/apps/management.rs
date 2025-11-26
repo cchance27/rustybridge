@@ -3,6 +3,7 @@ use std::{collections::HashMap, fmt};
 use ratatui::{
     Frame, buffer::Buffer, layout::{Constraint, Direction, Layout, Rect}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Tabs, Wrap}
 };
+use rb_types::relay::HostkeyReview;
 use unicode_width::UnicodeWidthChar;
 
 use crate::{
@@ -1849,17 +1850,4 @@ fn handle_credential_form_input(form: &mut CredentialForm, focus: &mut usize, in
         }
     }
     if render { CFAction::Render } else { CFAction::Continue }
-}
-
-// -------------------------
-// Hostkey review payload
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HostkeyReview {
-    pub host_id: i64,
-    pub host: String,
-    pub old_fingerprint: Option<String>,
-    pub old_key_type: Option<String>,
-    pub new_fingerprint: String,
-    pub new_key_type: String,
-    pub new_key_pem: String,
 }

@@ -1,4 +1,5 @@
 use ratatui::Frame;
+use rb_types::relay::HostkeyReview;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusKind {
@@ -100,7 +101,7 @@ pub enum AppAction {
     /// Propagate an error message to the UI
     Error(String),
     /// Review a fetched hostkey
-    ReviewHostkey(crate::apps::management::HostkeyReview),
+    ReviewHostkey(HostkeyReview),
     /// Display an authentication prompt to the user (for keyboard-interactive auth)
     AuthPrompt { prompt: String, echo: bool },
     /// Opaque backend event (used for internal signaling like connection completion)

@@ -1,22 +1,29 @@
 //! SSH handler implementation that drives per-connection state and the echo TUI.
 
-use std::{net::SocketAddr, sync::Arc, time::Instant};
+use std::{borrow::Cow, collections::HashMap, net::SocketAddr, sync::Arc, time::Instant};
 
-use rb_types::auth::{AuthDecision, LoginTarget};
+use rb_types::{
+    auth::{AuthDecision, LoginTarget}, relay::HostkeyReview
+};
 use russh::{
     Channel, ChannelId, CryptoVec, Pty, server::{self as ssh_server, Auth, Session}
 };
 use secrecy::ExposeSecret;
-use tokio::sync::watch;
+use tokio::sync::{
+    mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel}, oneshot, watch
+};
 use tracing::{info, warn};
 use tui_core::{AppAction, AppSession, backend::RemoteBackend, utils::desired_rect};
 
 use crate::{
-    auth::{authenticate_password, parse_login_target}, relay::RelayHandle
+    auth::{
+        authenticate_password, parse_login_target, ssh_auth::{
+            abandon_ssh_auth_session, check_ssh_auth_session, create_ssh_auth_session, mark_ssh_auth_session_used, reject_ssh_auth_session, verify_user_public_key
+        }
+    }, create_app_by_name, create_management_app, create_management_app_with_tab, create_relay_selector_app, relay::{RelayHandle, start_bridge}, secrets::{SecretBoxedString, decrypt_string_if_encrypted, encrypt_string}
 };
 
-type PendingRelay =
-    tokio::sync::oneshot::Receiver<Result<(crate::relay::RelayHandle, tokio::sync::mpsc::UnboundedSender<String>), russh::Error>>;
+type PendingRelay = tokio::sync::oneshot::Receiver<Result<(RelayHandle, UnboundedSender<String>), russh::Error>>;
 
 /// Tracks the lifecycle of a single SSH session, including authentication, PTY events, and TUI I/O.
 pub(super) struct ServerHandler {
@@ -35,10 +42,10 @@ pub(super) struct ServerHandler {
     alt_screen: bool,
     size_updates: watch::Sender<(u16, u16)>,
     // Channel for background tasks (e.g., hostkey fetch) to inject actions
-    action_tx: tokio::sync::mpsc::UnboundedSender<AppAction>,
-    action_rx: tokio::sync::mpsc::UnboundedReceiver<AppAction>,
+    action_tx: UnboundedSender<AppAction>,
+    action_rx: UnboundedReceiver<AppAction>,
     // Interactive auth plumbing
-    auth_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    auth_tx: Option<UnboundedSender<String>>,
     pending_auth: Option<AuthPromptState>,
     // SSH OIDC keyboard-interactive auth session code
     pending_ssh_auth_code: Option<String>,
@@ -60,16 +67,16 @@ struct AuthPromptState {
 impl ServerHandler {
     fn oidc_failed_prompt() -> Auth {
         Auth::Partial {
-            name: std::borrow::Cow::Borrowed(""),
-            instructions: std::borrow::Cow::Borrowed("OIDC Failed\r\n"),
-            prompts: std::borrow::Cow::Owned(vec![]),
+            name: Cow::Borrowed(""),
+            instructions: Cow::Borrowed("OIDC Failed\r\n"),
+            prompts: Cow::Owned(vec![]),
         }
     }
 
     /// Create a handler bound to the connecting client's socket address.
     pub(super) fn new(peer_addr: Option<SocketAddr>) -> Self {
         let (size_updates, _) = watch::channel((80, 24));
-        let (action_tx, action_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (action_tx, action_rx) = unbounded_channel();
         Self {
             peer_addr,
             username: None,
@@ -122,7 +129,7 @@ impl ServerHandler {
         if let Some(code) = self.pending_ssh_auth_code.take() {
             let user = self.username.clone();
             tokio::spawn(async move {
-                if let Err(e) = crate::auth::ssh_auth::abandon_ssh_auth_session(&code).await {
+                if let Err(e) = abandon_ssh_auth_session(&code).await {
                     tracing::warn!(%code, ?user, error = %e, "failed to mark abandoned SSH OIDC session");
                 } else {
                     tracing::info!(%code, ?user, "abandoned SSH OIDC session marked as abandoned on disconnect");
@@ -180,7 +187,7 @@ impl ServerHandler {
         let (app, app_name): (Box<dyn tui_core::TuiApp>, &str) = if can_manage {
             (
                 Box::new(
-                    crate::create_management_app(None)
+                    create_management_app(None)
                         .await
                         .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?,
                 ),
@@ -189,7 +196,7 @@ impl ServerHandler {
         } else {
             (
                 Box::new(
-                    crate::create_relay_selector_app(self.username.as_deref())
+                    create_relay_selector_app(self.username.as_deref())
                         .await
                         .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?,
                 ),
@@ -257,9 +264,9 @@ impl ServerHandler {
         session: &mut Session,
         channel: ChannelId,
         tab: usize,
-        review: Option<tui_core::apps::management::HostkeyReview>,
+        review: Option<HostkeyReview>,
     ) -> Result<(), russh::Error> {
-        let app = crate::create_management_app_with_tab(tab, review)
+        let app = create_management_app_with_tab(tab, review)
             .await
             .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
         if let Some(app_session) = self.app_session.as_mut() {
@@ -300,7 +307,7 @@ impl ServerHandler {
         session: &mut Session,
         channel: ChannelId,
     ) -> Result<(), russh::Error> {
-        let app = crate::create_app_by_name(self.username.as_deref(), name, selected_tab)
+        let app = create_app_by_name(self.username.as_deref(), name, selected_tab)
             .await
             .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
         self.set_and_render_app(app, session, channel)
@@ -370,18 +377,16 @@ impl ServerHandler {
                                 let options = match fetch_relay_host_options(&pool, host.id).await {
                                     Ok(raw) => {
                                         // Decrypt any encrypted option values.
-                                        let mut out = std::collections::HashMap::with_capacity(raw.len());
+                                        let mut out = HashMap::with_capacity(raw.len());
                                         for (k, (v, is_secure)) in raw.into_iter() {
                                             if is_secure {
-                                                match crate::secrets::decrypt_string_if_encrypted(&v) {
+                                                match decrypt_string_if_encrypted(&v) {
                                                     Ok((val, is_legacy)) => {
                                                         if is_legacy {
                                                             warn!("Upgrading legacy v1 secret for relay option '{}'", k);
-                                                            if let Ok(new_enc) =
-                                                                crate::secrets::encrypt_string(crate::secrets::SecretString::new(Box::new(
-                                                                    val.expose_secret().to_string(),
-                                                                )))
-                                                            {
+                                                            if let Ok(new_enc) = encrypt_string(SecretBoxedString::new(Box::new(
+                                                                val.expose_secret().to_string(),
+                                                            ))) {
                                                                 let _ = sqlx::query("UPDATE relay_host_options SET value = ? WHERE relay_host_id = ? AND key = ?")
                                                                     .bind(new_enc)
                                                                     .bind(host.id)
@@ -402,7 +407,7 @@ impl ServerHandler {
                                                     }
                                                 }
                                             } else {
-                                                out.insert(k, crate::secrets::SecretString::new(Box::new(v)));
+                                                out.insert(k, SecretBoxedString::new(Box::new(v)));
                                             }
                                         }
                                         out
@@ -417,7 +422,7 @@ impl ServerHandler {
                                 let server_handle_for_error = server_handle.clone();
                                 let size_rx = self.size_updates.subscribe();
                                 let initial_size = self.view_size();
-                                let (auth_tx, auth_rx) = tokio::sync::mpsc::unbounded_channel();
+                                let (auth_tx, auth_rx) = unbounded_channel();
                                 self.auth_tx = Some(auth_tx.clone());
                                 let action_tx = self.action_tx.clone();
                                 let peer = self.peer_addr;
@@ -426,9 +431,9 @@ impl ServerHandler {
                                 let username_clone = username.clone();
 
                                 // Spawn background connect; result delivered via oneshot
-                                let (tx_done, rx_done) = tokio::sync::oneshot::channel();
+                                let (tx_done, rx_done) = oneshot::channel();
                                 tokio::spawn(async move {
-                                    let res = crate::relay::start_bridge(
+                                    let res = start_bridge(
                                         server_handle,
                                         channel,
                                         &host_clone,
@@ -587,7 +592,7 @@ impl ssh_server::Handler for ServerHandler {
         }
 
         // Standard public key authentication
-        match crate::auth::ssh_auth::verify_user_public_key(&login.username, &key_bytes).await {
+        match verify_user_public_key(&login.username, &key_bytes).await {
             Ok(true) => {
                 self.username = Some(login.username.clone());
                 self.relay_target = login.relay.clone();
@@ -635,7 +640,7 @@ impl ssh_server::Handler for ServerHandler {
 
         // First call: no response yet, create session and send auth URL
         if response.is_none() && self.pending_ssh_auth_code.is_none() {
-            match crate::auth::ssh_auth::create_ssh_auth_session(&login.username).await {
+            match create_ssh_auth_session(&login.username).await {
                 Ok(session) => {
                     let prompt = format!("\nAuthenticate via OIDC:\n{}\n\nWaiting for authentication...", session.auth_url);
 
@@ -650,9 +655,9 @@ impl ssh_server::Handler for ServerHandler {
                     );
 
                     return Ok(Auth::Partial {
-                        name: std::borrow::Cow::Borrowed("OIDC Authentication"),
-                        instructions: std::borrow::Cow::Owned(prompt),
-                        prompts: std::borrow::Cow::Owned(vec![]),
+                        name: Cow::Borrowed("OIDC Authentication"),
+                        instructions: Cow::Owned(prompt),
+                        prompts: Cow::Owned(vec![]),
                     });
                 }
                 Err(e) => {
@@ -675,12 +680,12 @@ impl ssh_server::Handler for ServerHandler {
             }
             self.last_ssh_auth_check = Some(std::time::Instant::now());
 
-            match crate::auth::ssh_auth::check_ssh_auth_session(code).await {
+            match check_ssh_auth_session(code).await {
                 Ok(Some(session)) => match session.status {
                     SshAuthStatus::Authenticated(auth_user_id) => {
                         if auth_user_id == session.requested_user_id {
                             // One-time consume on success
-                            if let Err(e) = crate::auth::ssh_auth::mark_ssh_auth_session_used(code, auth_user_id).await {
+                            if let Err(e) = mark_ssh_auth_session_used(code, auth_user_id).await {
                                 warn!("Failed to mark SSH auth session as used: {}", e);
                                 return Ok(Auth::reject());
                             }
@@ -700,7 +705,7 @@ impl ssh_server::Handler for ServerHandler {
                             return Ok(Auth::Accept);
                         } else {
                             // Mismatch: reject and invalidate the session
-                            if let Err(e) = crate::auth::ssh_auth::reject_ssh_auth_session(code, Some(auth_user_id)).await {
+                            if let Err(e) = reject_ssh_auth_session(code, Some(auth_user_id)).await {
                                 warn!("Failed to reject mismatched SSH auth session: {}", e);
                             }
 
@@ -742,9 +747,9 @@ impl ssh_server::Handler for ServerHandler {
                     SshAuthStatus::Pending => {
                         // Still waiting: don't re-prompt; just return Partial with empty fields.
                         return Ok(Auth::Partial {
-                            name: std::borrow::Cow::Borrowed(""),
-                            instructions: std::borrow::Cow::Borrowed(""),
-                            prompts: std::borrow::Cow::Owned(vec![]),
+                            name: Cow::Borrowed(""),
+                            instructions: Cow::Borrowed(""),
+                            prompts: Cow::Owned(vec![]),
                         });
                     }
                 },
@@ -843,8 +848,8 @@ impl ssh_server::Handler for ServerHandler {
                     self.pending_relay = None;
                     return self.handle_exit(session, channel);
                 }
-                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
-                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                Err(oneshot::error::TryRecvError::Empty) => {}
+                Err(oneshot::error::TryRecvError::Closed) => {
                     let _ = self.send_line(session, channel, "failed to start relay: channel closed");
                     self.pending_relay = None;
                     return self.handle_exit(session, channel);
@@ -1163,4 +1168,3 @@ impl ServerHandler {
 pub(super) fn display_addr(addr: Option<SocketAddr>) -> String {
     addr.map(|a| a.to_string()).unwrap_or_else(|| "<unknown>".into())
 }
-// (moved helper methods into impl ServerHandler)
