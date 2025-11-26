@@ -155,3 +155,12 @@ pub struct SubsystemRequest {
     /// Subsystem name to request (e.g., "sftp").
     pub name: String,
 }
+
+// Public key for SSH authentication
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SshKey {
+    pub id: i64,
+    pub public_key: String,
+    pub comment: Option<String>,
+    pub created_at: i64,
+}

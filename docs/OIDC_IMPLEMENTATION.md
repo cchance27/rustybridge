@@ -110,36 +110,41 @@ INFO OIDC account unlinked by admin, admin_user=1, target_user=2
 - SSH handler enforces the same match and consumes the session on success; mismatches are rejected and invalidated
 - One-time use enforcement for SSH auth sessions; expired/reused codes are rejected
 
+### 13. **SSH Public-Key Support End-to-End**
+- ✅ Created new Profile page (`/profile`) for user self-service SSH key management
+- ✅ Implemented Dioxus server functions for SSH key CRUD operations (`get_my_ssh_keys`, `add_my_ssh_key`, `delete_my_ssh_key`)
+- ✅ Added SSH key validation (format checking for ssh-rsa, ssh-dss, ssh-ed25519, ecdsa-sha2-)
+- ✅ Updated Access page to display SSH key count for each user
+- ✅ Added "Profile" link to avatar dropdown for easy access
+- ✅ Integrated OIDC link/unlink functionality into Profile page with confirmation modal
+- ✅ SSH auth path pulls keys from the same store used by the web UI and CLI
+- Note: Per-key enable/disable and last-used metadata for auditing not yet implemented
+
 ## ⚠️ TODO / Pending Items
 
-Rules for implementing these TODO items... 
+**IMPORTANT REMINDERS BEFORE IMPLEMENTING TODO ITEMS** 
 - Using rb-types crate for all reuseable struct's
-- Use dioxus 0.7.1 style endpoints #[get/post/put/delete(), extractors]
+- Use dioxus 0.7.1 style endpoints #[get/post/put/delete(), extractors] Review the proper format based on api/relay_list.rs for proper usage.
 - Database manipulation should be centralized in the state-core crate
 - Review migrations for current database schema. 
 - Prioritize keeping code secure, reuseable, and avoid code duplication, 
-- Make sure new endpoints properly use our ensure_claims, Protected {} and RequireAuth {} where needed
+- Make sure new endpoints properly use our ensure_claims, Protected {} and RequireAuth {} around any new pages to protect them.
 
 ### High Priority
-1. **SSH Public-Key Support End-to-End**
-   - Expose user SSH public-key add/list/remove in the web UI (Access page) to match the new CLI/API support
-   - Add API endpoints and RB-Web wiring for CRUD + display of key fingerprints/comments
-   - Ensure SSH auth path pulls keys from the same store used by the web UI and CLI
-   - Consider per-key enable/disable and last-used metadata for auditing
+1. **Role Management in Web UI (Access Page)**
+   - Add role list/create/delete and role-claims management to the Access page, lets have the user list tall on the left and on the right have groups at top and roles below groups.
+   - Show user/group->role assignments and allow assignment/removal from the UI
+   - Surface claim descriptions so admins understand access implications 
+   - Add role selection to our user/group edit and creation pages so admins can prefer to use roles over basic claims, make sure our schema matches this expectation, and that when we're looking up permissions we handle this user->group->role->claims hierarchy properly.
 
-2. **Role Management in Web UI (Access Page)**
-   - Add role list/create/delete and role-claims management to the Access page
-   - Show user->role assignments and allow assignment/removal from the UI
-   - Surface claim descriptions so admins understand access implications
-
-3. **Session Visibility & Control in Web UI**
+2. **Session Visibility & Control in Web UI**
    - Add a Management tab for active sessions (web logins, SSH/TUI sessions, relay connections)
    - Plumb backend APIs to enumerate: active SSH sessions (including relay target), active web sessions, active web relays
    - Show per-session metadata (user, start time, source IP, auth method, relay name, idle time)
    - Provide admin actions where safe (e.g., terminate session / disconnect relay)
    - Ensure data comes from authoritative in-memory/store sources and is rate-limited to avoid DB load
 
-4. **Auth Surface Controls**
+3. **Auth Surface Controls**
    - Add server options to enable/disable OIDC for: (a) web login, (b) SSH keyboard-interactive, (c) disabled
    - Add parallel controls for password login (web and SSH) and SSH public-key/cert auth so administrators can enforce OIDC-only, password-only, key/cert-only, or mixed modes
    - Enforce invariants: at least one login method must remain enabled for web and for SSH; refuse misconfiguration at startup and in `rb-server web set`
@@ -180,6 +185,12 @@ Rules for implementing these TODO items...
    - Allow adding new providers
    - Allow removing providers
    - Allow updating provider configuration
+
+4. **Validate Handling 1 OIDC on multiple users**
+   - for web login we should present a selection so they can select which user they want to login with. 
+   - for ssh login we need to confirm our ssh oidc actually works and checks all the oidc to see if the username in ssh matches the valid oidc usernames.  
+   - we should also confirm we can handle the case where the username in ssh doesn't match any of the valid oidc usernames. 
+   - review security implications of this.
    
 ## 🔧 Configuration
 

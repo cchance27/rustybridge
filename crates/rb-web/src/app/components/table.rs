@@ -1,15 +1,26 @@
 use dioxus::prelude::*;
 
 #[component]
-pub fn Table(headers: Vec<&'static str>, children: Element) -> Element {
+pub fn Table(
+    #[props(default = "table table-zebra table-pin-rows")] class: &'static str,
+    #[props(default = vec![])] header_widths: Vec<&'static Option<&'static str>>,
+    headers: Vec<&'static str>,
+    children: Element,
+) -> Element {
+    let headers = headers
+        .iter()
+        .zip(header_widths.iter())
+        .map(|(h, w)| (h, w.unwrap_or("")))
+        .collect::<Vec<_>>();
+
     rsx! {
         div { class: "overflow-x-auto",
-            table { class: "table table-zebra table-pin-rows",
+            table { class: class,
                 thead {
                     tr {
-                        for (i, h) in headers.iter().enumerate() {
+                        for (i, (h, width)) in headers.iter().enumerate() {
                             th {
-                                class: if i == headers.len() - 1 { "text-right" } else { "" },
+                                class: if i == headers.len() - 1 { format!("text-right {width}") } else { width.to_string() },
                                 "{h}"
                             }
                         }

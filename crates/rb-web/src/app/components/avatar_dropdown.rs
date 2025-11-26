@@ -91,6 +91,10 @@ pub fn AvatarDropDown() -> Element {
                 }
 
                 li {
+                    Link { to: "/profile", "Profile" }
+                }
+
+                li {
                     a { onclick: on_logout, "Logout" }
                 }
             }

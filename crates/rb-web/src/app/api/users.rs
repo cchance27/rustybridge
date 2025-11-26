@@ -94,12 +94,19 @@ pub async fn list_users() -> Result<Vec<UserGroupInfo>, ServerFnError> {
             .map_err(|e| ServerFnError::new(e.to_string()))?
             .ok_or_else(|| ServerFnError::new(format!("User {} not found", username)))?;
 
+        // Get SSH key count
+        let ssh_keys = state_store::list_user_public_keys(&pool, &username)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+        let ssh_key_count = ssh_keys.len() as i64;
+
         result.push(UserGroupInfo {
             id: user_id,
             username,
             groups,
             relays,
             claims,
+            ssh_key_count,
         });
     }
 

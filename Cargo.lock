@@ -4359,6 +4359,7 @@ dependencies = [
  "dioxus",
  "futures",
  "gloo-timers",
+ "js-sys",
  "openidconnect",
  "rb-types",
  "reqwest 0.12.24",

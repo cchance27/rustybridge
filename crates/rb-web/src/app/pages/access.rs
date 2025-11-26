@@ -552,7 +552,7 @@ pub fn AccessPage() -> Element {
                                 match users() {
                                     Some(Ok(user_list)) => rsx! {
                                         Table {
-                                            headers: vec!["Username", "Groups", "Relays", "OIDC", "Actions"],
+                                            headers: vec!["Username", "Groups", "Relays", "SSH Keys", "OIDC", "Actions"],
                                             for user in user_list {
                                                 tr {
                                                     td { "{user.username}" }
@@ -592,6 +592,13 @@ pub fn AccessPage() -> Element {
                                                                     {if user.relays.len() == 1 { "relay" } else { "relays" }}
                                                                 }
                                                             }
+                                                        }
+                                                    }
+                                                    td {
+                                                        if user.ssh_key_count > 0 {
+                                                            span { class: "badge badge-neutral", "{user.ssh_key_count} keys" }
+                                                        } else {
+                                                            span { class: "badge badge-ghost text-xs text-center", "None" }
                                                         }
                                                     }
                                                     td {

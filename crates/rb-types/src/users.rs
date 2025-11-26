@@ -22,6 +22,8 @@ pub struct UserGroupInfo {
     pub relays: Vec<UserRelayAccess>,
     /// Claims granted to the user.
     pub claims: Vec<ClaimType>,
+    /// Number of SSH public keys.
+    pub ssh_key_count: i64,
 }
 
 /// Group info with statistics.

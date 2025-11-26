@@ -9,6 +9,7 @@ pub struct OidcLinkStatus {
     pub is_linked: bool,
     pub provider: Option<String>,
     pub email: Option<String>,
+    pub subject: Option<String>,
 }
 
 /// Get the current user's OIDC link status
@@ -32,11 +33,13 @@ pub async fn get_oidc_link_status() -> Result<OidcLinkStatus, ServerFnError> {
             is_linked: true,
             provider: Some(link.provider_id),
             email: link.email,
+            subject: Some(link.subject_id),
         },
         None => OidcLinkStatus {
             is_linked: false,
             provider: None,
             email: None,
+            subject: None,
         },
     })
 }
@@ -88,11 +91,13 @@ pub async fn get_user_oidc_status(user_id: i64) -> Result<OidcLinkStatus, Server
             is_linked: true,
             provider: Some(link.provider_id),
             email: link.email,
+            subject: Some(link.subject_id),
         },
         None => OidcLinkStatus {
             is_linked: false,
             provider: None,
             email: None,
+            subject: None,
         },
     })
 }

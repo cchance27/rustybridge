@@ -66,3 +66,4 @@ async-trait = { workspace = true, optional = true }
 openidconnect = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 urlencoding = "2.1.3"
+js-sys = "0.3.82"
