@@ -7,11 +7,15 @@ pub fn Table(
     headers: Vec<&'static str>,
     children: Element,
 ) -> Element {
-    let headers = headers
-        .iter()
-        .zip(header_widths.iter())
-        .map(|(h, w)| (h, w.unwrap_or("")))
-        .collect::<Vec<_>>();
+    let headers = if headers.len() == header_widths.len() {
+        headers
+            .iter()
+            .zip(header_widths.iter())
+            .map(|(h, w)| (h, w.unwrap_or("")))
+            .collect::<Vec<_>>()
+    } else {
+        headers.iter().map(|h| (h, "")).collect::<Vec<_>>()
+    };
 
     rsx! {
         div { class: "overflow-x-auto",

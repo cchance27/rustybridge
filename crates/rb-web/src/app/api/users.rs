@@ -100,6 +100,11 @@ pub async fn list_users() -> Result<Vec<UserGroupInfo>, ServerFnError> {
             .map_err(|e| ServerFnError::new(e.to_string()))?;
         let ssh_key_count = ssh_keys.len() as i64;
 
+        // Get user roles
+        let roles = server_core::list_user_roles_server(&username)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+
         result.push(UserGroupInfo {
             id: user_id,
             username,
@@ -107,6 +112,7 @@ pub async fn list_users() -> Result<Vec<UserGroupInfo>, ServerFnError> {
             relays,
             claims,
             ssh_key_count,
+            roles,
         });
     }
 
@@ -147,6 +153,18 @@ pub async fn update_user(username: String, req: UpdateUserRequest) -> Result<(),
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+#[get(
+    "/api/users/{username}/claims",
+    auth: WebAuthSession
+)]
+pub async fn get_user_claims(username: String) -> Result<Vec<ClaimType>, ServerFnError> {
+    ensure_user_claim(&auth, ClaimLevel::View)?;
+    use server_core::get_user_direct_claims_server;
+    get_user_direct_claims_server(&username)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
 #[post(
     "/api/users/{username}/claims",
     auth: WebAuthSession
@@ -159,8 +177,11 @@ pub async fn add_user_claim(username: String, claim: ClaimType) -> Result<(), Se
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
-#[delete(
-    "/api/users/{username}/claims/{claim}",
+/// Remove a claim from a user
+/// NOTE: Uses POST instead of DELETE because ClaimType contains colons (e.g. "relays:view")
+/// which cause routing issues when used as path parameters in DELETE requests
+#[post(
+    "/api/users/{username}/claims/remove",
     auth: WebAuthSession
 )]
 pub async fn remove_user_claim(username: String, claim: ClaimType) -> Result<(), ServerFnError> {

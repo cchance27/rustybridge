@@ -59,8 +59,8 @@ pub enum ClaimType {
     Relays(ClaimLevel),
     Users(ClaimLevel),
     Groups(ClaimLevel),
+    Roles(ClaimLevel),
     Credentials(ClaimLevel),
-    Wildcard(ClaimLevel),
     // Fallback for unknown claims to preserve data
     Custom(String),
 }
@@ -71,8 +71,8 @@ impl fmt::Display for ClaimType {
             ClaimType::Relays(level) => write!(f, "relays:{}", level),
             ClaimType::Users(level) => write!(f, "users:{}", level),
             ClaimType::Groups(level) => write!(f, "groups:{}", level),
+            ClaimType::Roles(level) => write!(f, "roles:{}", level),
             ClaimType::Credentials(level) => write!(f, "credentials:{}", level),
-            ClaimType::Wildcard(level) => write!(f, "*:{}", level),
             ClaimType::Custom(s) => write!(f, "{}", s),
         }
     }
@@ -94,8 +94,8 @@ impl FromStr for ClaimType {
             ("relays", Ok(level)) => Ok(ClaimType::Relays(level)),
             ("users", Ok(level)) => Ok(ClaimType::Users(level)),
             ("groups", Ok(level)) => Ok(ClaimType::Groups(level)),
+            ("roles", Ok(level)) => Ok(ClaimType::Roles(level)),
             ("credentials", Ok(level)) => Ok(ClaimType::Credentials(level)),
-            ("*", Ok(level)) => Ok(ClaimType::Wildcard(level)),
             // If it looks like a standard claim but has an invalid level, or is an unknown prefix, treat as custom
             _ => Ok(ClaimType::Custom(s.to_string())),
         }
@@ -134,8 +134,8 @@ impl ClaimType {
             ClaimType::Relays(level) => ClaimType::compare_parts("relays", level, other),
             ClaimType::Users(level) => ClaimType::compare_parts("users", level, other),
             ClaimType::Groups(level) => ClaimType::compare_parts("groups", level, other),
+            ClaimType::Roles(level) => ClaimType::compare_parts("roles", level, other),
             ClaimType::Credentials(level) => ClaimType::compare_parts("credentials", level, other),
-            ClaimType::Wildcard(level) => ClaimType::compare_parts("*", level, other),
         }
     }
 
@@ -144,6 +144,53 @@ impl ClaimType {
         match (parts.next(), parts.next()) {
             (Some(left), Some(right)) => left == prefix && right == level.as_str(),
             _ => false,
+        }
+    }
+
+    /// Check if this claim satisfies a required claim.
+    /// Handles wildcard levels and claim hierarchies.
+    ///
+    /// Examples:
+    /// - `relays:*` satisfies `relays:view`, `relays:edit`, etc.
+    /// - `relays:delete` satisfies `relays:view` and `relays:edit`
+    /// - `relays:edit` satisfies `relays:view`
+    pub fn satisfies(&self, required: &ClaimType) -> bool {
+        match (self, required) {
+            // Exact match always satisfies
+            (a, b) if a == b => true,
+
+            // Wildcard level satisfies any level for the same resource type
+            (ClaimType::Relays(ClaimLevel::Wildcard), ClaimType::Relays(_)) => true,
+            (ClaimType::Users(ClaimLevel::Wildcard), ClaimType::Users(_)) => true,
+            (ClaimType::Groups(ClaimLevel::Wildcard), ClaimType::Groups(_)) => true,
+            (ClaimType::Roles(ClaimLevel::Wildcard), ClaimType::Roles(_)) => true,
+            (ClaimType::Credentials(ClaimLevel::Wildcard), ClaimType::Credentials(_)) => true,
+
+            // Check level hierarchy for same resource type
+            (ClaimType::Relays(have), ClaimType::Relays(need)) => Self::level_satisfies(have, need),
+            (ClaimType::Users(have), ClaimType::Users(need)) => Self::level_satisfies(have, need),
+            (ClaimType::Groups(have), ClaimType::Groups(need)) => Self::level_satisfies(have, need),
+            (ClaimType::Roles(have), ClaimType::Roles(need)) => Self::level_satisfies(have, need),
+            (ClaimType::Credentials(have), ClaimType::Credentials(need)) => Self::level_satisfies(have, need),
+
+            // Different resource types or custom claims don't satisfy each other
+            _ => false,
+        }
+    }
+
+    /// Check if a claim level satisfies a required level based on hierarchy.
+    /// Hierarchy: Delete > Edit > View, Create stands alone
+    fn level_satisfies(have: &ClaimLevel, need: &ClaimLevel) -> bool {
+        match (have, need) {
+            // Wildcard satisfies everything
+            (ClaimLevel::Wildcard, _) => true,
+            // Delete satisfies Edit and View
+            (ClaimLevel::Delete, ClaimLevel::Edit) => true,
+            (ClaimLevel::Delete, ClaimLevel::View) => true,
+            // Edit satisfies View
+            (ClaimLevel::Edit, ClaimLevel::View) => true,
+            // Otherwise, must be exact match
+            (a, b) => a == b,
         }
     }
 
@@ -161,12 +208,11 @@ impl ClaimType {
             claims.push(ClaimType::Groups(*level));
         }
         for level in &levels {
-            claims.push(ClaimType::Credentials(*level));
+            claims.push(ClaimType::Roles(*level));
         }
         for level in &levels {
-            claims.push(ClaimType::Wildcard(*level));
+            claims.push(ClaimType::Credentials(*level));
         }
-
         claims
     }
 }
@@ -194,12 +240,8 @@ mod tests {
 
         // Test Wildcards
         assert_eq!(ClaimType::Relays(ClaimLevel::Wildcard).to_string(), "relays:*");
-        assert_eq!(ClaimType::Wildcard(ClaimLevel::View).to_string(), "*:view");
-        assert_eq!(ClaimType::Wildcard(ClaimLevel::Wildcard).to_string(), "*:*");
 
         assert_eq!(ClaimType::from_str("relays:*").unwrap(), ClaimType::Relays(ClaimLevel::Wildcard));
-        assert_eq!(ClaimType::from_str("*:view").unwrap(), ClaimType::Wildcard(ClaimLevel::View));
-        assert_eq!(ClaimType::from_str("*:*").unwrap(), ClaimType::Wildcard(ClaimLevel::Wildcard));
 
         // Test case insensitivity
         assert_eq!(ClaimType::from_str("RELAYS:VIEW").unwrap(), ClaimType::Relays(ClaimLevel::View));
@@ -208,12 +250,9 @@ mod tests {
     #[test]
     fn test_claim_string_comparison() {
         // Test ClaimType == &str
-        assert!(ClaimType::Custom("*".to_string()) == "*");
         assert!(ClaimType::Relays(ClaimLevel::View) == "relays:view");
-        assert!(ClaimType::Wildcard(ClaimLevel::Wildcard) == "*:*");
 
         // Test &str == ClaimType
-        assert!("*" == ClaimType::Custom("*".to_string()));
         assert!("users:edit" == ClaimType::Users(ClaimLevel::Edit));
 
         // Test inequality

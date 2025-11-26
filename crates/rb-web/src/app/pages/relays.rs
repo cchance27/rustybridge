@@ -7,7 +7,7 @@ use rb_types::{
 
 use crate::{
     app::api::{credentials::list_credentials, relays::*}, components::{
-        CredentialBadge, CredentialForm, Fab, Layout, Modal, Protected, RelayAccessForm, RequireAuth, StepModal, StructuredTooltip, Table, TableActions, Toast, ToastMessage, ToastType, TooltipSection
+        CredentialBadge, CredentialForm, Fab, Layout, Modal, Protected, RelayAccessForm, RequireAuth, StepModal, StructuredTooltip, Table, TableActions, Toast, ToastMessage, ToastType, TooltipSection, icons::EditIcon
     }
 };
 
@@ -716,7 +716,7 @@ pub fn RelaysPage() -> Element {
                     Protected {
                         claim: Some(ClaimType::Relays(ClaimLevel::Edit)),
                         button {
-                            class: "badge badge-secondary gap-2 cursor-pointer text-[11px] hover:badge-accent",
+                            class: "badge badge-secondary cursor-pointer text-[11px] hover:badge-accent",
                             onclick: {
                                 let id = host.id;
                                 let name = host.name.clone();
@@ -802,9 +802,9 @@ pub fn RelaysPage() -> Element {
                                                         fallback: rsx! {
                                                              span {
                                                                 class: if host.access_principals.is_empty() {
-                                                                    "badge badge-error gap-2"
+                                                                    "badge badge-error"
                                                                 } else {
-                                                                    "badge badge-primary gap-2"
+                                                                    "badge badge-primary"
                                                                 },
                                                                 "{host.access_principals.len()} "
                                                                 {if host.access_principals.len() == 1 { "principal" } else { "principals" }}
@@ -812,9 +812,9 @@ pub fn RelaysPage() -> Element {
                                                         },
                                                         button {
                                                             class: if host.access_principals.is_empty() {
-                                                                "badge badge-error gap-2 cursor-pointer hover:badge-accent"
+                                                                "badge badge-error cursor-pointer hover:badge-accent"
                                                             } else {
-                                                                "badge badge-primary gap-2 cursor-pointer hover:badge-accent"
+                                                                "badge badge-primary cursor-pointer hover:badge-accent"
                                                             },
                                                             onclick: {
                                                                 let id = host.id;
@@ -824,19 +824,7 @@ pub fn RelaysPage() -> Element {
                                                             "{host.access_principals.len()} "
                                                             {if host.access_principals.len() == 1 { "principal" } else { "principals" }}
                                                             // Edit icon
-                                                            svg {
-                                                                xmlns: "http://www.w3.org/2000/svg",
-                                                                class: "h-3 w-3",
-                                                                fill: "none",
-                                                                view_box: "0 0 24 24",
-                                                                stroke: "currentColor",
-                                                                path {
-                                                                    stroke_linecap: "round",
-                                                                    stroke_linejoin: "round",
-                                                                    stroke_width: "2",
-                                                                    d: "M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                                                                }
-                                                            }
+                                                            EditIcon {}
                                                         }
                                                     }
                                                 }
@@ -1418,13 +1406,6 @@ pub fn RelaysPage() -> Element {
                 open: access_modal_open(),
                 title: format!("Manage Access: {}", access_target_name()),
                 on_close: move |_| access_modal_open.set(false),
-                actions: rsx! {
-                    button {
-                        class: "btn",
-                        onclick: move |_| access_modal_open.set(false),
-                        "Close"
-                    }
-                },
                 RelayAccessForm {
                     relay_id: access_target_id(),
                     on_change: move |_| {

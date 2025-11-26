@@ -1,9 +1,11 @@
 pub mod auth;
 mod avatar_dropdown;
+pub mod buttons;
 mod credential_badge;
 mod credential_form;
 mod fab;
 mod footer;
+pub mod icons;
 mod layout;
 mod modal;
 mod multi_fab;

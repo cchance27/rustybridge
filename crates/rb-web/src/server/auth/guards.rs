@@ -4,11 +4,11 @@ use axum_session_sqlx::SessionSqlitePool;
 use dioxus::prelude::Result;
 use rb_types::auth::ClaimType;
 
-use super::{WebUser, claims};
+use super::claims;
 
-pub type WebAuthSession = AuthSession<WebUser, i64, SessionSqlitePool, sqlx::SqlitePool>;
+pub type WebAuthSession = AuthSession<super::WebUser, i64, SessionSqlitePool, sqlx::SqlitePool>;
 
-pub fn ensure_authenticated(auth: &WebAuthSession) -> Result<WebUser> {
+pub fn ensure_authenticated(auth: &WebAuthSession) -> Result<super::WebUser> {
     if auth.is_authenticated() {
         if let Some(user) = auth.current_user.clone() {
             Ok(user)

@@ -1,30 +1,22 @@
 use axum_session_auth::Authentication;
-use rb_types::auth::ClaimType;
+use rb_types::auth::AuthUserInfo;
 use sqlx::SqlitePool;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, Eq, Hash, PartialEq)]
-pub struct WebUser {
-    pub id: i64,
-    pub username: String,
-    pub password_hash: Option<String>,
-    pub claims: Vec<ClaimType>,
-    pub name: Option<String>,
-    pub picture: Option<String>,
-}
+#[derive(Clone)]
+pub struct WebUser(pub AuthUserInfo);
 
-impl std::fmt::Display for WebUser {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.username)
+use std::ops::{Deref, DerefMut};
+
+impl Deref for WebUser {
+    type Target = AuthUserInfo;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
-impl WebUser {
-    /// Check if user has management access (any :view claim or wildcard)
-    pub fn has_management_access(&self) -> bool {
-        self.claims.iter().any(|c| {
-            let claim_str = c.to_string();
-            claim_str == "*" || claim_str.ends_with(":view")
-        })
+impl DerefMut for WebUser {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
@@ -52,14 +44,14 @@ impl Authentication<WebUser, i64, SqlitePool> for WebUser {
             "Loaded User",
         );
 
-        Ok(WebUser {
+        Ok(WebUser(AuthUserInfo {
             id: user.id,
             username: user.username,
             password_hash: user.password_hash,
             claims,
             name,
             picture,
-        })
+        }))
     }
 
     fn is_authenticated(&self) -> bool {

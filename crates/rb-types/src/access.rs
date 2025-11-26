@@ -7,6 +7,7 @@ use crate::auth::ClaimType;
 
 /// Distinguishes whether an ACL principal represents a user, group, or other kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum PrincipalKind {
     User,
     Group,

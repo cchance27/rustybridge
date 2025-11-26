@@ -25,21 +25,57 @@ pub struct LoginResponse {
     pub user: Option<AuthUserInfo>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default, Eq, Hash)]
 /// Authenticated user details returned to clients.
 pub struct AuthUserInfo {
     /// Stable user identifier.
     pub id: i64,
     /// Username.
     pub username: String,
+    /// Password hash (if using password auth).
+    pub password_hash: Option<String>,
     /// Claims granted to the user.
     pub claims: Vec<ClaimType>,
     /// Convenience flag for UI gating (has any management claims).
-    pub has_management_access: bool,
-    /// User's display name from OIDC.
     pub name: Option<String>,
     /// User's profile picture URL from OIDC.
     pub picture: Option<String>,
+}
+
+impl std::fmt::Display for AuthUserInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.username)
+    }
+}
+
+impl AuthUserInfo {
+    /// Check if this user has a specific claim
+    /// Uses the satisfies method to handle wildcards and claim level hierarchies
+    pub fn has_claim(&self, claim: &ClaimType) -> bool {
+        self.claims.iter().any(|c| c.satisfies(claim))
+    }
+
+    /// Check if this user has any of the specified claims
+    pub fn has_any_claim(&self, claims: &[ClaimType]) -> bool {
+        claims
+            .iter()
+            .any(|required_claim| self.claims.iter().any(|user_claim| user_claim.satisfies(required_claim)))
+    }
+
+    /// Check if this user has all of the specified claims
+    pub fn has_all_claims(&self, claims: &[ClaimType]) -> bool {
+        claims
+            .iter()
+            .all(|required_claim| self.claims.iter().any(|user_claim| user_claim.satisfies(required_claim)))
+    }
+
+    /// Check if user has management access (any :view claim or wildcard)
+    pub fn has_management_access(&self) -> bool {
+        self.claims.iter().any(|c| {
+            let claim_str = c.to_string();
+            claim_str.ends_with(":view") || claim_str.ends_with(":*")
+        })
+    }
 }
 
 /// Parsed login target in `user[:relay]` form used by server-side auth flows.

@@ -33,7 +33,7 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
                 .await
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-            let has_management_access = claims.iter().any(|c| c == "*" || c.to_string().ends_with(":view"));
+            //let has_management_access = claims.iter().any(|c| c == "*" || c.to_string().ends_with(":view"));
 
             // Login user with AuthSession
             auth.login_user(user_id);
@@ -44,8 +44,8 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
                 user: Some(AuthUserInfo {
                     id: user_id,
                     username: request.username,
+                    password_hash: None,
                     claims,
-                    has_management_access,
                     name: None,
                     picture: None,
                 }),
@@ -76,15 +76,13 @@ pub async fn logout() -> Result<()> {
 pub async fn get_current_user() -> Result<Option<AuthUserInfo>> {
     if auth.is_authenticated() {
         if let Some(user) = auth.current_user {
-            let has_management_access = user.has_management_access();
-
             Ok(Some(AuthUserInfo {
-                id: user.id,
-                username: user.username,
-                claims: user.claims,
-                has_management_access,
-                name: user.name,
-                picture: user.picture,
+                id: user.0.id,
+                username: user.0.username,
+                claims: user.0.claims,
+                password_hash: None,
+                name: user.0.name,
+                picture: user.0.picture,
             }))
         } else {
             Ok(None)

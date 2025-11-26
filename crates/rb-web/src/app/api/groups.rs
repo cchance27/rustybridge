@@ -58,6 +58,11 @@ pub async fn list_groups() -> Result<Vec<GroupInfo>, ServerFnError> {
             .map(|c| c.to_string().parse().unwrap_or(ClaimType::Custom(c.to_string())))
             .collect();
 
+        // Get group roles
+        let roles = server_core::list_group_roles_server(&name)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+
         result.push(GroupInfo {
             name,
             member_count,
@@ -65,6 +70,7 @@ pub async fn list_groups() -> Result<Vec<GroupInfo>, ServerFnError> {
             members,
             relays: relay_names,
             claims,
+            roles,
         });
     }
 
@@ -127,6 +133,16 @@ pub async fn remove_member_from_group(name: String, username: String) -> Result<
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+#[get(
+    "/api/groups/{name}/claims",
+    auth: WebAuthSession
+)]
+pub async fn get_group_claims(name: String) -> Result<Vec<ClaimType>, ServerFnError> {
+    ensure_group_claim(&auth, ClaimLevel::View)?;
+    use server_core::get_group_claims_server;
+    get_group_claims_server(&name).await.map_err(|e| ServerFnError::new(e.to_string()))
+}
+
 #[post(
     "/api/groups/{name}/claims",
     auth: WebAuthSession
@@ -137,8 +153,11 @@ pub async fn add_group_claim(name: String, claim: ClaimType) -> Result<(), Serve
     add_group_claim(&name, &claim).await.map_err(|e| ServerFnError::new(e.to_string()))
 }
 
-#[delete(
-    "/api/groups/{name}/claims/{claim}",
+/// Remove a claim from a group
+/// NOTE: Uses POST instead of DELETE because ClaimType contains colons (e.g. "relays:view")
+/// which cause routing issues when used as path parameters in DELETE requests
+#[post(
+    "/api/groups/{name}/claims/remove",
     auth: WebAuthSession
 )]
 pub async fn remove_group_claim(name: String, claim: ClaimType) -> Result<(), ServerFnError> {

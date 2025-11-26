@@ -24,6 +24,8 @@ pub struct UserGroupInfo {
     pub claims: Vec<ClaimType>,
     /// Number of SSH public keys.
     pub ssh_key_count: i64,
+    /// List of role names assigned to the user.
+    pub roles: Vec<String>,
 }
 
 /// Group info with statistics.
@@ -40,6 +42,27 @@ pub struct GroupInfo {
     /// Relay names (host:port) this group can access.
     pub relays: Vec<String>,
     /// Claims granted to the group.
+    pub claims: Vec<ClaimType>,
+    /// List of role names assigned to the group.
+    pub roles: Vec<String>,
+}
+
+/// Role info with statistics.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RoleInfo {
+    /// Role name.
+    pub name: String,
+    /// Role description.
+    pub description: Option<String>,
+    /// Number of users assigned this role.
+    pub user_count: i64,
+    /// Number of groups assigned this role.
+    pub group_count: i64,
+    /// Usernames with this role.
+    pub users: Vec<String>,
+    /// Group names with this role.
+    pub groups: Vec<String>,
+    /// Claims granted by the role.
     pub claims: Vec<ClaimType>,
 }
 

@@ -41,9 +41,17 @@ VALUES ('Super Admin', 'Full system access', strftime('%s', 'now'));
 INSERT OR IGNORE INTO roles (name, description, created_at) 
 VALUES ('User', 'Standard user access', strftime('%s', 'now'));
 
--- Seed Super Admin permissions (wildcard)
+-- Seed Super Admin permissions (all claims with wildcard level)
 INSERT OR IGNORE INTO role_claims (role_id, claim_key)
-SELECT id, '*' FROM roles WHERE name = 'Super Admin';
+SELECT id, 'relays:*' FROM roles WHERE name = 'Super Admin'
+UNION ALL
+SELECT id, 'users:*' FROM roles WHERE name = 'Super Admin'
+UNION ALL
+SELECT id, 'groups:*' FROM roles WHERE name = 'Super Admin'
+UNION ALL
+SELECT id, 'roles:*' FROM roles WHERE name = 'Super Admin'
+UNION ALL
+SELECT id, 'credentials:*' FROM roles WHERE name = 'Super Admin';
 
 -- Seed User permissions (relay connection only)
 INSERT OR IGNORE INTO role_claims (role_id, claim_key)

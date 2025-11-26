@@ -716,10 +716,25 @@ pub async fn get_user_claims(pool: &SqlitePool, username: &str) -> DbResult<Vec<
     .fetch_all(pool)
     .await?;
 
+    // Fetch claims via group roles (NEW: groups → roles → claims)
+    let group_role_claims = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT rc.claim_key 
+        FROM role_claims rc
+        JOIN group_roles gr ON rc.role_id = gr.role_id
+        JOIN user_groups ug ON gr.group_id = ug.group_id
+        WHERE ug.user_id = ?
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
     let mut all_claims = Vec::new();
     all_claims.extend(user_claims);
     all_claims.extend(role_claims);
     all_claims.extend(group_claims);
+    all_claims.extend(group_role_claims); // NEW: Add group role claims
 
     // Dedup strings first
     all_claims.sort();
@@ -727,6 +742,21 @@ pub async fn get_user_claims(pool: &SqlitePool, username: &str) -> DbResult<Vec<
 
     // Convert to ClaimType
     Ok(all_claims.into_iter().filter_map(|s| ClaimType::from_str(&s).ok()).collect())
+}
+
+#[cfg(feature = "server")]
+pub async fn get_user_direct_claims(pool: &SqlitePool, username: &str) -> DbResult<Vec<ClaimType>> {
+    let user_id = fetch_user_id_by_name(pool, username).await?.ok_or(DbError::UserNotFound {
+        username: username.to_string(),
+    })?;
+
+    // Fetch direct user claims only
+    let user_claims = sqlx::query_scalar::<_, String>("SELECT claim_key FROM user_claims WHERE user_id = ?")
+        .bind(user_id)
+        .fetch_all(pool)
+        .await?;
+
+    Ok(user_claims.into_iter().filter_map(|s| ClaimType::from_str(&s).ok()).collect())
 }
 
 #[cfg(feature = "server")]
@@ -792,6 +822,95 @@ pub async fn get_group_claims(pool: &SqlitePool, group_name: &str) -> DbResult<V
         .await?;
 
     Ok(claims.into_iter().filter_map(|s| ClaimType::from_str(&s).ok()).collect())
+}
+
+#[cfg(feature = "server")]
+pub async fn get_role_claims(pool: &SqlitePool, role_name: &str) -> DbResult<Vec<ClaimType>> {
+    let role_id = fetch_role_id_by_name(pool, role_name).await?.ok_or(DbError::GroupNotFound {
+        group: role_name.to_string(), // TODO: Add RoleNotFound error
+    })?;
+    let claims = sqlx::query_scalar::<_, String>("SELECT claim_key FROM role_claims WHERE role_id = ?")
+        .bind(role_id)
+        .fetch_all(pool)
+        .await?;
+
+    Ok(claims.into_iter().filter_map(|s| ClaimType::from_str(&s).ok()).collect())
+}
+
+#[cfg(feature = "server")]
+pub async fn list_user_roles(pool: &SqlitePool, username: &str) -> DbResult<Vec<String>> {
+    let rows = sqlx::query(
+        "SELECT r.name FROM roles r JOIN user_roles ur ON r.id = ur.role_id JOIN users u ON u.id = ur.user_id WHERE u.username = ? ORDER BY r.name",
+    )
+    .bind(username)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.get::<String, _>("name")).collect())
+}
+
+#[cfg(feature = "server")]
+pub async fn list_role_users(pool: &SqlitePool, role_name: &str) -> DbResult<Vec<String>> {
+    let rows = sqlx::query(
+        "SELECT u.username FROM users u JOIN user_roles ur ON u.id = ur.user_id JOIN roles r ON r.id = ur.role_id WHERE r.name = ? ORDER BY u.username",
+    )
+    .bind(role_name)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.get::<String, _>("username")).collect())
+}
+
+#[cfg(feature = "server")]
+pub async fn list_group_roles(pool: &SqlitePool, group_name: &str) -> DbResult<Vec<String>> {
+    let rows = sqlx::query(
+        "SELECT r.name FROM roles r JOIN group_roles gr ON r.id = gr.role_id JOIN groups g ON g.id = gr.group_id WHERE g.name = ? ORDER BY r.name",
+    )
+    .bind(group_name)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.get::<String, _>("name")).collect())
+}
+
+#[cfg(feature = "server")]
+pub async fn list_role_groups(pool: &SqlitePool, role_name: &str) -> DbResult<Vec<String>> {
+    let rows = sqlx::query(
+        "SELECT g.name FROM groups g JOIN group_roles gr ON g.id = gr.group_id JOIN roles r ON r.id = gr.role_id WHERE r.name = ? ORDER BY g.name",
+    )
+    .bind(role_name)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.get::<String, _>("name")).collect())
+}
+
+#[cfg(feature = "server")]
+pub async fn assign_role_to_group(pool: &SqlitePool, group_name: &str, role_name: &str) -> DbResult<()> {
+    let group_id = fetch_group_id_by_name(pool, group_name).await?.ok_or(DbError::GroupNotFound {
+        group: group_name.to_string(),
+    })?;
+    let role_id = fetch_role_id_by_name(pool, role_name).await?.ok_or(DbError::GroupNotFound {
+        group: role_name.to_string(), // TODO: Add RoleNotFound error
+    })?;
+    sqlx::query("INSERT OR IGNORE INTO group_roles (group_id, role_id) VALUES (?, ?)")
+        .bind(group_id)
+        .bind(role_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+#[cfg(feature = "server")]
+pub async fn revoke_role_from_group(pool: &SqlitePool, group_name: &str, role_name: &str) -> DbResult<()> {
+    let group_id = fetch_group_id_by_name(pool, group_name).await?.ok_or(DbError::GroupNotFound {
+        group: group_name.to_string(),
+    })?;
+    let role_id = fetch_role_id_by_name(pool, role_name).await?.ok_or(DbError::GroupNotFound {
+        group: role_name.to_string(),
+    })?;
+    sqlx::query("DELETE FROM group_roles WHERE group_id = ? AND role_id = ?")
+        .bind(group_id)
+        .bind(role_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Latest OIDC profile (name/picture) for a user, if linked.

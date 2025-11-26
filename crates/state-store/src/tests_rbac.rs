@@ -1,3 +1,4 @@
+use rb_types::auth::ClaimLevel;
 use sqlx::SqlitePool;
 
 use crate::*;
@@ -77,5 +78,8 @@ async fn test_default_admin_role() {
     assign_role_to_user(&pool, "admin_user", "Super Admin").await.unwrap();
 
     let claims = get_user_claims(&pool, "admin_user").await.unwrap();
-    assert!(claims.contains(&ClaimType::Custom("*".to_string())));
+    assert!(claims.contains(&ClaimType::Users(ClaimLevel::Wildcard)));
+    assert!(claims.contains(&ClaimType::Roles(ClaimLevel::Wildcard)));
+    assert!(claims.contains(&ClaimType::Groups(ClaimLevel::Wildcard)));
+    assert!(claims.contains(&ClaimType::Relays(ClaimLevel::Wildcard)));
 }
