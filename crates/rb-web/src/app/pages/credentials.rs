@@ -288,6 +288,7 @@ pub fn CredentialsPage() -> Element {
                                             th { "{cred.id}" }
                                             td { "{cred.name}" }
                                             td {
+                                                class: "text-center",
                                                 CredentialBadge {
                                                     kind: cred.kind.clone(),
                                                     username_mode: Some(cred.username_mode.clone()),
@@ -298,6 +299,7 @@ pub fn CredentialsPage() -> Element {
                                                 }
                                             }
                                             td {
+                                                class: "text-center",
                                                 StructuredTooltip {
                                                     sections: vec![
                                                         TooltipSection::new("Relays")

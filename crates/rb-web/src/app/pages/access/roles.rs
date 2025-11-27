@@ -141,20 +141,20 @@ pub fn RolesSection(
                                 headers: vec!["Role Name", "Description", "Users", "Groups", "Claims", "Actions"],
                                 for role in role_list {
                                     tr {
-                                        td {
+                                        td { class: "text-left",
                                             "{role.name}"
                                             if role.name == "Super Admin" {
                                                 span { class: "badge badge-warning badge-xs ml-2", "Protected" }
                                             }
                                         }
-                                        td {
+                                        td { class: "text-center",
                                             if let Some(desc) = &role.description {
                                                 "{desc}"
                                             } else {
                                                 span { class: "text-gray-500 italic", "No description" }
                                             }
                                         }
-                                        td {
+                                        td { class: "text-center",
                                             StructuredTooltip {
                                                 sections: {
                                                     let mut sections = Vec::new();
@@ -168,13 +168,13 @@ pub fn RolesSection(
                                                 Protected {
                                                     claim: Some(ClaimType::Roles(ClaimLevel::Edit)),
                                                     fallback: rsx! {
-                                                        span { class: "badge badge-primary whitespace-nowrap",
+                                                        span { class: "badge badge-accent whitespace-nowrap",
                                                             "{role.user_count} "
                                                             {if role.user_count == 1 { "user" } else { "users" }}
                                                         }
                                                     },
                                                     button {
-                                                        class: "badge badge-primary cursor-pointer hover:badge-accent whitespace-nowrap",
+                                                        class: "badge badge-accent cursor-pointer hover:brightness-90 whitespace-nowrap",
                                                         onclick: {
                                                             let r = role.name.clone();
                                                             move |_| open_manage_users(r.clone())
@@ -186,7 +186,7 @@ pub fn RolesSection(
                                                 }
                                             }
                                         }
-                                        td {
+                                        td { class: "text-center",
                                             StructuredTooltip {
                                                 sections: {
                                                     let mut sections = Vec::new();
@@ -200,13 +200,13 @@ pub fn RolesSection(
                                                 Protected {
                                                     claim: Some(ClaimType::Roles(ClaimLevel::Edit)),
                                                     fallback: rsx! {
-                                                        span { class: "badge badge-secondary whitespace-nowrap",
+                                                        span { class: "badge badge-primary whitespace-nowrap",
                                                             "{role.group_count} "
                                                             {if role.group_count == 1 { "group" } else { "groups" }}
                                                         }
                                                     },
                                                     button {
-                                                        class: "badge badge-secondary cursor-pointer hover:badge-accent whitespace-nowrap",
+                                                        class: "badge badge-primary cursor-pointer hover:brightness-90 whitespace-nowrap",
                                                         onclick: {
                                                             let r = role.name.clone();
                                                             move |_| open_manage_groups(r.clone())
@@ -218,7 +218,7 @@ pub fn RolesSection(
                                                 }
                                             }
                                         }
-                                        td {
+                                        td { class: "text-center",
                                             StructuredTooltip {
                                                 sections: {
                                                     let mut sections = Vec::new();
@@ -233,13 +233,13 @@ pub fn RolesSection(
                                                 Protected {
                                                     claim: Some(ClaimType::Roles(ClaimLevel::Edit)),
                                                     fallback: rsx! {
-                                                        span { class: "badge badge-info whitespace-nowrap",
+                                                        span { class: "badge badge-success whitespace-nowrap",
                                                             "{role.claims.len()} "
                                                             {if role.claims.len() == 1 { "claim" } else { "claims" }}
                                                         }
                                                     },
                                                     button {
-                                                        class: {if role.name == "Super Admin" { "badge cursor-not-allowed whitespace-nowrap" } else { "badge badge-info cursor-pointer hover:badge-accent whitespace-nowrap" }},
+                                                        class: {if role.name == "Super Admin" { "badge cursor-not-allowed whitespace-nowrap hover:brightness-90" } else { "badge badge-success cursor-pointer hover:brightness-90 whitespace-nowrap" }},
                                                         disabled: role.name == "Super Admin",
                                                         title: if role.name == "Super Admin" { "Cannot edit Super Admin role claims" } else { "" },
                                                         onclick: {
@@ -257,7 +257,7 @@ pub fn RolesSection(
                                             Protected {
                                                 any_claims: vec![ClaimType::Roles(ClaimLevel::Delete)],
                                                 button {
-                                                    class: { if role.name == "Super Admin" { "btn btn-xs btn-error cursor-not-allowed" } else { "btn btn-xs btn-error" } },
+                                                    class: { if role.name == "Super Admin" { "btn btn-xs btn-secondary cursor-not-allowed" } else { "btn btn-xs btn-secondary" } },
                                                     disabled: role.name == "Super Admin",
                                                     title: if role.name == "Super Admin" { "Cannot delete Super Admin role" } else { "" },
                                                     onclick: {

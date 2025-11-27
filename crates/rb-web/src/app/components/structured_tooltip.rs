@@ -59,7 +59,7 @@ pub fn StructuredTooltip(
                 class: "fixed z-[9999] bg-base-300 text-base-content p-3 rounded-lg shadow-lg border border-base-content/10 min-w-fit flex flex-row gap-6",
                 style: "top: {position().0}px; left: {position().1}px; transform: translate(-50%, -100%);",
                 for section in sections {
-                    div { class: "flex-1 min-w-[120px]",
+                    div { class: "flex-1",
                         if let Some(header) = section.header {
                             div { class: "font-semibold text-sm mb-1 text-primary text-center", "{header}" }
                         }
@@ -71,7 +71,7 @@ pub fn StructuredTooltip(
                             div { class: "text-sm space-y-0.5",
                                 for (idx, item) in section.items.iter().enumerate() {
                                     if idx < section.max_items {
-                                        div { class: "text-base-content/80", "• {item}" }
+                                        div { class: "text-base-content/80 whitespace-nowrap", "• {item}" }
                                     }
                                 }
                                 if section.items.len() > section.max_items {

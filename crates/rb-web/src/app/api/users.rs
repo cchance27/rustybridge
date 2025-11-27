@@ -24,7 +24,7 @@ pub async fn list_users() -> Result<Vec<UserGroupInfo>, ServerFnError> {
 
     use rb_types::access::RelayAccessSource;
     use server_core::{list_user_groups_server, list_users as list_users_core};
-    use state_store::{fetch_relay_access_principals, get_user_claims, list_relay_hosts};
+    use state_store::{fetch_relay_access_principals, get_user_direct_claims, list_relay_hosts};
 
     let usernames = list_users_core().await.map_err(|e| ServerFnError::new(e.to_string()))?;
 
@@ -79,7 +79,7 @@ pub async fn list_users() -> Result<Vec<UserGroupInfo>, ServerFnError> {
         }
 
         let relays: Vec<UserRelayAccess> = relay_access_map.into_values().collect();
-        let claims_core = get_user_claims(&pool, &username)
+        let claims_core = get_user_direct_claims(&pool, &username)
             .await
             .map_err(|e| ServerFnError::new(e.to_string()))?;
 

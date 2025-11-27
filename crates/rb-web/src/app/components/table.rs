@@ -24,7 +24,13 @@ pub fn Table(
                     tr {
                         for (i, (h, width)) in headers.iter().enumerate() {
                             th {
-                                class: if i == headers.len() - 1 { format!("text-right {width}") } else { width.to_string() },
+                                class: if i == 0 {
+                                    format!("text-left {width}")
+                                } else if i == headers.len() - 1 {
+                                    format!("text-right {width}")
+                                } else {
+                                    format!("text-center {width}")
+                                },
                                 "{h}"
                             }
                         }
@@ -44,14 +50,14 @@ pub fn TableActions(on_edit: Option<EventHandler<()>>, on_delete: Option<EventHa
         div { class: "join",
             if let Some(on_edit) = on_edit {
                 button {
-                    class: "btn btn-xs btn-info join-item",
+                    class: "btn btn-xs btn-primary join-item",
                     onclick: move |_| on_edit.call(()),
                     "Edit"
                 }
             }
             if let Some(on_delete) = on_delete {
                 button {
-                    class: "btn btn-xs btn-error join-item",
+                    class: "btn btn-xs btn-secondary join-item",
                     onclick: move |_| on_delete.call(()),
                     "Delete"
                 }

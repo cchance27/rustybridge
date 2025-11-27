@@ -26,24 +26,31 @@ pub fn AccessPage() -> Element {
             any_claims: vec![ClaimType::Users(ClaimLevel::View), ClaimType::Groups(ClaimLevel::View)],
             Toast { message: toast }
             Layout {
-                div { class: "flex flex-col gap-6",
-                    // Users Section
-                    users::UsersSection {
-                        users,
-                        toast,
-                    },
-                    // Groups Section
-                    groups::GroupsSection {
-                        groups,
-                        users,
-                        toast,
-                    },
-                    // Roles Section
-                    roles::RolesSection {
-                        roles,
-                        users,
-                        groups,
-                        toast,
+                div { class: "grid grid-cols-1 xl:grid-cols-2 gap-6 items-start",
+                    // Left Column: Users
+                    div { class: "flex flex-col gap-6 w-full",
+                        users::UsersSection {
+                            users,
+                            toast,
+                            roles, // Pass roles resource to UsersSection for effective claims calculation
+                            groups, // Pass groups resource to UsersSection for effective claims calculation
+                        }
+                    }
+
+                    // Right Column: Groups and Roles
+                    div { class: "flex flex-col gap-6 w-full",
+                        groups::GroupsSection {
+                            groups,
+                            users,
+                            roles, // Pass roles resource to GroupsSection
+                            toast,
+                        },
+                        roles::RolesSection {
+                            roles,
+                            users,
+                            groups,
+                            toast,
+                        }
                     }
                 }
 

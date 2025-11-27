@@ -4,40 +4,64 @@ use dioxus::prelude::*;
 use rb_types::{auth::ClaimType, users::UpdateUserRequest};
 
 use crate::{
-    app::api::users::*, components::{Modal, ToastMessage, ToastType}
+    app::api::{
+        groups::{add_member_to_group, remove_member_from_group}, roles::{assign_role_to_user, revoke_role_from_user}, users::*
+    }, components::{Modal, ToastMessage, ToastType}
 };
 
-/// Edit User Modal with password and claims management
+/// Edit User Modal with password, roles, groups, and claims management
 #[component]
 pub fn EditUserModal(
     open: Signal<bool>,
     username: Signal<Option<String>>,
+    roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
+    groups: Resource<Result<Vec<rb_types::users::GroupInfo>, ServerFnError>>,
     users: Resource<Result<Vec<rb_types::users::UserGroupInfo>, ServerFnError>>,
     toast: Signal<Option<ToastMessage>>,
 ) -> Element {
-    let Some(username) = username() else {
+    let Some(username_str) = username() else {
         return rsx!();
     };
 
+    let mut active_tab = use_signal(|| "general"); // general, groups, roles, claims
+
     let mut password = use_signal(String::new);
     let mut validation_errors = use_signal(HashMap::<String, String>::new);
+
     let mut user_claims = use_signal(Vec::<ClaimType>::new);
     let mut selected_claim_to_add = use_signal(String::new);
 
-    // Load user claims when modal opens
-    let username_for_effect = username.clone();
+    let mut user_roles = use_signal(Vec::<String>::new);
+    let mut selected_role_to_add = use_signal(String::new);
+
+    let mut user_groups = use_signal(Vec::<String>::new);
+    let mut selected_group_to_add = use_signal(String::new);
+
+    // Load user data when modal opens
+    let username_for_effect = username_str.clone();
     use_effect(move || {
         let username_for_spawn = username_for_effect.clone();
         spawn(async move {
             // Need to access current value of open()
             let is_open = open();
-            if is_open && let Ok(claims) = get_user_claims(username_for_spawn).await {
-                user_claims.set(claims);
+            if is_open {
+                // Load claims
+                if let Ok(claims) = get_user_claims(username_for_spawn.clone()).await {
+                    user_claims.set(claims);
+                }
+
+                // Load roles and groups (from users resource if available)
+                if let Some(Ok(user_list)) = users.value()().as_ref()
+                    && let Some(user) = user_list.iter().find(|u| u.username == username_for_spawn)
+                {
+                    user_roles.set(user.roles.clone());
+                    user_groups.set(user.groups.clone());
+                }
             }
         });
     });
 
-    let username_for_save = username.clone();
+    let username_for_save = username_str.clone();
     let on_save = {
         move |_| {
             validation_errors.set(HashMap::new());
@@ -89,38 +113,32 @@ pub fn EditUserModal(
         }
     };
 
-    let on_delete = |claim: ClaimType| {
-        let claim_clone = claim.clone();
-        let username_clone = username.clone();
-        move |_: Event<MouseData>| {
-            let claim_for_spawn = claim_clone.clone();
-            let username_for_spawn = username_clone.clone();
-            spawn(async move {
-                let username_for_message = username_for_spawn.clone();
-                let claim_str = claim_for_spawn.to_string();
-                match remove_user_claim(username_for_spawn, claim_for_spawn.clone()).await {
-                    Ok(_) => {
-                        users.restart();
-                        let mut current = user_claims();
-                        current.retain(|c| c != &claim_for_spawn);
-                        user_claims.set(current);
-                        toast.set(Some(ToastMessage {
-                            message: format!("Removed claim '{}' from user '{}'", claim_str, username_for_message),
-                            toast_type: ToastType::Success,
-                        }));
-                    }
-                    Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to remove claim: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
-                    }
+    // Claims Logic
+    let remove_claim_handler = move |claim: ClaimType, user: String| {
+        spawn(async move {
+            let claim_str = claim.to_string();
+            match remove_user_claim(user.clone(), claim.clone()).await {
+                Ok(_) => {
+                    users.restart();
+                    let mut current = user_claims();
+                    current.retain(|c| c != &claim);
+                    user_claims.set(current);
+                    toast.set(Some(ToastMessage {
+                        message: format!("Removed claim '{}' from user '{}'", claim_str, user),
+                        toast_type: ToastType::Success,
+                    }));
                 }
-            });
-        }
+                Err(e) => {
+                    toast.set(Some(ToastMessage {
+                        message: format!("Failed to remove claim: {}", e),
+                        toast_type: ToastType::Error,
+                    }));
+                }
+            }
+        });
     };
 
-    let username_for_add = username.clone();
+    let username_for_add_claim = username_str.clone();
     let add_claim = {
         move |_| {
             let claim_str = selected_claim_to_add();
@@ -128,7 +146,7 @@ pub fn EditUserModal(
                 return;
             }
 
-            let username_for_spawn = username_for_add.clone();
+            let username_for_spawn = username_for_add_claim.clone();
             spawn(async move {
                 let username_for_message = username_for_spawn.clone();
                 let claim_type = match ClaimType::from_str(&claim_str) {
@@ -167,7 +185,148 @@ pub fn EditUserModal(
         }
     };
 
-    let username_for_rsx = username.clone();
+    // Roles Logic
+    let username_for_add_role = username_str.clone();
+    let add_role = move |_| {
+        let role = selected_role_to_add();
+        let user = username_for_add_role.clone();
+
+        if role.is_empty() {
+            return;
+        }
+
+        spawn(async move {
+            match assign_role_to_user(role.clone(), user.clone()).await {
+                Ok(_) => {
+                    users.restart();
+                    roles.restart();
+                    let mut current = user_roles();
+                    current.push(role.clone());
+                    user_roles.set(current);
+                    selected_role_to_add.set(String::new());
+                    toast.set(Some(ToastMessage {
+                        message: format!("Assigned role '{}' to user '{}'", role, user),
+                        toast_type: ToastType::Success,
+                    }));
+                }
+                Err(e) => {
+                    toast.set(Some(ToastMessage {
+                        message: format!("Failed to assign role: {}", e),
+                        toast_type: ToastType::Error,
+                    }));
+                }
+            }
+        });
+    };
+
+    let remove_role_handler = move |role: String, user: String| {
+        spawn(async move {
+            match revoke_role_from_user(role.clone(), user.clone()).await {
+                Ok(_) => {
+                    users.restart();
+                    roles.restart();
+                    let mut current = user_roles();
+                    current.retain(|r| r != &role);
+                    user_roles.set(current);
+                    toast.set(Some(ToastMessage {
+                        message: format!("Removed role '{}' from user '{}'", role, user),
+                        toast_type: ToastType::Success,
+                    }));
+                }
+                Err(e) => {
+                    toast.set(Some(ToastMessage {
+                        message: format!("Failed to remove role: {}", e),
+                        toast_type: ToastType::Error,
+                    }));
+                }
+            }
+        });
+    };
+
+    // Groups Logic
+    let username_for_add_group = username_str.clone();
+    let add_group = move |_| {
+        let group = selected_group_to_add();
+        let user = username_for_add_group.clone();
+
+        if group.is_empty() {
+            return;
+        }
+
+        spawn(async move {
+            match add_member_to_group(group.clone(), user.clone()).await {
+                Ok(_) => {
+                    users.restart();
+                    groups.restart();
+                    let mut current = user_groups();
+                    current.push(group.clone());
+                    user_groups.set(current);
+                    selected_group_to_add.set(String::new());
+                    toast.set(Some(ToastMessage {
+                        message: format!("Added user '{}' to group '{}'", user, group),
+                        toast_type: ToastType::Success,
+                    }));
+                }
+                Err(e) => {
+                    toast.set(Some(ToastMessage {
+                        message: format!("Failed to add user to group: {}", e),
+                        toast_type: ToastType::Error,
+                    }));
+                }
+            }
+        });
+    };
+
+    let remove_group_handler = move |group: String, user: String| {
+        spawn(async move {
+            match remove_member_from_group(group.clone(), user.clone()).await {
+                Ok(_) => {
+                    users.restart();
+                    groups.restart();
+                    let mut current = user_groups();
+                    current.retain(|g| g != &group);
+                    user_groups.set(current);
+                    toast.set(Some(ToastMessage {
+                        message: format!("Removed user '{}' from group '{}'", user, group),
+                        toast_type: ToastType::Success,
+                    }));
+                }
+                Err(e) => {
+                    toast.set(Some(ToastMessage {
+                        message: format!("Failed to remove user from group: {}", e),
+                        toast_type: ToastType::Error,
+                    }));
+                }
+            }
+        });
+    };
+
+    // Calculate available items
+    let available_roles_list = {
+        if let Some(Ok(all_roles)) = roles.value()().as_ref() {
+            all_roles
+                .iter()
+                .map(|r| r.name.clone())
+                .filter(|r| !user_roles().contains(r))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        }
+    };
+
+    let available_groups_list = {
+        if let Some(Ok(all_groups)) = groups.value()().as_ref() {
+            all_groups
+                .iter()
+                .map(|g| g.name.clone())
+                .filter(|g| !user_groups().contains(g))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        }
+    };
+
+    let username_for_rsx = username_str.clone();
     rsx! {
         Modal {
             open: open(),
@@ -175,84 +334,216 @@ pub fn EditUserModal(
                 open.set(false);
                 password.set(String::new());
                 validation_errors.set(HashMap::new());
+                active_tab.set("general");
             },
             title: "Edit User",
-            actions: rsx! {
-                button { class: "btn btn-primary", onclick: on_save, "Save" }
-            },
             div { class: "flex flex-col gap-4",
-                div { class: "form-control w-full",
-                    div { class: "label", span { class: "label-text", "Username" } }
-                    div { class: "text-lg font-semibold py-2", "{username_for_rsx}" }
+                 // Tabs
+                div { class: "tabs tabs-boxed",
+                    a {
+                        class: if active_tab() == "general" { "tab tab-active" } else { "tab" },
+                        onclick: move |_| active_tab.set("general"),
+                        "General"
+                    }
+                    a {
+                        class: if active_tab() == "groups" { "tab tab-active" } else { "tab" },
+                        onclick: move |_| active_tab.set("groups"),
+                        "Groups"
+                    }
+                    a {
+                        class: if active_tab() == "roles" { "tab tab-active" } else { "tab" },
+                        onclick: move |_| active_tab.set("roles"),
+                        "Roles"
+                    }
+                    a {
+                        class: if active_tab() == "claims" { "tab tab-active" } else { "tab" },
+                        onclick: move |_| active_tab.set("claims"),
+                        "Claims"
+                    }
                 }
 
-                label { class: "form-control w-full",
-                    div { class: "label items-center justify-between",
-                        span { class: "label-text", "Password" }
-                        span { class: "badge badge-warning badge-xs", "Stored • not shown" }
-                    }
-                    input {
-                        r#type: "password",
-                        class: if validation_errors().contains_key("password") {
-                            "input input-bordered w-full input-error"
-                        } else {
-                            "input input-bordered w-full"
-                        },
-                        placeholder: "••••••••",
-                        value: "{password}",
-                        oninput: move |e| {
-                            password.set(e.value());
-                            if validation_errors().contains_key("password") {
-                                let mut errs = validation_errors();
-                                errs.remove("password");
-                                validation_errors.set(errs);
+                div { class: "mt-2",
+                    if active_tab() == "general" {
+                        div { class: "flex flex-col gap-4",
+                            div { class: "form-control w-full",
+                                div { class: "label", span { class: "label-text", "Username" } }
+                                div { class: "text-lg font-semibold py-2", "{username_for_rsx}" }
+                            }
+
+                            label { class: "form-control w-full",
+                                div { class: "label items-center justify-between",
+                                    span { class: "label-text", "Password" }
+                                    span { class: "badge badge-warning badge-xs", "Stored • not shown" }
+                                }
+                                input {
+                                    r#type: "password",
+                                    class: if validation_errors().contains_key("password") {
+                                        "input input-bordered w-full input-error"
+                                    } else {
+                                        "input input-bordered w-full"
+                                    },
+                                    placeholder: "••••••••",
+                                    value: "{password}",
+                                    oninput: move |e| {
+                                        password.set(e.value());
+                                        if validation_errors().contains_key("password") {
+                                            let mut errs = validation_errors();
+                                            errs.remove("password");
+                                            validation_errors.set(errs);
+                                        }
+                                    }
+                                }
+                                if let Some(err) = validation_errors().get("password") {
+                                    div { class: "text-error text-sm mt-1", "{err}" }
+                                }
+                            }
+                            p { class: "text-xs text-gray-500",
+                                "Secrets are encrypted and not displayed. Leave blank to keep the existing password."
+                            }
+
+                            div { class: "flex justify-end mt-4",
+                                button { class: "btn btn-primary", onclick: on_save, "Save Password" }
                             }
                         }
                     }
-                    if let Some(err) = validation_errors().get("password") {
-                        div { class: "text-error text-sm mt-1", "{err}" }
-                    }
-                }
-                p { class: "text-xs text-gray-500",
-                    "Secrets are encrypted and not displayed. Leave blank to keep the existing password."
-                }
 
-                div { class: "divider" }
-
-                div {
-                    h4 { class: "font-semibold mb-2", "Claims" }
-                    if user_claims().is_empty() {
-                        p { class: "text-gray-500 italic", "No claims assigned" }
-                    } else {
-                        div { class: "flex flex-wrap gap-2",
-                            for claim in user_claims() {
-                                div { class: "badge badge-lg badge-secondary gap-2",
-                                    span { "{claim}" }
-                                    button {
-                                        class: "btn btn-xs btn-circle btn-ghost",
-                                        onclick: on_delete(claim.clone()),
-                                        "×"
+                    if active_tab() == "groups" {
+                         div { class: "flex flex-col gap-4",
+                            div {
+                                h4 { class: "font-semibold mb-2", "Assigned Groups" }
+                                if user_groups().is_empty() {
+                                    p { class: "text-gray-500 italic", "No groups assigned" }
+                                } else {
+                                    div { class: "flex flex-wrap gap-2",
+                                        for group in user_groups() {
+                                            div { class: "badge badge-lg badge-primary gap-2",
+                                                span { "{group}" }
+                                                button {
+                                                    class: "btn btn-xs btn-circle btn-ghost",
+                                                    onclick: {
+                                                        let g = group.clone();
+                                                        let u = username_for_rsx.clone();
+                                                        move |_| remove_group_handler(g.clone(), u.clone())
+                                                    },
+                                                    "×"
+                                                }
+                                            }
+                                        }
                                     }
+                                }
+                            }
+                            div { class: "divider" }
+                            div { class: "flex gap-2",
+                                select {
+                                    class: "select select-bordered flex-1",
+                                    value: "{selected_group_to_add}",
+                                    onchange: move |e| selected_group_to_add.set(e.value()),
+                                    option { value: "", "Select a group..." }
+                                    for group in available_groups_list {
+                                        option { value: "{group}", "{group}" }
+                                    }
+                                }
+                                button {
+                                    class: "btn btn-primary",
+                                    disabled: selected_group_to_add().is_empty(),
+                                    onclick: add_group,
+                                    "Assign"
                                 }
                             }
                         }
                     }
 
-                    div { class: "flex gap-2 mt-4",
-                        select {
-                            class: "select select-bordered flex-1",
-                            value: "{selected_claim_to_add}",
-                            onchange: move |e| selected_claim_to_add.set(e.value()),
-                            option { value: "", "Select a claim..." }
-                            for claim in ClaimType::all_variants() {
-                                option { value: "{claim}", "{claim}" }
+                    if active_tab() == "roles" {
+                         div { class: "flex flex-col gap-4",
+                            div {
+                                h4 { class: "font-semibold mb-2", "Assigned Roles" }
+                                if user_roles().is_empty() {
+                                    p { class: "text-gray-500 italic", "No roles assigned" }
+                                } else {
+                                    div { class: "flex flex-wrap gap-2",
+                                        for role in user_roles() {
+                                            div { class: "badge badge-lg badge-secondary gap-2",
+                                                span { "{role}" }
+                                                button {
+                                                    class: "btn btn-xs btn-circle btn-ghost",
+                                                    onclick: {
+                                                        let r = role.clone();
+                                                        let u = username_for_rsx.clone();
+                                                        move |_| remove_role_handler(r.clone(), u.clone())
+                                                    },
+                                                    "×"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            div { class: "divider" }
+                            div { class: "flex gap-2",
+                                select {
+                                    class: "select select-bordered flex-1",
+                                    value: "{selected_role_to_add}",
+                                    onchange: move |e| selected_role_to_add.set(e.value()),
+                                    option { value: "", "Select a role..." }
+                                    for role in available_roles_list {
+                                        option { value: "{role}", "{role}" }
+                                    }
+                                }
+                                button {
+                                    class: "btn btn-secondary",
+                                    disabled: selected_role_to_add().is_empty(),
+                                    onclick: add_role,
+                                    "Assign"
+                                }
                             }
                         }
-                        button {
-                            class: "btn btn-secondary",
-                            disabled: selected_claim_to_add().is_empty(),
-                            onclick: add_claim,
-                            "Add Claim"
+                    }
+
+                    if active_tab() == "claims" {
+                        div { class: "flex flex-col gap-4",
+                            div {
+                                h4 { class: "font-semibold mb-2", "Direct Claims" }
+                                if user_claims().is_empty() {
+                                    p { class: "text-gray-500 italic", "No direct claims assigned" }
+                                } else {
+                                    div { class: "flex flex-wrap gap-2",
+                                        for claim in user_claims() {
+                                            div { class: "badge badge-lg badge-info gap-2",
+                                                span { "{claim}" }
+                                                button {
+                                                    class: "btn btn-xs btn-circle btn-ghost",
+                                                    onclick: {
+                                                        let c = claim.clone();
+                                                        let u = username_for_rsx.clone();
+                                                        move |_| remove_claim_handler(c.clone(), u.clone())
+                                                    },
+                                                    "×"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            div { class: "divider" }
+
+                            div { class: "flex gap-2",
+                                select {
+                                    class: "select select-bordered flex-1",
+                                    value: "{selected_claim_to_add}",
+                                    onchange: move |e| selected_claim_to_add.set(e.value()),
+                                    option { value: "", "Select a claim..." }
+                                    for claim in ClaimType::all_variants() {
+                                        option { value: "{claim}", "{claim}" }
+                                    }
+                                }
+                                button {
+                                    class: "btn btn-info",
+                                    disabled: selected_claim_to_add().is_empty(),
+                                    onclick: add_claim,
+                                    "Add Claim"
+                                }
+                            }
                         }
                     }
                 }

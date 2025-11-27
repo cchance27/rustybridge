@@ -120,6 +120,13 @@ INFO OIDC account unlinked by admin, admin_user=1, target_user=2
 - ✅ SSH auth path pulls keys from the same store used by the web UI and CLI
 - Note: Per-key enable/disable and last-used metadata for auditing not yet implemented
 
+14. **Role Management in Web UI (Access Page)**
+   - Add role list/create/delete and role-claims management to the Access page, lets have the user list tall on the left and on the right have groups at top and roles below groups.
+   - Show user/group->role assignments and allow assignment/removal from the UI
+   - Surface claim descriptions so admins understand access implications 
+   - We want to deprecate slightly the usage of claims directly on users and groups and push users towards using roles, as such we want to move the "user claims" and "group claims" to the edit window for the user and group window and instead just show a structured tooltip hover button that shows the "effective claims" that shows direct, group, role claims. 
+   - Add role selection to our user/group edit and creation pages so admins can prefer to use roles over basic claims, make sure our schema matches this expectation, and that when we're looking up permissions we handle this user->group->role->claims hierarchy properly.
+
 ## ⚠️ TODO / Pending Items
 
 **IMPORTANT REMINDERS BEFORE IMPLEMENTING TODO ITEMS** 
@@ -131,20 +138,14 @@ INFO OIDC account unlinked by admin, admin_user=1, target_user=2
 - Make sure new endpoints properly use our ensure_claims, Protected {} and RequireAuth {} around any new pages to protect them.
 
 ### High Priority
-1. **Role Management in Web UI (Access Page)**
-   - Add role list/create/delete and role-claims management to the Access page, lets have the user list tall on the left and on the right have groups at top and roles below groups.
-   - Show user/group->role assignments and allow assignment/removal from the UI
-   - Surface claim descriptions so admins understand access implications 
-   - Add role selection to our user/group edit and creation pages so admins can prefer to use roles over basic claims, make sure our schema matches this expectation, and that when we're looking up permissions we handle this user->group->role->claims hierarchy properly.
-
-2. **Session Visibility & Control in Web UI**
+1. **Session Visibility & Control in Web UI**
    - Add a Management tab for active sessions (web logins, SSH/TUI sessions, relay connections)
    - Plumb backend APIs to enumerate: active SSH sessions (including relay target), active web sessions, active web relays
    - Show per-session metadata (user, start time, source IP, auth method, relay name, idle time)
    - Provide admin actions where safe (e.g., terminate session / disconnect relay)
    - Ensure data comes from authoritative in-memory/store sources and is rate-limited to avoid DB load
 
-3. **Auth Surface Controls**
+2. **Auth Surface Controls**
    - Add server options to enable/disable OIDC for: (a) web login, (b) SSH keyboard-interactive, (c) disabled
    - Add parallel controls for password login (web and SSH) and SSH public-key/cert auth so administrators can enforce OIDC-only, password-only, key/cert-only, or mixed modes
    - Enforce invariants: at least one login method must remain enabled for web and for SSH; refuse misconfiguration at startup and in `rb-server web set`

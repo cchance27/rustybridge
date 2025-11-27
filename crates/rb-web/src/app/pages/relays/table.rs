@@ -112,7 +112,8 @@ pub fn RelaysTable(
                     td { "{host.ip}:{host.port}" }
                     { render_credential_cell(&host, move |id, name, is_inline| open_clear_modal.call((id, name, is_inline)), move |id, name| open_assign_modal.call((id, name))) }
                     td {
-                        div { class: "flex items-center gap-2",
+                        class: "text-center",
+                        div { class: "flex items-center gap-2 text-center justify-center",
                             if host.has_hostkey {
                                 span { class: "badge badge-success", "✓" }
                             } else {
@@ -133,6 +134,7 @@ pub fn RelaysTable(
                         }
                     }
                     td {
+                        class: "text-center",
                         // Access column - show count with structured tooltip and edit icon
                         StructuredTooltip {
                             sections: {

@@ -1,13 +1,11 @@
 //! Groups section with table and modals
 //! Self-contained components for managing groups
 
-use std::collections::HashMap;
-
 use dioxus::prelude::*;
 use rb_types::auth::{ClaimLevel, ClaimType};
 
 use crate::{
-    app::api::{groups::*, users::*}, components::{Modal, Protected, StructuredTooltip, Table, ToastMessage, ToastType, TooltipSection}, pages::access::modals::{ConfirmDeleteGroupModal, EditGroupClaimsModal}
+    app::api::{groups::*, users::*}, components::{Modal, Protected, StructuredTooltip, Table, ToastMessage, ToastType, TooltipSection}, pages::access::modals::{ConfirmDeleteGroupModal, EditGroupModal, ManageGroupRolesModal}
 };
 
 /// Main Groups Section component
@@ -15,6 +13,7 @@ use crate::{
 pub fn GroupsSection(
     groups: Resource<Result<Vec<rb_types::users::GroupInfo>, ServerFnError>>,
     users: Resource<Result<Vec<rb_types::users::UserGroupInfo>, ServerFnError>>,
+    roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
     toast: Signal<Option<ToastMessage>>,
 ) -> Element {
     // Delete confirmation state
@@ -50,11 +49,17 @@ pub fn GroupsSection(
             }
         });
     };
-    // Group edit name modal state
-    let mut edit_group_name_modal_open = use_signal(|| false);
-    let mut edit_group_old_name = use_signal(String::new);
-    let mut edit_group_new_name = use_signal(String::new);
-    let mut edit_group_validation_errors = use_signal(HashMap::<String, String>::new);
+
+    // Edit Group Modal State
+    let mut edit_group_modal_open = use_signal(|| false);
+    let mut edit_group_name = use_signal(String::new);
+
+    // Manage Group Roles Modal State
+    let mut manage_roles_modal_open = use_signal(|| false);
+    let mut manage_roles_group = use_signal(String::new);
+    let mut manage_roles_current = use_signal(Vec::<String>::new);
+    let mut manage_roles_available = use_signal(Vec::<String>::new);
+    let manage_roles_selected = use_signal(String::new);
 
     // Group members modal state
     let mut members_modal_open = use_signal(|| false);
@@ -63,24 +68,23 @@ pub fn GroupsSection(
     let mut available_users_for_group = use_signal(Vec::<String>::new);
     let mut selected_user_to_add = use_signal(String::new);
 
-    // Group claims modal state
-    let mut group_claims_modal_open = use_signal(|| false);
-    let mut claims_group_name = use_signal(String::new);
-    let group_claims = use_signal(Vec::<ClaimType>::new);
-    let mut group_selected_claim_to_add = use_signal(String::new);
-
     let mut open_edit_group = move |group: String| {
-        edit_group_old_name.set(group.clone());
-        edit_group_new_name.set(group);
-        edit_group_validation_errors.set(HashMap::new());
-        edit_group_name_modal_open.set(true);
+        edit_group_name.set(group);
+        edit_group_modal_open.set(true);
     };
 
-    let mut open_manage_group_claims = move |group: String| {
-        claims_group_name.set(group.clone());
-        group_selected_claim_to_add.set(String::new());
-        // Claims are now fetched by the modal itself
-        group_claims_modal_open.set(true);
+    let mut open_manage_roles = move |group: &rb_types::users::GroupInfo| {
+        manage_roles_group.set(group.name.clone());
+        manage_roles_current.set(group.roles.clone());
+        if let Some(Ok(all_roles)) = roles.value()().as_ref() {
+            let available: Vec<String> = all_roles
+                .iter()
+                .map(|r| r.name.clone())
+                .filter(|r| !group.roles.contains(r))
+                .collect();
+            manage_roles_available.set(available);
+        }
+        manage_roles_modal_open.set(true);
     };
 
     let mut open_manage_members = move |group: String| {
@@ -99,35 +103,6 @@ pub fn GroupsSection(
                 }
             }
             members_modal_open.set(true);
-        });
-    };
-
-    // Group handlers
-    let on_save_edit_group = move |_| {
-        edit_group_validation_errors.set(HashMap::new());
-
-        let _old_name = edit_group_old_name();
-        let new_name = edit_group_new_name();
-
-        let mut errors = HashMap::new();
-
-        if new_name.trim().is_empty() {
-            errors.insert("name".to_string(), "Group name is required".to_string());
-        }
-
-        if !errors.is_empty() {
-            edit_group_validation_errors.set(errors);
-            return;
-        }
-
-        // For now, we'll need to implement a rename function in the backend
-        // As a workaround, we'll just show a message that renaming isn't supported yet
-        spawn(async move {
-            edit_group_name_modal_open.set(false);
-            toast.set(Some(ToastMessage {
-                message: "Group renaming not yet implemented. Please delete and recreate the group.".to_string(),
-                toast_type: ToastType::Warning,
-            }));
         });
     };
 
@@ -216,11 +191,11 @@ pub fn GroupsSection(
                     match groups() {
                         Some(Ok(group_list)) => rsx! {
                             Table {
-                                headers: vec!["Group Name", "Members", "Relays", "Actions"],
+                                headers: vec!["Group Name", "Members", "Roles", "Claims", "Relays", "Actions"],
                                 for group in group_list {
                                     tr {
-                                        td { "{group.name}" }
-                                        td {
+                                        td { class: "text-left", "{group.name}" }
+                                        td { class: "text-center",
                                             // Member Count and Editable Badge with Tooltip
                                             StructuredTooltip {
                                                 sections: {
@@ -237,9 +212,9 @@ pub fn GroupsSection(
                                                     fallback: rsx! {
                                                         span {
                                                             class: if group.member_count > 0 {
-                                                                "badge badge-primary whitespace-nowrap"
+                                                                "badge badge-accent whitespace-nowrap"
                                                             } else {
-                                                                "badge badge-error whitespace-nowrap"
+                                                                "badge badge-ghost whitespace-nowrap"
                                                             },
                                                             "{group.member_count} "
                                                             {if group.member_count == 1 { "member" } else { "members" }}
@@ -247,9 +222,9 @@ pub fn GroupsSection(
                                                     },
                                                     button {
                                                         class: if group.member_count > 0 {
-                                                            "badge badge-primary whitespace-nowrap cursor-pointer hover:badge-accent"
+                                                            "badge badge-accent whitespace-nowrap cursor-pointer hover:brightness-90"
                                                         } else {
-                                                            "badge badge-error whitespace-nowrap cursor-pointer hover:badge-accent"
+                                                            "badge badge-ghost whitespace-nowrap cursor-pointer hover:brightness-90"
                                                         },
                                                         onclick: {
                                                             let g = group.name.clone();
@@ -260,7 +235,7 @@ pub fn GroupsSection(
                                                         // Edit icon
                                                         svg {
                                                             xmlns: "http://www.w3.org/2000/svg",
-                                                            class: "h-3 w-3",
+                                                            class: "h-3 w-3 ml-1",
                                                             fill: "none",
                                                             view_box: "0 0 24 24",
                                                             stroke: "currentColor",
@@ -275,7 +250,80 @@ pub fn GroupsSection(
                                                 }
                                             }
                                         }
-                                        td {
+                                        td { class: "text-center",
+                                            // Roles Column
+                                            StructuredTooltip {
+                                                sections: vec![TooltipSection::new("Roles").with_items(group.roles.clone())],
+                                                button {
+                                                    class: if group.roles.is_empty() {
+                                                        "badge badge-ghost whitespace-nowrap cursor-pointer hover:brightness-90"
+                                                    } else {
+                                                        "badge badge-info whitespace-nowrap cursor-pointer hover:brightness-90"
+                                                    },
+                                                    onclick: {
+                                                        let g = group.clone();
+                                                        move |_| open_manage_roles(&g)
+                                                    },
+                                                    if group.roles.is_empty() {
+                                                        "No roles"
+                                                    } else if group.roles.len() == 1 {
+                                                        "{group.roles[0]}"
+                                                    } else {
+                                                        "{group.roles.len()} roles"
+                                                    }
+                                                    // Edit icon
+                                                    svg {
+                                                        xmlns: "http://www.w3.org/2000/svg",
+                                                        class: "h-3 w-3 ml-1",
+                                                        fill: "none",
+                                                        view_box: "0 0 24 24",
+                                                        stroke: "currentColor",
+                                                        path {
+                                                            stroke_linecap: "round",
+                                                            stroke_linejoin: "round",
+                                                            stroke_width: "2",
+                                                            d: "M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        td { class: "text-center",
+                                            // Claims Column (Effective Claims: Direct + Role)
+                                            {
+                                                let direct_claims = group.claims.clone();
+
+                                                // Collect Role Claims
+                                                let mut role_claims = Vec::new();
+                                                if let Some(Ok(role_list)) = roles.value()().as_ref() {
+                                                    for role_name in &group.roles {
+                                                        if let Some(r) = role_list.iter().find(|r| &r.name == role_name) {
+                                                            role_claims.extend(r.claims.clone());
+                                                        }
+                                                    }
+                                                }
+
+                                                let total_count = direct_claims.len() + role_claims.len();
+
+                                                rsx! {
+                                                    if total_count == 0 {
+                                                        span { class: "badge badge-ghost whitespace-nowrap", "None" }
+                                                    } else {
+                                                        StructuredTooltip {
+                                                            sections: vec![
+                                                                TooltipSection::new("Direct Claims").with_items(direct_claims.iter().map(|c| c.to_string()).collect()),
+                                                                TooltipSection::new("Role Claims").with_items(role_claims.iter().map(|c| c.to_string()).collect()),
+                                                            ],
+                                                            span { class: "badge badge-success whitespace-nowrap",
+                                                                "{total_count} "
+                                                                {if total_count == 1 { "claim" } else { "claims" }}
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        td { class: "text-center",
                                             // Relay Count with Tooltip
                                             StructuredTooltip {
                                                 sections: {
@@ -287,7 +335,7 @@ pub fn GroupsSection(
                                                     }
                                                     sections
                                                 },
-                                                span { class: "badge badge-info whitespace-nowrap",
+                                                span { class: "badge badge-warning whitespace-nowrap",
                                                     "{group.relay_count} "
                                                     {if group.relay_count == 1 { "relay" } else { "relays" }}
                                                 }
@@ -299,15 +347,7 @@ pub fn GroupsSection(
                                                 Protected {
                                                     any_claims: vec![ClaimType::Groups(ClaimLevel::Edit)],
                                                     button {
-                                                        class: "btn btn-xs btn-secondary join-item",
-                                                        onclick: {
-                                                            let g = group.name.clone();
-                                                            move |_| open_manage_group_claims(g.clone())
-                                                        },
-                                                        "Claims"
-                                                    }
-                                                    button {
-                                                        class: "btn btn-xs btn-info join-item",
+                                                        class: "btn btn-xs btn-primary join-item",
                                                         onclick: {
                                                             let g = group.name.clone();
                                                             move |_| open_edit_group(g.clone())
@@ -319,7 +359,7 @@ pub fn GroupsSection(
                                                 Protected {
                                                     any_claims: vec![ClaimType::Groups(ClaimLevel::Delete)],
                                                     button {
-                                                        class: "btn btn-xs btn-error join-item",
+                                                        class: "btn btn-xs btn-secondary join-item",
                                                         onclick: {
                                                             let g = group.name.clone();
                                                             move |_| open_delete_confirm(g.clone())
@@ -348,39 +388,25 @@ pub fn GroupsSection(
             }
         }
 
-        // Edit Group Name Modal
-        Modal {
-            open: edit_group_name_modal_open(),
-            on_close: move |_| {
-                edit_group_name_modal_open.set(false);
-                edit_group_validation_errors.set(HashMap::new());
-            },
-            title: "Edit Group Name",
-            actions: rsx! {
-                button { class: "btn btn-primary", onclick: on_save_edit_group, "Save" }
-            },
-            div { class: "flex flex-col gap-4",
-                label { class: "form-control w-full",
-                    div { class: "label", span { class: "label-text", "Group Name" } }
-                    input {
-                        r#type: "text",
-                        class: if edit_group_validation_errors().contains_key("name") { "input input-bordered w-full input-error" } else { "input input-bordered w-full" },
-                        placeholder: "developers",
-                        value: "{edit_group_new_name}",
-                        oninput: move |e| {
-                            edit_group_new_name.set(e.value());
-                            if edit_group_validation_errors().contains_key("name") {
-                                let mut errs = edit_group_validation_errors();
-                                errs.remove("name");
-                                edit_group_validation_errors.set(errs);
-                            }
-                        }
-                    }
-                    if let Some(err) = edit_group_validation_errors().get("name") {
-                        div { class: "text-error text-sm mt-1", "{err}" }
-                    }
-                }
-            }
+        // Edit Group Modal
+        EditGroupModal {
+            open: edit_group_modal_open,
+            group_name: edit_group_name,
+            roles,
+            groups,
+            toast,
+        }
+
+        // Manage Group Roles Modal
+        ManageGroupRolesModal {
+             roles_modal_open: manage_roles_modal_open,
+             group_name: manage_roles_group,
+             group_roles: manage_roles_current,
+             available_roles: manage_roles_available,
+             selected_role_to_add: manage_roles_selected,
+             roles,
+             groups,
+             toast,
         }
 
         // Group Members Modal
@@ -446,15 +472,6 @@ pub fn GroupsSection(
                     }
                 }
             }
-        }
-
-        EditGroupClaimsModal {
-            group_claims_modal_open,
-            claims_group_name,
-            group_claims,
-            group_selected_claim_to_add,
-            groups,
-            toast,
         }
 
         ConfirmDeleteGroupModal {
