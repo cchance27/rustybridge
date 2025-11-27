@@ -3,7 +3,6 @@ use std::{collections::HashMap, sync::Arc};
 use rb_types::{
     auth::AuthPromptEvent, relay::RelayInfo, ssh::{ForwardingConfig, NewlineMode}
 };
-
 use russh::{ChannelMsg, CryptoVec, client, keys};
 use secrecy::ExposeSecret;
 use serde_json::Value as JsonValue;
