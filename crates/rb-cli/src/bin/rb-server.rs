@@ -12,7 +12,7 @@ use rb_cli::{
 use rb_types::access::PrincipalKind;
 use rb_web::run_web_server;
 use server_core::{
-    add_group, add_relay_host, add_role_claim, add_user, add_user_public_key, add_user_to_group_server, assign_credential, assign_role, create_agent_credential, create_password_credential, create_role, delete_credential, delete_role, delete_user_public_key, grant_relay_access, list_access, list_credentials, list_group_members_server, list_groups, list_hosts, list_options, list_roles, list_user_groups_server, list_user_public_keys, list_users, refresh_target_hostkey, remove_group, remove_role_claim, remove_user, remove_user_from_group_server, revoke_relay_access, revoke_role, rotate_secrets_key, run_ssh_server, set_relay_option, unassign_credential, unset_relay_option
+    add_group, add_relay_host, add_user, add_user_public_key, assign_credential_by_ids, create_agent_credential, create_password_credential, delete_credential_by_id, delete_relay_host_by_id, delete_user_public_key, grant_relay_access_by_id, list_access_by_id, list_credentials, list_group_members_server, list_groups, list_hosts, list_options_by_id, list_user_groups_server, list_user_public_keys, refresh_target_hostkey, remove_group_by_id, remove_user_by_id, revoke_relay_access_by_id, rotate_secrets_key, run_ssh_server, set_relay_option_by_id, unassign_credential_by_id, unset_relay_option_by_id
 };
 use tui_core::{AppAction, AppSession};
 
@@ -75,34 +75,92 @@ async fn main() -> Result<()> {
                 }
             }
             HostsCmd::Delete { name } => {
-                server_core::delete_relay_host(&name).await?;
+                let db = state_store::server_db().await?;
+                let pool = db.into_pool();
+                let host = state_store::fetch_relay_host_by_name(&pool, &name)
+                    .await?
+                    .ok_or_else(|| anyhow!("Relay host '{}' not found", name))?;
+                delete_relay_host_by_id(host.id).await?;
             }
             HostsCmd::Options(sub) => match sub {
                 HostsOptionsCmd::List { name } => {
-                    for (k, v) in list_options(&name).await? {
+                    let db = state_store::server_db().await?;
+                    let pool = db.into_pool();
+                    let host = state_store::fetch_relay_host_by_name(&pool, &name)
+                        .await?
+                        .ok_or_else(|| anyhow!("Relay host '{}' not found", name))?;
+                    for (k, v) in list_options_by_id(host.id).await? {
                         println!("{}={}", k, v);
                     }
                 }
-                HostsOptionsCmd::Set { name, key, value } => set_relay_option(&name, &key, &value, true).await?,
-                HostsOptionsCmd::Unset { name, key } => unset_relay_option(&name, &key).await?,
+                HostsOptionsCmd::Set { name, key, value } => {
+                    let db = state_store::server_db().await?;
+                    let pool = db.into_pool();
+                    let host = state_store::fetch_relay_host_by_name(&pool, &name)
+                        .await?
+                        .ok_or_else(|| anyhow!("Relay host '{}' not found", name))?;
+                    set_relay_option_by_id(host.id, &key, &value, true).await?;
+                }
+                HostsOptionsCmd::Unset { name, key } => {
+                    let db = state_store::server_db().await?;
+                    let pool = db.into_pool();
+                    let host = state_store::fetch_relay_host_by_name(&pool, &name)
+                        .await?
+                        .ok_or_else(|| anyhow!("Relay host '{}' not found", name))?;
+                    unset_relay_option_by_id(host.id, &key).await?;
+                }
             },
             HostsCmd::Access(sub) => match sub {
                 HostsAccessCmd::Grant { name, user, group } => {
+                    let db = state_store::server_db().await?;
+                    let pool = db.into_pool();
+                    let host = state_store::fetch_relay_host_by_name(&pool, &name)
+                        .await?
+                        .ok_or_else(|| anyhow!("Relay host '{}' not found", name))?;
+
                     if let Some(u) = user {
-                        grant_relay_access(&name, PrincipalKind::User, &u).await?
+                        // Verify user exists
+                        let user_id = state_store::fetch_user_id_by_name(&pool, &u)
+                            .await?
+                            .ok_or_else(|| anyhow!("User '{}' not found", u))?;
+                        grant_relay_access_by_id(host.id, PrincipalKind::User, user_id).await?
                     } else if let Some(g) = group {
-                        grant_relay_access(&name, PrincipalKind::Group, &g).await?
+                        // Verify group exists
+                        let group_id = state_store::fetch_group_id_by_name(&pool, &g)
+                            .await?
+                            .ok_or_else(|| anyhow!("Group '{}' not found", g))?;
+                        grant_relay_access_by_id(host.id, PrincipalKind::Group, group_id).await?
                     }
                 }
                 HostsAccessCmd::Revoke { name, user, group } => {
+                    let db = state_store::server_db().await?;
+                    let pool = db.into_pool();
+                    let host = state_store::fetch_relay_host_by_name(&pool, &name)
+                        .await?
+                        .ok_or_else(|| anyhow!("Relay host '{}' not found", name))?;
+
                     if let Some(u) = user {
-                        revoke_relay_access(&name, PrincipalKind::User, &u).await?
+                        // Verify user exists (optional but good practice)
+                        let user_id = state_store::fetch_user_id_by_name(&pool, &u)
+                            .await?
+                            .ok_or_else(|| anyhow!("User '{}' not found", u))?;
+                        revoke_relay_access_by_id(host.id, PrincipalKind::User, user_id).await?
                     } else if let Some(g) = group {
-                        revoke_relay_access(&name, PrincipalKind::Group, &g).await?
+                        // Verify group exists
+                        let group_id = state_store::fetch_group_id_by_name(&pool, &g)
+                            .await?
+                            .ok_or_else(|| anyhow!("Group '{}' not found", g))?;
+                        revoke_relay_access_by_id(host.id, PrincipalKind::Group, group_id).await?
                     }
                 }
                 HostsAccessCmd::List { name } => {
-                    for p in list_access(&name).await? {
+                    let db = state_store::server_db().await?;
+                    let pool = db.into_pool();
+                    let host = state_store::fetch_relay_host_by_name(&pool, &name)
+                        .await?
+                        .ok_or_else(|| anyhow!("Relay host '{}' not found", name))?;
+
+                    for p in list_access_by_id(host.id).await? {
                         let kind = match p.kind {
                             PrincipalKind::User => "user",
                             PrincipalKind::Group => "group",
@@ -114,8 +172,27 @@ async fn main() -> Result<()> {
             },
             HostsCmd::RefreshHostkey { name } => refresh_target_hostkey(&name).await?,
             HostsCmd::Creds(sub) => match sub {
-                HostsCredsCmd::Assign { name, cred_name } => assign_credential(&name, &cred_name).await?,
-                HostsCredsCmd::Unassign { name } => unassign_credential(&name).await?,
+                HostsCredsCmd::Assign { name, cred_name } => {
+                    let db = state_store::server_db().await?;
+                    let pool = db.into_pool();
+                    let host = state_store::fetch_relay_host_by_name(&pool, &name)
+                        .await?
+                        .ok_or_else(|| anyhow!("Relay host '{}' not found", name))?;
+                    let cred = state_store::get_relay_credential_by_name(&pool, &cred_name)
+                        .await?
+                        .ok_or_else(|| anyhow!("Credential '{}' not found", cred_name))?;
+
+                    assign_credential_by_ids(host.id, cred.id).await?
+                }
+                HostsCredsCmd::Unassign { name } => {
+                    let db = state_store::server_db().await?;
+                    let pool = db.into_pool();
+                    let host = state_store::fetch_relay_host_by_name(&pool, &name)
+                        .await?
+                        .ok_or_else(|| anyhow!("Relay host '{}' not found", name))?;
+
+                    unassign_credential_by_id(host.id).await?
+                }
             },
         },
         Some(ServerSubcommand::Users { cmd }) => match cmd {
@@ -160,26 +237,89 @@ async fn main() -> Result<()> {
                 delete_user_public_key(&user, key_id).await?;
                 println!("removed public key {} for {}", key_id, user);
             }
-            UsersCmd::Remove { user } => remove_user(&user).await?,
+            UsersCmd::Remove { user } => {
+                // Convert username to ID
+                let db = state_store::server_db().await?;
+                let pool = db.into_pool();
+                let user_id = state_store::fetch_user_id_by_name(&pool, &user)
+                    .await?
+                    .ok_or_else(|| anyhow!("User '{}' not found", user))?;
+                remove_user_by_id(user_id).await?;
+            }
             UsersCmd::List => {
-                for u in list_users().await? {
+                let db = state_store::server_db().await?;
+                let pool = db.into_pool();
+                for u in state_store::list_usernames(&pool).await? {
                     println!("{}", u);
                 }
             }
-            UsersCmd::AssignRole { user, role } => assign_role(&user, &role).await?,
-            UsersCmd::RevokeRole { user, role } => revoke_role(&user, &role).await?,
+            UsersCmd::AssignRole { user, role } => {
+                let db = state_store::server_db().await?;
+                let pool = db.into_pool();
+                let user_id = state_store::fetch_user_id_by_name(&pool, &user)
+                    .await?
+                    .ok_or_else(|| anyhow!("User '{}' not found", user))?;
+                let role_id = state_store::fetch_role_id_by_name(&pool, &role)
+                    .await?
+                    .ok_or_else(|| anyhow!("Role '{}' not found", role))?;
+
+                state_store::assign_role_to_user_by_ids(&pool, user_id, role_id).await?
+            }
+            UsersCmd::RevokeRole { user, role } => {
+                let db = state_store::server_db().await?;
+                let pool = db.into_pool();
+                let user_id = state_store::fetch_user_id_by_name(&pool, &user)
+                    .await?
+                    .ok_or_else(|| anyhow!("User '{}' not found", user))?;
+                let role_id = state_store::fetch_role_id_by_name(&pool, &role)
+                    .await?
+                    .ok_or_else(|| anyhow!("Role '{}' not found", role))?;
+
+                let mut conn = pool.acquire().await?;
+                state_store::revoke_role_from_user_by_ids(&mut conn, user_id, role_id).await?
+            }
         },
         Some(ServerSubcommand::Groups { cmd }) => match cmd {
             GroupsCmd::Add { group } => add_group(&group).await?,
-            GroupsCmd::Remove { group } => remove_group(&group).await?,
+            GroupsCmd::Remove { group } => {
+                // Convert group name to ID
+                let db = state_store::server_db().await?;
+                let pool = db.into_pool();
+                let group_id = state_store::fetch_group_id_by_name(&pool, &group)
+                    .await?
+                    .ok_or_else(|| anyhow!("Group '{}' not found", group))?;
+                remove_group_by_id(group_id).await?;
+            }
             GroupsCmd::List => {
                 for g in list_groups().await? {
                     println!("{}", g);
                 }
             }
             GroupsCmd::Members { cmd } => match cmd {
-                GroupMembersCmd::Add { group, user } => add_user_to_group_server(&user, &group).await?,
-                GroupMembersCmd::Remove { group, user } => remove_user_from_group_server(&user, &group).await?,
+                GroupMembersCmd::Add { group, user } => {
+                    let db = state_store::server_db().await?;
+                    let pool = db.into_pool();
+                    let group_id = state_store::fetch_group_id_by_name(&pool, &group)
+                        .await?
+                        .ok_or_else(|| anyhow!("Group '{}' not found", group))?;
+                    let user_id = state_store::fetch_user_id_by_name(&pool, &user)
+                        .await?
+                        .ok_or_else(|| anyhow!("User '{}' not found", user))?;
+
+                    state_store::add_user_to_group_by_ids(&pool, user_id, group_id).await?
+                }
+                GroupMembersCmd::Remove { group, user } => {
+                    let db = state_store::server_db().await?;
+                    let pool = db.into_pool();
+                    let group_id = state_store::fetch_group_id_by_name(&pool, &group)
+                        .await?
+                        .ok_or_else(|| anyhow!("Group '{}' not found", group))?;
+                    let user_id = state_store::fetch_user_id_by_name(&pool, &user)
+                        .await?
+                        .ok_or_else(|| anyhow!("User '{}' not found", user))?;
+
+                    state_store::remove_user_from_group_by_ids(&pool, user_id, group_id).await?
+                }
                 GroupMembersCmd::List { group } => {
                     for u in list_group_members_server(&group).await? {
                         println!("{}", u);
@@ -258,8 +398,13 @@ async fn main() -> Result<()> {
                 }
             },
             CredsCmd::Delete { name, force: _ } => {
+                let db = state_store::server_db().await?;
+                let pool = db.into_pool();
+                let cred = state_store::get_relay_credential_by_name(&pool, &name)
+                    .await?
+                    .ok_or_else(|| anyhow!("Credential '{}' not found", name))?;
                 // force not yet used; guard already enforced in server-core
-                delete_credential(&name).await?;
+                delete_credential_by_id(cred.id).await?;
             }
             CredsCmd::List => {
                 for (_id, name, kind, _meta, _username_mode, _password_required) in list_credentials().await? {
@@ -289,15 +434,45 @@ async fn main() -> Result<()> {
             run_tui(app).await?;
         }
         Some(ServerSubcommand::Roles { cmd }) => match cmd {
-            RolesCmd::Create { name, description } => create_role(&name, description.as_deref()).await?,
-            RolesCmd::Delete { name } => delete_role(&name).await?,
+            RolesCmd::Create { name, description } => {
+                let db = state_store::server_db().await?;
+                let pool = db.into_pool();
+                state_store::create_role(&pool, &name, description.as_deref()).await?;
+            }
+            RolesCmd::Delete { name } => {
+                // Convert role name to ID
+                let db = state_store::server_db().await?;
+                let pool = db.into_pool();
+                let role_id = state_store::fetch_role_id_by_name(&pool, &name)
+                    .await?
+                    .ok_or_else(|| anyhow!("Role '{}' not found", name))?;
+                state_store::delete_role_by_id(&pool, role_id).await?;
+            }
             RolesCmd::List => {
-                for r in list_roles().await? {
-                    println!("{} ({})", r.name, r.description.unwrap_or_default());
+                let db = state_store::server_db().await?;
+                let pool = db.into_pool();
+                for r in state_store::list_roles(&pool).await? {
+                    println!("{} - {}", r.name, r.description.unwrap_or_default());
                 }
             }
-            RolesCmd::AddClaim { role, claim } => add_role_claim(&role, &claim).await?,
-            RolesCmd::RemoveClaim { role, claim } => remove_role_claim(&role, &claim).await?,
+            RolesCmd::AddClaim { role, claim } => {
+                let db = state_store::server_db().await?;
+                let pool = db.into_pool();
+                let role_id = state_store::fetch_role_id_by_name(&pool, &role)
+                    .await?
+                    .ok_or_else(|| anyhow!("Role '{}' not found", role))?;
+
+                state_store::add_claim_to_role_by_id(&pool, role_id, &claim).await?
+            }
+            RolesCmd::RemoveClaim { role, claim } => {
+                let db = state_store::server_db().await?;
+                let pool = db.into_pool();
+                let role_id = state_store::fetch_role_id_by_name(&pool, &role)
+                    .await?
+                    .ok_or_else(|| anyhow!("Role '{}' not found", role))?;
+
+                state_store::remove_claim_from_role_by_id(&pool, role_id, &claim).await?
+            }
         },
         Some(ServerSubcommand::Web { cmd }) => match cmd {
             WebCmd::Set { key, value } => {

@@ -15,16 +15,14 @@ async fn ssh_key_credential_store_and_assign() -> Result<()> {
     state_store::migrate_server(&handle).await?;
     let pool: SqlitePool = handle.into_pool();
 
-    sqlx::query("INSERT INTO relay_hosts (name, ip, port) VALUES ('h5', '127.0.0.1', 22)")
-        .execute(&pool)
-        .await?;
+    let host_id = state_store::insert_relay_host(&pool, "h5", "127.0.0.1", 22).await?;
 
     // Generate a throwaway private key in OpenSSH format
     let mut osrng = russh::keys::ssh_key::rand_core::OsRng;
     let key = russh::keys::PrivateKey::random(&mut osrng, russh::keys::Algorithm::Ed25519)?;
     let key_pem = key.to_openssh(russh::keys::ssh_key::LineEnding::LF)?.to_string();
 
-    let _id = server_core::create_ssh_key_credential("credK", Some("userK"), &key_pem, None, None, "fixed").await?;
+    let cred_id = server_core::create_ssh_key_credential("credK", Some("userK"), &key_pem, None, None, "fixed").await?;
     // Ensure stored secret is there
     let row = sqlx::query("SELECT salt, nonce, secret FROM relay_credentials WHERE name='credK'")
         .fetch_one(&pool)
@@ -32,14 +30,13 @@ async fn ssh_key_credential_store_and_assign() -> Result<()> {
     let ct: Vec<u8> = row.get("secret");
     assert!(!ct.is_empty());
 
-    server_core::assign_credential("h5", "credK").await?;
+    server_core::assign_credential_by_ids(host_id, cred_id).await?;
     // Ensure method is stored as plain text "publickey" (not encrypted)
-    let method: String = sqlx::query(
-        "SELECT value FROM relay_host_options WHERE relay_host_id=(SELECT id FROM relay_hosts WHERE name='h5') AND key='auth.method'",
-    )
-    .fetch_one(&pool)
-    .await?
-    .get("value");
+    let method: String = sqlx::query("SELECT value FROM relay_host_options WHERE relay_host_id=? AND key='auth.method'")
+        .bind(host_id)
+        .fetch_one(&pool)
+        .await?
+        .get("value");
     assert_eq!(method, "publickey", "auth.method should be plain text 'publickey'");
 
     Ok(())

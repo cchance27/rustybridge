@@ -1,7 +1,7 @@
 //! User and group management operations.
 
 use rb_types::auth::UserAuthRecord;
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, SqliteExecutor};
 
 use crate::DbResult;
 
@@ -12,19 +12,19 @@ fn current_ts() -> i64 {
         .as_secs() as i64
 }
 
-pub async fn fetch_user_id_by_name(pool: &SqlitePool, username: &str) -> DbResult<Option<i64>> {
-    let row = sqlx::query("SELECT id FROM users WHERE username = ?")
+pub async fn fetch_user_id_by_name(executor: impl SqliteExecutor<'_>, username: &str) -> DbResult<Option<i64>> {
+    let result = sqlx::query_scalar::<_, i64>("SELECT id FROM users WHERE username = ?")
         .bind(username)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await?;
-    Ok(row.map(|r| r.get::<i64, _>("id")))
+    Ok(result)
 }
 
 /// Fetch a user's auth record by ID (id, username, password hash).
-pub async fn fetch_user_auth_record(pool: &SqlitePool, user_id: i64) -> DbResult<Option<UserAuthRecord>> {
+pub async fn fetch_user_auth_record(executor: impl SqliteExecutor<'_>, user_id: i64) -> DbResult<Option<UserAuthRecord>> {
     let row = sqlx::query("SELECT id, username, password_hash FROM users WHERE id = ?")
         .bind(user_id)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await?;
 
     Ok(row.map(|r| UserAuthRecord {
@@ -34,114 +34,131 @@ pub async fn fetch_user_auth_record(pool: &SqlitePool, user_id: i64) -> DbResult
     }))
 }
 
-pub async fn fetch_group_id_by_name(pool: &SqlitePool, name: &str) -> DbResult<Option<i64>> {
+pub async fn fetch_group_id_by_name(executor: impl SqliteExecutor<'_>, name: &str) -> DbResult<Option<i64>> {
     let row = sqlx::query("SELECT id FROM groups WHERE name = ?")
         .bind(name)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await?;
     Ok(row.map(|r| r.get::<i64, _>("id")))
 }
 
-pub async fn create_group(pool: &SqlitePool, name: &str) -> DbResult<i64> {
-    sqlx::query("INSERT INTO groups (name, created_at) VALUES (?, ?)")
+pub async fn create_group(executor: impl SqliteExecutor<'_>, name: &str) -> DbResult<i64> {
+    let result = sqlx::query("INSERT INTO groups (name, created_at) VALUES (?, ?)")
         .bind(name)
         .bind(current_ts())
-        .execute(pool)
+        .execute(executor)
         .await?;
-    let row = sqlx::query("SELECT id FROM groups WHERE name = ?")
-        .bind(name)
-        .fetch_one(pool)
-        .await?;
-    Ok(row.get::<i64, _>("id"))
+    Ok(result.last_insert_rowid())
 }
 
-pub async fn delete_group_by_name(pool: &SqlitePool, name: &str) -> DbResult<()> {
-    sqlx::query("DELETE FROM groups WHERE name = ?").bind(name).execute(pool).await?;
+/// Delete a group by ID (preferred over name-based deletion).
+pub async fn delete_group_by_id(executor: impl SqliteExecutor<'_>, id: i64) -> DbResult<()> {
+    sqlx::query("DELETE FROM groups WHERE id = ?").bind(id).execute(executor).await?;
     Ok(())
 }
 
-pub async fn list_groups(pool: &SqlitePool) -> DbResult<Vec<String>> {
-    let rows = sqlx::query("SELECT name FROM groups ORDER BY name").fetch_all(pool).await?;
+/// Delete a user by ID (avoids race conditions).
+pub async fn delete_user_by_id(executor: impl SqliteExecutor<'_>, id: i64) -> DbResult<()> {
+    sqlx::query("DELETE FROM users WHERE id = ?").bind(id).execute(executor).await?;
+    Ok(())
+}
+
+pub async fn create_user(executor: impl SqliteExecutor<'_>, username: &str, password_hash: &str) -> DbResult<i64> {
+    let result = sqlx::query("INSERT INTO users (username, password_hash) VALUES (?, ?)")
+        .bind(username)
+        .bind(password_hash)
+        .execute(executor)
+        .await?;
+    Ok(result.last_insert_rowid())
+}
+
+pub async fn get_earliest_user_id(executor: impl SqliteExecutor<'_>) -> DbResult<Option<i64>> {
+    let row = sqlx::query_scalar("SELECT id FROM users ORDER BY id ASC LIMIT 1")
+        .fetch_optional(executor)
+        .await?;
+    Ok(row)
+}
+
+/// Update a user's password by ID (preferred over username-based update).
+pub async fn update_user_password_by_id(executor: impl SqliteExecutor<'_>, user_id: i64, password_hash: &str) -> DbResult<()> {
+    sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+        .bind(password_hash)
+        .bind(user_id)
+        .execute(executor)
+        .await?;
+    Ok(())
+}
+
+pub async fn list_groups(executor: impl SqliteExecutor<'_>) -> DbResult<Vec<String>> {
+    let rows = sqlx::query("SELECT name FROM groups ORDER BY name").fetch_all(executor).await?;
     Ok(rows.into_iter().map(|r| r.get::<String, _>("name")).collect())
 }
 
-pub async fn add_user_to_group(pool: &SqlitePool, username: &str, group_name: &str) -> DbResult<()> {
-    let user_id = fetch_user_id_by_name(pool, username).await?.ok_or(crate::DbError::UserNotFound {
-        username: username.to_string(),
-    })?;
-    let group_id = fetch_group_id_by_name(pool, group_name)
-        .await?
-        .ok_or(crate::DbError::GroupNotFound {
-            group: group_name.to_string(),
-        })?;
+/// Update group name by ID
+pub async fn update_group_name(executor: impl SqliteExecutor<'_>, group_id: i64, new_name: &str) -> DbResult<()> {
+    sqlx::query("UPDATE groups SET name = ? WHERE id = ?")
+        .bind(new_name)
+        .bind(group_id)
+        .execute(executor)
+        .await?;
+    Ok(())
+}
+
+/// Add a user to a group using IDs (preferred over name-based operation).
+pub async fn add_user_to_group_by_ids(executor: impl SqliteExecutor<'_>, user_id: i64, group_id: i64) -> DbResult<()> {
     sqlx::query("INSERT OR IGNORE INTO user_groups (user_id, group_id) VALUES (?, ?)")
         .bind(user_id)
         .bind(group_id)
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }
 
-pub async fn remove_user_from_group(pool: &SqlitePool, username: &str, group_name: &str) -> DbResult<()> {
-    let user_id = fetch_user_id_by_name(pool, username).await?.ok_or(crate::DbError::UserNotFound {
-        username: username.to_string(),
-    })?;
-    let group_id = fetch_group_id_by_name(pool, group_name)
-        .await?
-        .ok_or(crate::DbError::GroupNotFound {
-            group: group_name.to_string(),
-        })?;
+/// Remove a user from a group using IDs (preferred over name-based operation).
+pub async fn remove_user_from_group_by_ids(executor: impl SqliteExecutor<'_>, user_id: i64, group_id: i64) -> DbResult<()> {
     sqlx::query("DELETE FROM user_groups WHERE user_id = ? AND group_id = ?")
         .bind(user_id)
         .bind(group_id)
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }
 
-pub async fn list_user_groups(pool: &SqlitePool, username: &str) -> DbResult<Vec<String>> {
-    let rows = sqlx::query(
-        "SELECT g.name FROM groups g JOIN user_groups ug ON g.id = ug.group_id JOIN users u ON u.id = ug.user_id WHERE u.username = ? ORDER BY g.name",
-    )
-    .bind(username)
-    .fetch_all(pool)
-    .await?;
+/// List groups for a user by user ID (preferred over username-based lookup).
+pub async fn list_user_groups_by_id(executor: impl SqliteExecutor<'_>, user_id: i64) -> DbResult<Vec<String>> {
+    let rows = sqlx::query("SELECT g.name FROM groups g JOIN user_groups ug ON g.id = ug.group_id WHERE ug.user_id = ? ORDER BY g.name")
+        .bind(user_id)
+        .fetch_all(executor)
+        .await?;
     Ok(rows.into_iter().map(|r| r.get::<String, _>("name")).collect())
 }
 
-pub async fn list_group_members(pool: &SqlitePool, group_name: &str) -> DbResult<Vec<String>> {
-    let rows = sqlx::query(
-        "SELECT u.username FROM users u JOIN user_groups ug ON u.id = ug.user_id JOIN groups g ON g.id = ug.group_id WHERE g.name = ? ORDER BY u.username",
-    )
-    .bind(group_name)
-    .fetch_all(pool)
-    .await?;
+/// List members of a group by group ID (preferred over name-based lookup).
+pub async fn list_group_members_by_id(executor: impl SqliteExecutor<'_>, group_id: i64) -> DbResult<Vec<String>> {
+    let rows =
+        sqlx::query("SELECT u.username FROM users u JOIN user_groups ug ON u.id = ug.user_id WHERE ug.group_id = ? ORDER BY u.username")
+            .bind(group_id)
+            .fetch_all(executor)
+            .await?;
     Ok(rows.into_iter().map(|r| r.get::<String, _>("username")).collect())
 }
 
-pub async fn fetch_user_password_hash(pool: &SqlitePool, username: &str) -> DbResult<Option<String>> {
+pub async fn fetch_user_password_hash(executor: impl SqliteExecutor<'_>, username: &str) -> DbResult<Option<String>> {
     let row = sqlx::query("SELECT password_hash FROM users WHERE username = ?")
         .bind(username)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await?;
     Ok(row.map(|r| r.get::<String, _>("password_hash")))
 }
 
-pub async fn count_users(pool: &SqlitePool) -> DbResult<i64> {
-    let row = sqlx::query("SELECT COUNT(*) as cnt FROM users").fetch_one(pool).await?;
+pub async fn count_users(executor: impl SqliteExecutor<'_>) -> DbResult<i64> {
+    let row = sqlx::query("SELECT COUNT(*) as cnt FROM users").fetch_one(executor).await?;
     Ok(row.get::<i64, _>("cnt"))
 }
 
-pub async fn list_usernames(pool: &SqlitePool) -> DbResult<Vec<String>> {
-    let rows = sqlx::query("SELECT username FROM users ORDER BY username").fetch_all(pool).await?;
-    Ok(rows.into_iter().map(|r| r.get::<String, _>("username")).collect())
-}
-
-/// Get user ID by username
-pub async fn get_user_id(pool: &SqlitePool, username: &str) -> DbResult<Option<i64>> {
-    let result = sqlx::query_scalar::<_, i64>("SELECT id FROM users WHERE username = ?")
-        .bind(username)
-        .fetch_optional(pool)
+pub async fn list_usernames(executor: impl SqliteExecutor<'_>) -> DbResult<Vec<String>> {
+    let rows = sqlx::query("SELECT username FROM users ORDER BY username")
+        .fetch_all(executor)
         .await?;
-    Ok(result)
+    Ok(rows.into_iter().map(|r| r.get::<String, _>("username")).collect())
 }

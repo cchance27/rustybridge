@@ -215,7 +215,7 @@ impl super::ManagementApp {
                 let instr_p = Paragraph::new(instr).style(Style::default().fg(Color::DarkGray));
                 frame.render_widget(instr_p, chunks[chunks.len() - 1]);
             }
-            PopupState::DeleteCredentialConfirm(name) => {
+            PopupState::DeleteCredentialConfirm(_id, name) => {
                 let block = Block::default()
                     .title("Delete Credential")
                     .borders(Borders::ALL)

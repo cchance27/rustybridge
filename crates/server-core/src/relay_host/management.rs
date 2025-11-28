@@ -67,8 +67,10 @@ async fn add_relay_host_inner(endpoint: &str, name: &str, fetch_hostkey: bool) -
 
     let pool = db.into_pool();
 
+    let mut tx = pool.begin().await.map_err(ServerError::Database)?;
+
     // Check if name already exists
-    if state_store::fetch_relay_host_by_name(&pool, name).await?.is_some() {
+    if state_store::fetch_relay_host_by_name(&mut *tx, name).await?.is_some() {
         return Err(ServerError::already_exists("relay host", name));
     }
 
@@ -76,8 +78,11 @@ async fn add_relay_host_inner(endpoint: &str, name: &str, fetch_hostkey: bool) -
         .bind(name)
         .bind(&ip)
         .bind(port)
-        .execute(&pool)
+        .execute(&mut *tx)
         .await?;
+
+    tx.commit().await.map_err(ServerError::Database)?;
+
     info!(relay_host = name, ip, port, "relay host saved");
 
     // Attempt to fetch host key and optionally store it.
@@ -159,15 +164,11 @@ pub async fn list_hosts() -> ServerResult<Vec<RelayInfo>> {
     Ok(hosts)
 }
 
-pub async fn delete_relay_host(name: &str) -> ServerResult<()> {
+pub async fn delete_relay_host_by_id(id: i64) -> ServerResult<()> {
     let db = state_store::server_db().await?;
-
     let pool = db.into_pool();
-    sqlx::query("DELETE FROM relay_hosts WHERE name = ?")
-        .bind(name)
-        .execute(&pool)
-        .await?;
-    info!(relay_host = name, "relay host deleted");
+    sqlx::query("DELETE FROM relay_hosts WHERE id = ?").bind(id).execute(&pool).await?;
+    info!(relay_host_id = id, "relay host deleted");
     Ok(())
 }
 

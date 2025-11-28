@@ -8,6 +8,7 @@ use crate::{
 #[component]
 pub fn ManageGroupRolesModal(
     roles_modal_open: Signal<bool>,
+    group_id: Signal<i64>,
     group_name: Signal<String>,
     group_roles: Signal<Vec<String>>,
     available_roles: Signal<Vec<String>>,
@@ -17,81 +18,93 @@ pub fn ManageGroupRolesModal(
     toast: Signal<Option<ToastMessage>>,
 ) -> Element {
     let add_role_handler = move |_| {
-        let group = group_name();
-        let role = selected_role_to_add();
+        let group_name_str = group_name();
+        let role_name = selected_role_to_add();
+        let group_id_val = group_id();
 
-        if role.is_empty() {
+        if role_name.is_empty() {
             return;
         }
 
         spawn(async move {
-            match assign_role_to_group(role.clone(), group.clone()).await {
-                Ok(_) => {
-                    // Update local state
-                    let mut current_roles = group_roles();
-                    current_roles.push(role.clone());
-                    group_roles.set(current_roles.clone());
+            // Find role ID from role name
+            if let Some(Ok(all_roles)) = roles.value()().as_ref()
+                && let Some(role) = all_roles.iter().find(|r| r.name == role_name)
+            {
+                match assign_role_to_group(role.id, group_id_val).await {
+                    Ok(_) => {
+                        // Update local state
+                        let mut current_roles = group_roles();
+                        current_roles.push(role_name.clone());
+                        group_roles.set(current_roles.clone());
 
-                    // Update available roles
-                    let mut available = available_roles();
-                    available.retain(|r| r != &role);
-                    available_roles.set(available);
+                        // Update available roles
+                        let mut available = available_roles();
+                        available.retain(|r| r != &role_name);
+                        available_roles.set(available);
 
-                    selected_role_to_add.set(String::new());
+                        selected_role_to_add.set(String::new());
 
-                    toast.set(Some(ToastMessage {
-                        message: format!("Assigned role '{}' to group '{}'", role, group),
-                        toast_type: ToastType::Success,
-                    }));
+                        toast.set(Some(ToastMessage {
+                            message: format!("Assigned role '{}' to group '{}'", role_name, group_name_str),
+                            toast_type: ToastType::Success,
+                        }));
 
-                    // Refresh resources
-                    roles.restart();
-                    groups.restart();
-                }
-                Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to assign role: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                        // Refresh resources
+                        roles.restart();
+                        groups.restart();
+                    }
+                    Err(e) => {
+                        toast.set(Some(ToastMessage {
+                            message: format!("Failed to assign role: {}", e),
+                            toast_type: ToastType::Error,
+                        }));
+                    }
                 }
             }
         });
     };
 
-    let remove_role_handler = move |role: String| {
-        let group = group_name();
+    let remove_role_handler = move |role_name: String| {
+        let group_name_str = group_name();
+        let group_id_val = group_id();
 
         spawn(async move {
-            match revoke_role_from_group(role.clone(), group.clone()).await {
-                Ok(_) => {
-                    // Update local state
-                    let mut current_roles = group_roles();
-                    current_roles.retain(|r| r != &role);
-                    group_roles.set(current_roles.clone());
+            // Find role ID from role name
+            if let Some(Ok(all_roles)) = roles.value()().as_ref()
+                && let Some(role) = all_roles.iter().find(|r| r.name == role_name)
+            {
+                match revoke_role_from_group(role.id, group_id_val).await {
+                    Ok(_) => {
+                        // Update local state
+                        let mut current_roles = group_roles();
+                        current_roles.retain(|r| r != &role_name);
+                        group_roles.set(current_roles.clone());
 
-                    // Update available roles
-                    if let Some(Ok(all_roles)) = roles.value()().as_ref() {
-                        let available: Vec<String> = all_roles
-                            .iter()
-                            .map(|r| r.name.clone())
-                            .filter(|r| !current_roles.contains(r))
-                            .collect();
-                        available_roles.set(available);
+                        // Update available roles
+                        if let Some(Ok(all_roles)) = roles.value()().as_ref() {
+                            let available: Vec<String> = all_roles
+                                .iter()
+                                .map(|r| r.name.clone())
+                                .filter(|r| !current_roles.contains(r))
+                                .collect();
+                            available_roles.set(available);
+                        }
+
+                        toast.set(Some(ToastMessage {
+                            message: format!("Removed role '{}' from group '{}'", role_name, group_name_str),
+                            toast_type: ToastType::Success,
+                        }));
+
+                        roles.restart();
+                        groups.restart();
                     }
-
-                    toast.set(Some(ToastMessage {
-                        message: format!("Removed role '{}' from group '{}'", role, group),
-                        toast_type: ToastType::Success,
-                    }));
-
-                    roles.restart();
-                    groups.restart();
-                }
-                Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to remove role: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    Err(e) => {
+                        toast.set(Some(ToastMessage {
+                            message: format!("Failed to remove role: {}", e),
+                            toast_type: ToastType::Error,
+                        }));
+                    }
                 }
             }
         });

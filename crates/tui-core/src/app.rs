@@ -86,12 +86,12 @@ pub enum AppAction {
     DeleteRelay(i64),
     /// Add a new credential
     AddCredential(crate::apps::management::CredentialSpec),
-    /// Delete a credential by name
-    DeleteCredential(String),
-    /// Unassign a shared credential from a relay host by hostname
-    UnassignCredential(String),
-    /// Assign a shared credential to a relay host by hostname
-    AssignCredential { host: String, cred_name: String },
+    /// Delete a credential by ID
+    DeleteCredential(i64),
+    /// Unassign a shared credential from a relay host by host ID
+    UnassignCredential(i64),
+    /// Assign a shared credential to a relay host by IDs
+    AssignCredential { host_id: i64, cred_id: i64 },
     /// Fetch the current host key from the selected relay host (no store yet)
     FetchHostkey { id: i64, name: String },
     /// Store the last fetched host key for the selected relay host (replace if exists)

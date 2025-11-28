@@ -130,7 +130,7 @@ pub async fn update_credential(id: i64, req: UpdateCredentialRequest) -> Result<
     ensure_credential_claim(&auth, ClaimLevel::Edit)?;
 
     // Fetch existing credential to check if password_required is changing
-    let existing = state_store::get_relay_credential_by_id(&pool, id)
+    let existing = state_store::get_relay_credential_by_id(&*pool, id)
         .await?
         .ok_or_else(|| anyhow!("Credential not found"))?;
 

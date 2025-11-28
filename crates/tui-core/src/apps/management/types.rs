@@ -197,7 +197,7 @@ pub enum PopupState {
     EditHost(HostForm, usize, i64), // i64 is the ID of the host being edited
     DeleteConfirm(i64, String),     // ID and Name of host to delete
     AddCredential(Box<CredentialForm>, usize),
-    DeleteCredentialConfirm(String),
+    DeleteCredentialConfirm(i64, String),
     ClearCredentialConfirm(i64, String, String), // host_id, host_name, cred_name
     SetCredential(i64, String, crate::widgets::Menu<CredentialItem>), // host_id, host_name, menu of creds
     HostkeyReview(HostkeyReview),                // pending hostkey review

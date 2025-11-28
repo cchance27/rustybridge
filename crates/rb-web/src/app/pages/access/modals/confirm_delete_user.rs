@@ -7,10 +7,12 @@ use crate::components::Modal;
 /// Delete Confirmation Modal for Users
 #[component]
 pub fn ConfirmDeleteUserModal(
+    user_id: Signal<i64>,
     username: Signal<String>,
     delete_confirm_open: Signal<bool>,
     handle_delete: EventHandler<MouseEvent>,
 ) -> Element {
+    let _ = user_id; // Not displayed, but kept for consistency
     rsx! {
         Modal {
             open: delete_confirm_open(),

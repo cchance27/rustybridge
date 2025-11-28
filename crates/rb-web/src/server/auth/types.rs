@@ -29,7 +29,8 @@ impl Authentication<WebUser, i64, SqlitePool> for WebUser {
             .await?
             .ok_or_else(|| anyhow::anyhow!("User not found"))?;
 
-        let claims = state_store::get_user_claims(pool, &user.username).await.unwrap_or_default();
+        let mut conn = pool.acquire().await?;
+        let claims = state_store::get_user_claims_by_id(&mut conn, userid).await.unwrap_or_default();
 
         // Fetch OIDC profile info if available (prioritize most recently updated link if multiple)
         let oidc_profile = state_store::get_latest_oidc_profile(pool, userid).await?;

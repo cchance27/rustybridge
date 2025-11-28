@@ -45,6 +45,9 @@ pub enum DbError {
     #[error("invalid sqlite path: {0}")]
     InvalidPath(PathBuf),
 
+    #[error("unsupported principal kind: {0}")]
+    UnsupportedPrincipalKind(String),
+
     /// Failed to create database directory
     #[error("failed to create directory {path}: {source}")]
     DirectoryCreationFailed {
@@ -68,6 +71,10 @@ pub enum DbError {
     /// Invalid environment variable value
     #[error("invalid value for {var}: {message}")]
     InvalidEnvVar { var: String, message: String },
+
+    /// Invalid operation (e.g., violates business constraints)
+    #[error("invalid operation '{operation}': {reason}")]
+    InvalidOperation { operation: String, reason: String },
 
     /// Invalid principal kind for ACL operations
     #[error("invalid principal kind: {kind}")]

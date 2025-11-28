@@ -48,6 +48,7 @@ impl Display for PrincipalKind {
 pub struct RelayAclPrincipal {
     /// Principal category: user, group, or other.
     pub kind: PrincipalKind,
+    pub id: i64,
     /// Principal identifier (username or group name).
     pub name: String,
 }
@@ -57,6 +58,7 @@ pub struct RelayAclPrincipal {
 pub struct RelayAccessPrincipal {
     /// Principal category: user, group, or other.
     pub kind: PrincipalKind,
+    pub id: i64,
     /// Principal identifier (username or group name).
     pub name: String,
 }
@@ -89,7 +91,7 @@ pub struct GrantAccessRequest {
     /// Principal kind string: "user" or "group".
     pub principal_kind: String,
     /// Principal identifier (username or group name).
-    pub principal_name: String,
+    pub principal_id: i64,
 }
 
 /// Role/group claims listing for web UIs.

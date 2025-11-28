@@ -17,7 +17,7 @@ pub async fn list_relay_access(relay_id: i64) -> Result<Vec<RelayAccessPrincipal
     ensure_claim(&auth, &ClaimType::Relays(ClaimLevel::View)).map_err(|e| ServerFnError::new(e.to_string()))?;
     use state_store::fetch_relay_access_principals;
 
-    let principals = fetch_relay_access_principals(&pool, relay_id)
+    let principals = fetch_relay_access_principals(&*pool, relay_id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
@@ -25,6 +25,7 @@ pub async fn list_relay_access(relay_id: i64) -> Result<Vec<RelayAccessPrincipal
         .into_iter()
         .map(|p| RelayAccessPrincipal {
             kind: p.kind,
+            id: p.id,
             name: p.name,
         })
         .collect())
@@ -38,9 +39,17 @@ pub async fn grant_relay_access(relay_id: i64, req: GrantAccessRequest) -> Resul
     ensure_claim(&auth, &ClaimType::Relays(ClaimLevel::Edit)).map_err(|e| ServerFnError::new(e.to_string()))?;
     use state_store::grant_relay_access_principal;
 
-    let Extension(pool) = FullstackContext::extract().await.map_err(|e| ServerFnError::new(e.to_string()))?;
+    let Extension(pool): axum::Extension<sqlx::SqlitePool> =
+        FullstackContext::extract().await.map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    grant_relay_access_principal(&pool, relay_id, &req.principal_kind, &req.principal_name)
+    // Parse kind
+    let kind = req
+        .principal_kind
+        .parse::<PrincipalKind>()
+        .map_err(|_| ServerFnError::new("Invalid principal kind"))?;
+    let principal_id = req.principal_id;
+
+    grant_relay_access_principal(&pool, relay_id, kind.as_str(), principal_id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
@@ -48,16 +57,17 @@ pub async fn grant_relay_access(relay_id: i64, req: GrantAccessRequest) -> Resul
 }
 
 #[delete(
-    "/api/relays/{relay_id}/access/{kind}/{name}",
+    "/api/relays/{relay_id}/access/{kind}/{principal_id}",
     auth: WebAuthSession
 )]
-pub async fn revoke_relay_access(relay_id: i64, kind: PrincipalKind, name: String) -> Result<(), ServerFnError> {
+pub async fn revoke_relay_access(relay_id: i64, kind: PrincipalKind, principal_id: i64) -> Result<(), ServerFnError> {
     ensure_claim(&auth, &ClaimType::Relays(ClaimLevel::Edit)).map_err(|e| ServerFnError::new(e.to_string()))?;
     use state_store::revoke_relay_access_principal;
 
-    let Extension(pool) = FullstackContext::extract().await.map_err(|e| ServerFnError::new(e.to_string()))?;
+    let Extension(pool): axum::Extension<sqlx::SqlitePool> =
+        FullstackContext::extract().await.map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    revoke_relay_access_principal(&pool, relay_id, &kind, &name)
+    revoke_relay_access_principal(&pool, relay_id, &kind, principal_id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 

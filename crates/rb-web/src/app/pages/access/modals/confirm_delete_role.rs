@@ -5,11 +5,13 @@ use crate::components::Modal;
 /// Delete Confirmation Modal for Roles
 #[component]
 pub fn ConfirmDeleteRoleModal(
+    role_id: Signal<i64>,
     role_name: Signal<String>,
     delete_confirm_open: Signal<bool>,
     handle_delete: EventHandler<MouseEvent>,
 ) -> Element {
     let is_super_admin = role_name() == "Super Admin";
+    let _ = role_id; // Not displayed
 
     rsx! {
         Modal {

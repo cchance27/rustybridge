@@ -21,29 +21,25 @@ async fn rotation_with_base64_master_keys() -> Result<()> {
     state_store::migrate_server(&handle).await?;
     let pool: SqlitePool = handle.into_pool();
 
-    sqlx::query("INSERT INTO relay_hosts (name, ip, port) VALUES ('b64h', '127.0.0.1', 22)")
-        .execute(&pool)
-        .await?;
-    server_core::set_relay_option("b64h", "secret", "val", true).await?;
+    let host_id = state_store::insert_relay_host(&pool, "b64h", "127.0.0.1", 22).await?;
+    server_core::set_relay_option_by_id(host_id, "secret", "val", true).await?;
 
-    let before: String = sqlx::query(
-        "SELECT value FROM relay_host_options WHERE relay_host_id=(SELECT id FROM relay_hosts WHERE name='b64h') AND key='secret'",
-    )
-    .fetch_one(&pool)
-    .await?
-    .get("value");
+    let before: String = sqlx::query("SELECT value FROM relay_host_options WHERE relay_host_id=? AND key='secret'")
+        .bind(host_id)
+        .fetch_one(&pool)
+        .await?
+        .get("value");
 
     // Rotate to a new base64 key
     let new_key = [0x22u8; 32];
     let new_b64 = base64::engine::general_purpose::STANDARD.encode(new_key);
     server_core::rotate_secrets_key(&old_b64, &new_b64).await?;
 
-    let after: String = sqlx::query(
-        "SELECT value FROM relay_host_options WHERE relay_host_id=(SELECT id FROM relay_hosts WHERE name='b64h') AND key='secret'",
-    )
-    .fetch_one(&pool)
-    .await?
-    .get("value");
+    let after: String = sqlx::query("SELECT value FROM relay_host_options WHERE relay_host_id=? AND key='secret'")
+        .bind(host_id)
+        .fetch_one(&pool)
+        .await?
+        .get("value");
     assert_ne!(before, after);
     let pt = server_core::secrets::decrypt_string_with(&after, &new_key).unwrap();
     assert_eq!(&**pt.expose_secret(), "val");

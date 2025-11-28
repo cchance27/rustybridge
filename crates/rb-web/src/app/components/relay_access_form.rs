@@ -12,21 +12,25 @@ pub fn RelayAccessForm(relay_id: i64, on_change: Option<EventHandler<()>>) -> El
     let users = use_resource(|| async move { list_users().await });
     let groups = use_resource(|| async move { list_groups().await });
 
-    // State for adding new principals
+    // State for adding new principals (store IDs as strings for select values)
     let mut selected_user = use_signal(String::new);
     let mut selected_group = use_signal(String::new);
 
     // Add user to access list
     let add_user = move |_| {
-        let user = selected_user();
-        if user.is_empty() {
+        let user_id_str = selected_user();
+        if user_id_str.is_empty() {
             return;
         }
 
         spawn(async move {
+            let parsed_id = user_id_str.parse::<i64>().ok();
+            let Some(user_id) = parsed_id else {
+                return;
+            };
             let req = GrantAccessRequest {
                 principal_kind: "user".to_string(),
-                principal_name: user.clone(),
+                principal_id: user_id,
             };
 
             if grant_relay_access(relay_id, req).await.is_ok() {
@@ -41,15 +45,19 @@ pub fn RelayAccessForm(relay_id: i64, on_change: Option<EventHandler<()>>) -> El
 
     // Add group to access list
     let add_group = move |_| {
-        let group = selected_group();
-        if group.is_empty() {
+        let group_id_str = selected_group();
+        if group_id_str.is_empty() {
             return;
         }
 
         spawn(async move {
+            let parsed_id = group_id_str.parse::<i64>().ok();
+            let Some(group_id) = parsed_id else {
+                return;
+            };
             let req = GrantAccessRequest {
                 principal_kind: "group".to_string(),
-                principal_name: group.clone(),
+                principal_id: group_id,
             };
 
             if grant_relay_access(relay_id, req).await.is_ok() {
@@ -63,9 +71,9 @@ pub fn RelayAccessForm(relay_id: i64, on_change: Option<EventHandler<()>>) -> El
     };
 
     // Remove principal from access list
-    let remove_principal = move |kind: PrincipalKind, name: String| {
+    let remove_principal = move |kind: PrincipalKind, id: i64| {
         spawn(async move {
-            if revoke_relay_access(relay_id, kind, name).await.is_ok() {
+            if revoke_relay_access(relay_id, kind, id).await.is_ok() {
                 access_principals.restart();
                 if let Some(handler) = on_change {
                     handler.call(());
@@ -98,8 +106,8 @@ pub fn RelayAccessForm(relay_id: i64, on_change: Option<EventHandler<()>>) -> El
                                                     class: "btn btn-xs btn-ghost",
                                                     onclick: {
                                                         let kind = principal.kind;
-                                                        let name = principal.name.clone();
-                                                        move |_| remove_principal(kind, name.clone())
+                                                        let id = principal.id;
+                                                        move |_| remove_principal(kind, id)
                                                     },
                                                     "✕"
                                                 }
@@ -113,7 +121,7 @@ pub fn RelayAccessForm(relay_id: i64, on_change: Option<EventHandler<()>>) -> El
                                     Some(Ok(user_list)) => {
                                         let available_users: Vec<_> = user_list
                                             .iter()
-                                            .filter(|u| !user_principals.iter().any(|p| p.name == u.username))
+                                            .filter(|u| !user_principals.iter().any(|p| p.id == u.id))
                                             .collect();
 
                                         rsx! {
@@ -124,7 +132,7 @@ pub fn RelayAccessForm(relay_id: i64, on_change: Option<EventHandler<()>>) -> El
                                                     onchange: move |e| selected_user.set(e.value()),
                                                     option { value: "", "Select user..." }
                                                     for user in available_users {
-                                                        option { value: "{user.username}", "{user.username}" }
+                                                        option { value: "{user.id}", "{user.username}" }
                                                     }
                                                 }
                                                 button {
@@ -154,8 +162,8 @@ pub fn RelayAccessForm(relay_id: i64, on_change: Option<EventHandler<()>>) -> El
                                                     class: "btn btn-xs btn-ghost",
                                                     onclick: {
                                                         let kind = principal.kind;
-                                                        let name = principal.name.clone();
-                                                        move |_| remove_principal(kind, name.clone())
+                                                        let id = principal.id;
+                                                        move |_| remove_principal(kind, id)
                                                     },
                                                     "✕"
                                                 }
@@ -169,7 +177,7 @@ pub fn RelayAccessForm(relay_id: i64, on_change: Option<EventHandler<()>>) -> El
                                     Some(Ok(group_list)) => {
                                         let available_groups: Vec<_> = group_list
                                             .iter()
-                                            .filter(|g| !group_principals.iter().any(|p| p.name == g.name))
+                                            .filter(|g| !group_principals.iter().any(|p| p.id == g.id))
                                             .collect();
 
                                         rsx! {
@@ -180,7 +188,7 @@ pub fn RelayAccessForm(relay_id: i64, on_change: Option<EventHandler<()>>) -> El
                                                     onchange: move |e| selected_group.set(e.value()),
                                                     option { value: "", "Select group..." }
                                                     for group in available_groups {
-                                                        option { value: "{group.name}", "{group.name}" }
+                                                        option { value: "{group.id}", "{group.name}" }
                                                     }
                                                 }
                                                 button {

@@ -122,13 +122,13 @@ impl super::ManagementApp {
                 CFAction::Render => Ok(AppAction::Render),
                 CFAction::Continue => Ok(AppAction::Continue),
             },
-            PopupState::DeleteCredentialConfirm(name) => {
+            PopupState::DeleteCredentialConfirm(id, _name) => {
                 for &b in input {
                     match b {
                         b'y' | b'Y' | b'\r' | b'\n' => {
-                            let n = name.clone();
+                            let id_val = *id;
                             self.close_popup();
-                            return Ok(AppAction::DeleteCredential(n));
+                            return Ok(AppAction::DeleteCredential(id_val));
                         }
                         b'n' | b'N' | 0x1b => {
                             self.close_popup();
@@ -139,7 +139,7 @@ impl super::ManagementApp {
                 }
                 Ok(AppAction::Continue)
             }
-            PopupState::SetCredential(_hid, host, menu) => {
+            PopupState::SetCredential(hid, _host, menu) => {
                 // Navigate menu and submit
                 for &byte in input {
                     match byte {
@@ -161,8 +161,8 @@ impl super::ManagementApp {
                         b'\r' | b'\n' => {
                             if let Some(sel) = menu.selected_item() {
                                 let action = AppAction::AssignCredential {
-                                    host: host.clone(),
-                                    cred_name: sel.name.clone(),
+                                    host_id: *hid,
+                                    cred_id: sel.id,
                                 };
                                 self.close_popup();
                                 return Ok(action);
@@ -189,13 +189,13 @@ impl super::ManagementApp {
                 }
                 Ok(AppAction::Continue)
             }
-            PopupState::ClearCredentialConfirm(_id, host, _cred) => {
+            PopupState::ClearCredentialConfirm(id, _host, _cred) => {
                 for &b in input {
                     match b {
                         b'y' | b'Y' | b'\r' | b'\n' => {
-                            let name = host.clone();
+                            let id_val = *id;
                             self.close_popup();
-                            return Ok(AppAction::UnassignCredential(name));
+                            return Ok(AppAction::UnassignCredential(id_val));
                         }
                         b'n' | b'N' | 0x1b => {
                             self.close_popup();

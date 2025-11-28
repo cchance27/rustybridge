@@ -8,6 +8,7 @@ use crate::{
 #[component]
 pub fn ManageRoleGroupsModal(
     groups_modal_open: Signal<bool>,
+    role_id: Signal<i64>,
     groups_role_name: Signal<String>,
     role_groups: Signal<Vec<String>>,
     available_groups: Signal<Vec<String>>,
@@ -17,80 +18,92 @@ pub fn ManageRoleGroupsModal(
     toast: Signal<Option<ToastMessage>>,
 ) -> Element {
     let add_group_handler = move |_| {
-        let role = groups_role_name();
-        let group = selected_group_to_add();
+        let role_name = groups_role_name();
+        let group_name = selected_group_to_add();
+        let role_id_val = role_id();
 
-        if group.is_empty() {
+        if group_name.is_empty() {
             return;
         }
 
         spawn(async move {
-            match assign_role_to_group(role.clone(), group.clone()).await {
-                Ok(_) => {
-                    // Reload role groups
-                    if let Ok(role_group_list) = list_role_groups(role.clone()).await {
-                        role_groups.set(role_group_list.clone());
+            // Find group ID from group name
+            if let Some(Ok(all_groups)) = groups.value()().as_ref()
+                && let Some(group) = all_groups.iter().find(|g| g.name == group_name)
+            {
+                match assign_role_to_group(role_id_val, group.id).await {
+                    Ok(_) => {
+                        // Reload role groups
+                        if let Ok(role_group_list) = list_role_groups(role_id_val).await {
+                            role_groups.set(role_group_list.clone());
 
-                        // Update available groups
-                        if let Ok(all_groups) = list_groups().await {
-                            let available: Vec<String> = all_groups
-                                .into_iter()
-                                .map(|g| g.name)
-                                .filter(|g| !role_group_list.contains(g))
-                                .collect();
-                            available_groups.set(available);
+                            // Update available groups
+                            if let Ok(all_groups_data) = list_groups().await {
+                                let available: Vec<String> = all_groups_data
+                                    .into_iter()
+                                    .map(|g| g.name)
+                                    .filter(|g| !role_group_list.contains(g))
+                                    .collect();
+                                available_groups.set(available);
+                            }
                         }
+                        selected_group_to_add.set(String::new());
+                        toast.set(Some(ToastMessage {
+                            message: format!("Added group '{}' to role '{}'", group_name, role_name),
+                            toast_type: ToastType::Success,
+                        }));
+                        roles.restart();
+                        groups.restart();
                     }
-                    selected_group_to_add.set(String::new());
-                    toast.set(Some(ToastMessage {
-                        message: format!("Added group '{}' to role '{}'", group, role),
-                        toast_type: ToastType::Success,
-                    }));
-                    roles.restart();
-                    groups.restart();
-                }
-                Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to add group to role: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    Err(e) => {
+                        toast.set(Some(ToastMessage {
+                            message: format!("Failed to add group to role: {}", e),
+                            toast_type: ToastType::Error,
+                        }));
+                    }
                 }
             }
         });
     };
 
-    let remove_group_handler = move |group: String| {
-        let role = groups_role_name();
+    let remove_group_handler = move |group_name: String| {
+        let role_name = groups_role_name();
+        let role_id_val = role_id();
 
         spawn(async move {
-            match revoke_role_from_group(role.clone(), group.clone()).await {
-                Ok(_) => {
-                    // Reload role groups
-                    if let Ok(role_group_list) = list_role_groups(role.clone()).await {
-                        role_groups.set(role_group_list.clone());
+            // Find group ID from group name
+            if let Some(Ok(all_groups)) = groups.value()().as_ref()
+                && let Some(group) = all_groups.iter().find(|g| g.name == group_name)
+            {
+                match revoke_role_from_group(role_id_val, group.id).await {
+                    Ok(_) => {
+                        // Reload role groups
+                        if let Ok(role_group_list) = list_role_groups(role_id_val).await {
+                            role_groups.set(role_group_list.clone());
 
-                        // Update available groups
-                        if let Ok(all_groups) = list_groups().await {
-                            let available: Vec<String> = all_groups
-                                .into_iter()
-                                .map(|g| g.name)
-                                .filter(|g| !role_group_list.contains(g))
-                                .collect();
-                            available_groups.set(available);
+                            // Update available groups
+                            if let Ok(all_groups_data) = list_groups().await {
+                                let available: Vec<String> = all_groups_data
+                                    .into_iter()
+                                    .map(|g| g.name)
+                                    .filter(|g| !role_group_list.contains(g))
+                                    .collect();
+                                available_groups.set(available);
+                            }
                         }
+                        toast.set(Some(ToastMessage {
+                            message: format!("Removed group '{}' from role '{}'", group_name, role_name),
+                            toast_type: ToastType::Success,
+                        }));
+                        roles.restart();
+                        groups.restart();
                     }
-                    toast.set(Some(ToastMessage {
-                        message: format!("Removed group '{}' from role '{}'", group, role),
-                        toast_type: ToastType::Success,
-                    }));
-                    roles.restart();
-                    groups.restart();
-                }
-                Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to remove group from role: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    Err(e) => {
+                        toast.set(Some(ToastMessage {
+                            message: format!("Failed to remove group from role: {}", e),
+                            toast_type: ToastType::Error,
+                        }));
+                    }
                 }
             }
         });

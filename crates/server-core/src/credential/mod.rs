@@ -239,65 +239,17 @@ pub async fn update_agent_credential(
     Ok(())
 }
 
-/// Delete a credential by name
-pub async fn delete_credential(name: &str) -> ServerResult<()> {
-    let db = state_store::server_db().await?;
-
-    let pool = db.into_pool();
-    // Resolve credential id
-    let cred = state_store::get_relay_credential_by_name(&pool, name)
-        .await?
-        .ok_or_else(|| ServerError::not_found("credential", name))?;
-    // Guard: prevent deletion if in use by any relay host
-    let rows = sqlx::query("SELECT relay_host_id, value FROM relay_host_options WHERE key = 'auth.id'")
-        .fetch_all(&pool)
-        .await?;
-    let target_id_str = cred.id.to_string();
-    for row in rows {
-        let value: String = row.get("value");
-        let (resolved, is_legacy) = if crate::secrets::is_encrypted_marker(&value) {
-            match crate::secrets::decrypt_string_if_encrypted(&value) {
-                Ok((s, legacy)) => (s, legacy),
-                Err(_) => continue,
-            }
-        } else {
-            (SecretBoxedString::new(Box::new(value)), false)
-        };
-
-        if is_legacy {
-            warn!("Upgrading legacy v1 secret for relay option 'auth.id' (credential check)");
-            let s: String = resolved.expose_secret().to_string();
-            let b: Box<String> = Box::new(s);
-            let ss: SecretBoxedString = SecretBoxedString::new(b);
-            if let Ok(new_enc) = crate::secrets::encrypt_string(ss) {
-                let _ = sqlx::query("UPDATE relay_host_options SET value = ? WHERE relay_host_id = ? AND key = 'auth.id'")
-                    .bind(new_enc)
-                    .bind(row.get::<i64, _>("relay_host_id"))
-                    .execute(&pool)
-                    .await;
-            }
-        }
-        if resolved.expose_secret() == &target_id_str {
-            return Err(ServerError::not_permitted(format!(
-                "Cannot delete credential '{}': credential is assigned to at least one host; unassign it first (--unassign-credential --hostname <HOST>)",
-                name
-            )));
-        }
-    }
-    state_store::delete_relay_credential_by_name(&pool, name).await?;
-    info!(credential = name, "credential deleted");
-    Ok(())
-}
-
 /// Delete a credential by ID
 pub async fn delete_credential_by_id(id: i64) -> ServerResult<()> {
     let db = state_store::server_db().await?;
 
     let pool = db.into_pool();
 
+    let mut tx = pool.begin().await.map_err(ServerError::Database)?;
+
     // Guard: prevent deletion if in use by any relay host
     let rows = sqlx::query("SELECT relay_host_id, value FROM relay_host_options WHERE key = 'auth.id'")
-        .fetch_all(&pool)
+        .fetch_all(&mut *tx)
         .await?;
     let target_id_str = id.to_string();
     for row in rows {
@@ -320,22 +272,25 @@ pub async fn delete_credential_by_id(id: i64) -> ServerResult<()> {
                 let _ = sqlx::query("UPDATE relay_host_options SET value = ? WHERE relay_host_id = ? AND key = 'auth.id'")
                     .bind(new_enc)
                     .bind(row.get::<i64, _>("relay_host_id"))
-                    .execute(&pool)
+                    .execute(&mut *tx)
                     .await;
             }
         }
         if resolved.expose_secret() == &target_id_str {
             let host_id: i64 = row.get("relay_host_id");
-            let host = state_store::fetch_relay_host_by_id(&pool, host_id).await?;
+            let host = state_store::fetch_relay_host_by_id(&mut *tx, host_id).await?;
             let host_name = host.map(|h| h.name).unwrap_or_else(|| "unknown".to_string());
-            return Err(ServerError::not_permitted(format!(
+            return Err(ServerError::Internal(format!(
                 "Cannot delete credential: credential is in use by relay host '{}'",
                 host_name
             )));
         }
     }
 
-    state_store::delete_relay_credential_by_id(&pool, id).await?;
+    state_store::delete_relay_credential_by_id(&mut *tx, id).await?;
+
+    tx.commit().await.map_err(ServerError::Database)?;
+
     info!(id, "credential deleted");
     Ok(())
 }
@@ -411,19 +366,14 @@ pub async fn list_credentials_with_assignments() -> ServerResult<Vec<(i64, Strin
     Ok(result)
 }
 
-/// Assign a credential to a host
-pub async fn assign_credential(hostname: &str, cred_name: &str) -> ServerResult<()> {
+/// Assign a credential to a host by IDs
+pub async fn assign_credential_by_ids(host_id: i64, cred_id: i64) -> ServerResult<()> {
     let db = state_store::server_db().await?;
-
     let pool = db.into_pool();
-    let cred = state_store::get_relay_credential_by_name(&pool, cred_name)
-        .await?
-        .ok_or_else(|| ServerError::not_found("credential", cred_name))?;
 
-    // Fetch host to get ID for clearing auth
-    let host = state_store::fetch_relay_host_by_name(&pool, hostname)
+    let cred = state_store::get_relay_credential_by_id(&pool, cred_id)
         .await?
-        .ok_or_else(|| ServerError::not_found("relay host", hostname))?;
+        .ok_or_else(|| ServerError::not_found("credential", cred_id.to_string()))?;
 
     // Normalize: map ssh_key-like kinds to publickey for relay auth.method
     let method_plain: &str = match cred.kind.as_str() {
@@ -431,34 +381,35 @@ pub async fn assign_credential(hostname: &str, cred_name: &str) -> ServerResult<
         other => other,
     };
 
+    let mut tx = pool.begin().await.map_err(ServerError::Database)?;
+
     // Clear any existing auth first to ensure clean state
     sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key LIKE 'auth.%'")
-        .bind(host.id)
-        .execute(&pool)
+        .bind(host_id)
+        .execute(&mut *tx)
         .await?;
 
-    // Use set_relay_option to benefit from automatic security determination
+    // Use set_relay_option_by_id to benefit from automatic security determination
     // These will be stored as plain text per our security logic
-    crate::set_relay_option(hostname, "auth.source", "credential", true).await?;
-    crate::set_relay_option(hostname, "auth.id", &cred.id.to_string(), true).await?;
-    crate::set_relay_option(hostname, "auth.method", method_plain, true).await?;
+    crate::relay_host::options::set_relay_option_internal(&mut *tx, host_id, "auth.source", "credential", true).await?;
+    crate::relay_host::options::set_relay_option_internal(&mut *tx, host_id, "auth.id", &cred.id.to_string(), true).await?;
+    crate::relay_host::options::set_relay_option_internal(&mut *tx, host_id, "auth.method", method_plain, true).await?;
 
-    info!(relay_host = hostname, credential = cred_name, "credential assigned to host");
+    tx.commit().await.map_err(ServerError::Database)?;
+
+    info!(relay_host_id = host_id, credential_id = cred_id, "credential assigned to host");
     Ok(())
 }
 
-/// Unassign a credential from a host
-pub async fn unassign_credential(hostname: &str) -> ServerResult<()> {
+/// Unassign a credential from a host by ID
+pub async fn unassign_credential_by_id(host_id: i64) -> ServerResult<()> {
     let db = state_store::server_db().await?;
-
     let pool = db.into_pool();
-    let host = state_store::fetch_relay_host_by_name(&pool, hostname)
-        .await?
-        .ok_or_else(|| ServerError::not_found("relay host", hostname))?;
+
     sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key LIKE 'auth.%'")
-        .bind(host.id)
+        .bind(host_id)
         .execute(&pool)
         .await?;
-    info!(relay_host = hostname, "credential unassigned from host");
+    info!(relay_host_id = host_id, "credential unassigned from host");
     Ok(())
 }

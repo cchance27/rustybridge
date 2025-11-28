@@ -15,7 +15,7 @@ use tui_core::{
 };
 
 use crate::{
-    error::{ServerError, ServerResult}, secrets::{SecretBoxedString, decrypt_string_if_encrypted, encrypt_string, is_encrypted_marker}, set_relay_option
+    error::{ServerError, ServerResult}, secrets::{SecretBoxedString, decrypt_string_if_encrypted, encrypt_string, is_encrypted_marker}
 };
 
 /// Create a ManagementApp with all relay hosts loaded from the database (admin view)
@@ -268,9 +268,9 @@ pub async fn handle_management_action(action: tui_core::AppAction) -> ServerResu
                 }
             }
         }
-        AppAction::DeleteCredential(name) => super::credential::delete_credential(&name).await?,
-        AppAction::UnassignCredential(hostname) => super::credential::unassign_credential(&hostname).await?,
-        AppAction::AssignCredential { host, cred_name } => super::credential::assign_credential(&host, &cred_name).await?,
+        AppAction::DeleteCredential(id) => super::credential::delete_credential_by_id(id).await?,
+        AppAction::UnassignCredential(host_id) => super::credential::unassign_credential_by_id(host_id).await?,
+        AppAction::AssignCredential { host_id, cred_id } => super::credential::assign_credential_by_ids(host_id, cred_id).await?,
         AppAction::FetchHostkey { id, name } => {
             info!(relay = %name, relay_id = id, "refreshing relay host key");
             // Fetch and stage hostkey for review
@@ -417,14 +417,14 @@ pub fn format_action_error(action: &tui_core::AppAction, e: &ServerError) -> Str
             }
             CredentialSpec::Agent { name, .. } => format!("Cannot create agent credential '{}': {}", name, e),
         },
-        AppAction::DeleteCredential(name) => {
-            format!("Cannot delete credential '{}': {}", name, e)
+        AppAction::DeleteCredential(id) => {
+            format!("Cannot delete credential (id: {}): {}", id, e)
         }
-        AppAction::AssignCredential { host, cred_name } => {
-            format!("Cannot set credential '{}' for '{}': {}", cred_name, host, e)
+        AppAction::AssignCredential { host_id, cred_id } => {
+            format!("Cannot set credential (id: {}) for host (id: {}): {}", cred_id, host_id, e)
         }
-        AppAction::UnassignCredential(host) => {
-            format!("Cannot clear credential for '{}': {}", host, e)
+        AppAction::UnassignCredential(host_id) => {
+            format!("Cannot clear credential for host (id: {}): {}", host_id, e)
         }
         _ => format!("Operation failed: {}", e),
     }
@@ -436,11 +436,22 @@ pub async fn create_relay_selector_app(username: Option<&str>) -> ServerResult<R
     let db = state_store::server_db().await?;
     let pool = db.into_pool();
 
+    // TODO THIS SHOULD USE THE SAME LOGIC WE USE IN WEBUI BASED ON AT LEAST VIEW CLAIMS WE SHOULD RELOCATE ENSURE_CLAIMS
     let is_admin = username == Some("admin") || username.is_none();
 
     // Fetch relays. Admin view must bypass ACL filtering.
-    let filter_username = if is_admin { None } else { username };
-    let hosts = state_store::list_relay_hosts(&pool, filter_username).await?;
+    let hosts = if is_admin {
+        state_store::list_relay_hosts(&pool, Option::<i64>::None).await?
+    } else {
+        // username is Some(uname) and not "admin"
+        let uname = username.unwrap();
+        if let Some(uid) = state_store::fetch_user_id_by_name(&pool, uname).await? {
+            state_store::list_relay_hosts(&pool, Some(uid)).await?
+        } else {
+            Vec::new()
+        }
+    };
+
     let relays: Vec<RelayItem> = hosts
         .into_iter()
         .map(|h| RelayItem {
@@ -493,111 +504,5 @@ pub async fn store_relay_hostkey_from_web(id: i64, key_pem: String) -> ServerRes
         key: key_pem,
     };
     handle_management_action(action).await?;
-    Ok(())
-}
-
-/// Set custom password authentication for a relay (inline, not using a saved credential)
-pub async fn set_custom_password_auth(
-    hostname: &str,
-    username: Option<&str>,
-    password: &str,
-    username_mode: &str,
-    password_required: bool,
-) -> ServerResult<()> {
-    // Clear any existing auth first
-    let db = state_store::server_db().await?;
-    let pool = db.into_pool();
-    if let Some(host) = state_store::fetch_relay_host_by_name(&pool, hostname).await? {
-        sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key LIKE 'auth.%'")
-            .bind(host.id)
-            .execute(&pool)
-            .await?;
-    }
-
-    set_relay_option(hostname, "auth.source", "inline", true).await?;
-    if let Some(user) = username {
-        set_relay_option(hostname, "auth.username", user, true).await?;
-    }
-    set_relay_option(hostname, "auth.password", password, true).await?;
-    set_relay_option(hostname, "auth.username_mode", username_mode, true).await?;
-    set_relay_option(
-        hostname,
-        "auth.password_required",
-        if password_required { "true" } else { "false" },
-        true,
-    )
-    .await?;
-    info!(relay_host = hostname, "custom password auth configured");
-    Ok(())
-}
-
-/// Set custom SSH key authentication for a relay (inline, not using a saved credential)
-pub async fn set_custom_ssh_key_auth(
-    hostname: &str,
-    username: Option<&str>,
-    private_key: &str,
-    passphrase: Option<&str>,
-    username_mode: &str,
-) -> ServerResult<()> {
-    // Clear any existing auth first
-    let db = state_store::server_db().await?;
-    let pool = db.into_pool();
-    if let Some(host) = state_store::fetch_relay_host_by_name(&pool, hostname).await? {
-        sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key LIKE 'auth.%'")
-            .bind(host.id)
-            .execute(&pool)
-            .await?;
-    }
-
-    set_relay_option(hostname, "auth.source", "inline", true).await?;
-    set_relay_option(hostname, "auth.method", "publickey", true).await?;
-    if let Some(user) = username {
-        set_relay_option(hostname, "auth.username", user, true).await?;
-    }
-    set_relay_option(hostname, "auth.identity", private_key, true).await?;
-    if let Some(pass) = passphrase {
-        set_relay_option(hostname, "auth.passphrase", pass, true).await?;
-    }
-    set_relay_option(hostname, "auth.username_mode", username_mode, true).await?;
-    info!(relay_host = hostname, "custom SSH key auth configured");
-    Ok(())
-}
-
-/// Set custom SSH agent authentication for a relay (inline, not using a saved credential)
-pub async fn set_custom_agent_auth(hostname: &str, username: Option<&str>, public_key: &str, username_mode: &str) -> ServerResult<()> {
-    // Clear any existing auth first
-    let db = state_store::server_db().await?;
-    let pool = db.into_pool();
-    if let Some(host) = state_store::fetch_relay_host_by_name(&pool, hostname).await? {
-        sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key LIKE 'auth.%'")
-            .bind(host.id)
-            .execute(&pool)
-            .await?;
-    }
-
-    set_relay_option(hostname, "auth.source", "inline", true).await?;
-    set_relay_option(hostname, "auth.method", "agent", true).await?;
-    if let Some(user) = username {
-        set_relay_option(hostname, "auth.username", user, true).await?;
-    }
-    set_relay_option(hostname, "auth.agent_pubkey", public_key, true).await?;
-    set_relay_option(hostname, "auth.username_mode", username_mode, true).await?;
-    info!(relay_host = hostname, "custom agent auth configured");
-    Ok(())
-}
-
-/// Clear all authentication settings from a relay
-pub async fn clear_all_auth(hostname: &str) -> ServerResult<()> {
-    let db = state_store::server_db().await?;
-
-    let pool = db.into_pool();
-    let host = state_store::fetch_relay_host_by_name(&pool, hostname)
-        .await?
-        .ok_or_else(|| ServerError::not_found("relay host", hostname))?;
-    sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key LIKE 'auth.%'")
-        .bind(host.id)
-        .execute(&pool)
-        .await?;
-    info!(relay_host = hostname, "all auth settings cleared");
     Ok(())
 }

@@ -37,7 +37,7 @@ impl super::ManagementApp {
         if let Some(i) = self.creds_state.selected()
             && let Some(c) = self.credentials.get(i)
         {
-            self.popup = PopupState::DeleteCredentialConfirm(c.name.clone());
+            self.popup = PopupState::DeleteCredentialConfirm(c.id, c.name.clone());
         }
     }
 

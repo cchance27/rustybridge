@@ -11,6 +11,7 @@ use crate::{
 #[component]
 pub fn EditRoleClaimsModal(
     role_claims_modal_open: Signal<bool>,
+    claims_role_id: Signal<i64>,
     claims_role_name: Signal<String>,
     role_claims: Signal<Vec<ClaimType>>,
     role_selected_claim_to_add: Signal<String>,
@@ -18,8 +19,10 @@ pub fn EditRoleClaimsModal(
     toast: Signal<Option<ToastMessage>>,
 ) -> Element {
     let is_super_admin = claims_role_name() == "Super Admin";
+    let role_id_val = claims_role_id();
 
     let add_role_claim_handler = move |claim: String| {
+        let role_id = role_id_val;
         let role = claims_role_name();
         spawn(async move {
             // Parse the string into ClaimType
@@ -34,7 +37,7 @@ pub fn EditRoleClaimsModal(
                 }
             };
 
-            match add_role_claim(role.clone(), claim_type.clone()).await {
+            match add_role_claim(role_id, claim_type.clone()).await {
                 Ok(_) => {
                     roles.restart();
                     let mut current = role_claims();
@@ -56,9 +59,10 @@ pub fn EditRoleClaimsModal(
     };
 
     let remove_role_claim_handler = move |claim: ClaimType| {
+        let role_id = role_id_val;
         let role = claims_role_name();
         spawn(async move {
-            match remove_role_claim(role.clone(), claim.clone()).await {
+            match remove_role_claim(role_id, claim.clone()).await {
                 Ok(_) => {
                     roles.restart();
                     let mut current = role_claims();

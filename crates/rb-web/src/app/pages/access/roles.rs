@@ -18,16 +18,19 @@ pub fn RolesSection(
 ) -> Element {
     // Delete confirmation state
     let mut delete_confirm_open = use_signal(|| false);
+    let mut delete_target_id = use_signal(|| 0i64);
     let mut delete_target_name = use_signal(String::new);
 
     // Role claims modal state
     let mut role_claims_modal_open = use_signal(|| false);
+    let mut claims_role_id = use_signal(|| 0i64);
     let mut claims_role_name = use_signal(String::new);
     let mut role_claims = use_signal(Vec::<rb_types::auth::ClaimType>::new);
     let mut role_selected_claim_to_add = use_signal(String::new);
 
     // Role users modal state
     let mut users_modal_open = use_signal(|| false);
+    let mut users_role_id = use_signal(|| 0i64);
     let mut users_role_name = use_signal(String::new);
     let mut role_users = use_signal(Vec::<String>::new);
     let mut available_users_for_role = use_signal(Vec::<String>::new);
@@ -35,23 +38,26 @@ pub fn RolesSection(
 
     // Role groups modal state
     let mut groups_modal_open = use_signal(|| false);
+    let mut groups_role_id = use_signal(|| 0i64);
     let mut groups_role_name = use_signal(String::new);
     let mut role_groups = use_signal(Vec::<String>::new);
     let mut available_groups_for_role = use_signal(Vec::<String>::new);
     let mut selected_group_to_add = use_signal(String::new);
 
-    let mut open_delete_confirm = move |role_name: String| {
+    let mut open_delete_confirm = move |role_id: i64, role_name: String| {
+        delete_target_id.set(role_id);
         delete_target_name.set(role_name);
         delete_confirm_open.set(true);
     };
 
-    let mut open_manage_claims = move |role: String| {
-        claims_role_name.set(role.clone());
+    let mut open_manage_claims = move |role_id: i64, role_name: String| {
+        claims_role_id.set(role_id);
+        claims_role_name.set(role_name.clone());
         role_selected_claim_to_add.set(String::new());
 
         // Find role to get claims
         if let Some(Ok(list)) = roles.value()().as_ref()
-            && let Some(r) = list.iter().find(|r| r.name == role)
+            && let Some(r) = list.iter().find(|r| r.name == role_name)
         {
             role_claims.set(r.claims.clone());
         }
@@ -59,13 +65,14 @@ pub fn RolesSection(
         role_claims_modal_open.set(true);
     };
 
-    let mut open_manage_users = move |role: String| {
+    let mut open_manage_users = move |role_id: i64, role: String| {
+        users_role_id.set(role_id);
         users_role_name.set(role.clone());
         selected_user_to_add.set(String::new());
 
         // Load users for this role
         spawn(async move {
-            if let Ok(user_list) = list_role_users(role.clone()).await {
+            if let Ok(user_list) = list_role_users(role_id).await {
                 role_users.set(user_list.clone());
 
                 // Get all users and filter out those already in the role
@@ -82,13 +89,14 @@ pub fn RolesSection(
         });
     };
 
-    let mut open_manage_groups = move |role: String| {
+    let mut open_manage_groups = move |role_id: i64, role: String| {
+        groups_role_id.set(role_id);
         groups_role_name.set(role.clone());
         selected_group_to_add.set(String::new());
 
         // Load groups for this role
         spawn(async move {
-            if let Ok(group_list) = list_role_groups(role.clone()).await {
+            if let Ok(group_list) = list_role_groups(role_id).await {
                 role_groups.set(group_list.clone());
 
                 // Get all groups and filter out those already in the role
@@ -102,10 +110,11 @@ pub fn RolesSection(
     };
 
     let handle_delete = move |_| {
+        let target_id = delete_target_id();
         let target_name = delete_target_name();
 
         spawn(async move {
-            match delete_role(target_name.clone()).await {
+            match delete_role(target_id).await {
                 Ok(_) => {
                     delete_confirm_open.set(false);
                     toast.set(Some(ToastMessage {
@@ -176,8 +185,9 @@ pub fn RolesSection(
                                                     button {
                                                         class: "badge badge-accent cursor-pointer hover:brightness-90 whitespace-nowrap",
                                                         onclick: {
-                                                            let r = role.name.clone();
-                                                            move |_| open_manage_users(r.clone())
+                                                            let r_id = role.id;
+                                                            let r_name = role.name.clone();
+                                                            move |_| open_manage_users(r_id, r_name.clone())
                                                         },
                                                         "{role.user_count} "
                                                         {if role.user_count == 1 { "user" } else { "users" }}
@@ -208,8 +218,9 @@ pub fn RolesSection(
                                                     button {
                                                         class: "badge badge-primary cursor-pointer hover:brightness-90 whitespace-nowrap",
                                                         onclick: {
-                                                            let r = role.name.clone();
-                                                            move |_| open_manage_groups(r.clone())
+                                                            let r_id = role.id;
+                                                            let r_name = role.name.clone();
+                                                            move |_| open_manage_groups(r_id, r_name.clone())
                                                         },
                                                         "{role.group_count} "
                                                         {if role.group_count == 1 { "group" } else { "groups" }}
@@ -243,8 +254,9 @@ pub fn RolesSection(
                                                         disabled: role.name == "Super Admin",
                                                         title: if role.name == "Super Admin" { "Cannot edit Super Admin role claims" } else { "" },
                                                         onclick: {
-                                                            let r = role.name.clone();
-                                                            move |_| open_manage_claims(r.clone())
+                                                            let r_id = role.id;
+                                                            let r_name = role.name.clone();
+                                                            move |_| open_manage_claims(r_id, r_name.clone())
                                                         },
                                                         "{role.claims.len()} "
                                                         {if role.claims.len() == 1 { "claim" } else { "claims" }}
@@ -261,8 +273,9 @@ pub fn RolesSection(
                                                     disabled: role.name == "Super Admin",
                                                     title: if role.name == "Super Admin" { "Cannot delete Super Admin role" } else { "" },
                                                     onclick: {
+                                                        let r_id = role.id;
                                                         let r_name = role.name.clone();
-                                                        move |_| open_delete_confirm(r_name.clone())
+                                                        move |_| open_delete_confirm(r_id, r_name.clone())
                                                     },
                                                     "Delete"
                                                 }
@@ -288,6 +301,7 @@ pub fn RolesSection(
         }
 
         ConfirmDeleteRoleModal {
+            role_id: delete_target_id,
             role_name: delete_target_name,
             delete_confirm_open,
             handle_delete,
@@ -295,6 +309,7 @@ pub fn RolesSection(
 
         EditRoleClaimsModal {
             role_claims_modal_open,
+            claims_role_id,
             claims_role_name,
             role_claims,
             role_selected_claim_to_add,
@@ -304,6 +319,7 @@ pub fn RolesSection(
 
         ManageRoleUsersModal {
             users_modal_open,
+            role_id: users_role_id,
             users_role_name,
             role_users,
             available_users: available_users_for_role,
@@ -315,6 +331,7 @@ pub fn RolesSection(
 
         ManageRoleGroupsModal {
             groups_modal_open,
+            role_id: groups_role_id,
             groups_role_name,
             role_groups,
             available_groups: available_groups_for_role,

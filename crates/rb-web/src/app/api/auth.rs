@@ -15,7 +15,7 @@ use crate::server::auth::WebAuthSession;
 pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
     use rb_types::auth::AuthDecision;
     use server_core::auth::authenticate_password;
-    use state_store::get_user_claims;
+    use state_store::get_user_claims_by_id;
 
     // Authenticate user
     let login_target = server_core::auth::parse_login_target(&request.username);
@@ -24,12 +24,13 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
             // Get user ID and claims
 
             use rb_types::auth::AuthUserInfo;
-            let user_id = state_store::fetch_user_id_by_name(&pool, &request.username)
+            let user_id = state_store::fetch_user_id_by_name(&*pool, &request.username)
                 .await
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?
                 .ok_or_else(|| anyhow::anyhow!("User not found"))?;
 
-            let claims = get_user_claims(&pool, &request.username)
+            let mut conn = pool.acquire().await.map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let claims = get_user_claims_by_id(&mut conn, user_id)
                 .await
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 

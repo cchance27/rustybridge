@@ -26,7 +26,21 @@ impl ServerHandler {
                 let pool = handle.into_pool();
                 match fetch_relay_host_by_name(&pool, relay_name).await {
                     Ok(Some(host)) => {
-                        match user_has_relay_access(&pool, &username, host.id).await {
+                        // First fetch user_id
+                        let user_id_result = state_store::fetch_user_id_by_name(&pool, &username).await;
+                        let user_id = match user_id_result {
+                            Ok(Some(id)) => id,
+                            Ok(None) => {
+                                let _ = self.send_line(session, channel, &format!("user '{}' not found", username));
+                                return self.handle_exit(session, channel);
+                            }
+                            Err(err) => {
+                                let _ = self.send_line(session, channel, &format!("internal error looking up user: {err}"));
+                                return self.handle_exit(session, channel);
+                            }
+                        };
+
+                        match user_has_relay_access(&pool, user_id, host.id).await {
                             Ok(true) => {
                                 let _ = self.send_line(
                                     session,

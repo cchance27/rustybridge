@@ -192,7 +192,7 @@ pub async fn oidc_callback(Query(query): Query<AuthRequest>, auth: WebAuthSessio
     );
 
     // Look up user by OIDC link
-    let user_id = match state_store::find_user_id_by_oidc_subject(&pool, &config.issuer_url, &subject).await {
+    let user_id = match state_store::find_user_id_by_oidc_subject(&*pool, &config.issuer_url, &subject).await {
         Ok(Some(id)) => id,
         Ok(None) => {
             tracing::warn!(
@@ -209,7 +209,7 @@ pub async fn oidc_callback(Query(query): Query<AuthRequest>, auth: WebAuthSessio
     };
 
     // Update OIDC link with latest profile info
-    if let Err(e) = state_store::update_oidc_profile_by_subject(&pool, &config.issuer_url, &subject, &email, &name, &picture).await {
+    if let Err(e) = state_store::update_oidc_profile_by_subject(&*pool, &config.issuer_url, &subject, &email, &name, &picture).await {
         tracing::warn!("Failed to update OIDC link profile: {}", e);
     }
 

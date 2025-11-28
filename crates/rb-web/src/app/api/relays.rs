@@ -32,7 +32,7 @@ pub async fn list_relay_hosts() -> Result<Vec<RelayHostInfo>> {
     for host in hosts {
         use rb_types::{access::RelayAccessPrincipal, credentials::AuthWebConfig};
 
-        let opts = state_store::fetch_relay_host_options(&pool, host.id)
+        let opts = state_store::fetch_relay_host_options(&*pool, host.id)
             .await
             .map_err(|e| anyhow!("{}", e))?;
 
@@ -63,7 +63,7 @@ pub async fn list_relay_hosts() -> Result<Vec<RelayHostInfo>> {
         let (credential, credential_kind, credential_username_mode, credential_password_required) = match auth_source.as_deref() {
             Some("credential") => {
                 if let Some(cred_id) = credential_id {
-                    match state_store::get_relay_credential_by_id(&pool, cred_id).await {
+                    match state_store::get_relay_credential_by_id(&*pool, cred_id).await {
                         Ok(Some(cred)) => (
                             Some(cred.name),
                             Some(cred.kind),
@@ -127,12 +127,13 @@ pub async fn list_relay_hosts() -> Result<Vec<RelayHostInfo>> {
         };
 
         // Fetch access principals for this relay
-        let access_principals = state_store::fetch_relay_access_principals(&pool, host.id)
+        let access_principals = state_store::fetch_relay_access_principals(&*pool, host.id)
             .await
             .map_err(|e| anyhow!("{}", e))?
             .into_iter()
             .map(|p| RelayAccessPrincipal {
                 kind: p.kind,
+                id: p.id,
                 name: p.name,
             })
             .collect();
@@ -180,7 +181,7 @@ pub async fn update_relay_host(id: i64, req: UpdateRelayRequest) -> Result<()> {
     let (ip, port_str) = req.endpoint.rsplit_once(':').ok_or_else(|| anyhow!("Invalid endpoint format"))?;
     let port = port_str.parse::<i64>().map_err(|_| anyhow!("Invalid port"))?;
 
-    state_store::update_relay_host(&pool, id, &req.name, ip, port)
+    state_store::update_relay_host(&*pool, id, &req.name, ip, port)
         .await
         .map_err(|e| anyhow!("{}", e))?;
 
@@ -197,7 +198,7 @@ pub async fn delete_relay_host(id: i64) -> Result<()> {
     ensure_relay_claim(&auth, ClaimLevel::Delete)?;
 
     // Delete by ID, not name
-    state_store::delete_relay_host_by_id(&pool, id)
+    state_store::delete_relay_host_by_id(&*pool, id)
         .await
         .map_err(|e| anyhow!("{}", e))?;
     Ok(())
@@ -212,18 +213,18 @@ pub async fn delete_relay_host(id: i64) -> Result<()> {
 pub async fn assign_relay_credential(id: i64, credential_id: i64) -> Result<()> {
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
 
-    let host = state_store::fetch_relay_host_by_id(&pool, id)
+    let host = state_store::fetch_relay_host_by_id(&*pool, id)
         .await
         .map_err(|e| anyhow!("{}", e))?
         .ok_or_else(|| anyhow!("Relay host not found"))?;
 
     // Get credential name from ID
-    let cred = state_store::get_relay_credential_by_id(&pool, credential_id)
+    let cred = state_store::get_relay_credential_by_id(&*pool, credential_id)
         .await
         .map_err(|e| anyhow!("{}", e))?
         .ok_or_else(|| anyhow!("Credential not found"))?;
 
-    server_core::assign_credential(&host.name, &cred.name)
+    server_core::assign_credential_by_ids(host.id, cred.id)
         .await
         .map_err(|e| anyhow!("{}", e))?;
     Ok(())
@@ -238,12 +239,14 @@ pub async fn assign_relay_credential(id: i64, credential_id: i64) -> Result<()> 
 pub async fn clear_relay_credential(id: i64) -> Result<()> {
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
 
-    let host = state_store::fetch_relay_host_by_id(&pool, id)
+    let host = state_store::fetch_relay_host_by_id(&*pool, id)
         .await
         .map_err(|e| anyhow!("{}", e))?
         .ok_or_else(|| anyhow!("Relay host not found"))?;
 
-    server_core::unassign_credential(&host.name).await.map_err(|e| anyhow!("{}", e))?;
+    server_core::unassign_credential_by_id(host.id)
+        .await
+        .map_err(|e| anyhow!("{}", e))?;
     Ok(())
 }
 
@@ -290,7 +293,7 @@ pub async fn set_custom_auth(id: i64, req: CustomAuthRequest) -> Result<()> {
     use rb_types::validation::CredentialValidationInput;
 
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
-    let relay = state_store::fetch_relay_host_by_id(&pool, id)
+    let relay = state_store::fetch_relay_host_by_id(&*pool, id)
         .await
         .map_err(|e| anyhow!("{}", e))?
         .ok_or_else(|| anyhow!("Relay not found"))?;
@@ -321,8 +324,8 @@ pub async fn set_custom_auth(id: i64, req: CustomAuthRequest) -> Result<()> {
                 // For interactive/passthrough modes, password is optional
                 req.password.as_deref().unwrap_or("")
             };
-            server_core::set_custom_password_auth(
-                &relay.name,
+            server_core::set_custom_password_auth_by_id(
+                relay.id,
                 req.username.as_deref(),
                 password,
                 &req.username_mode,
@@ -333,8 +336,8 @@ pub async fn set_custom_auth(id: i64, req: CustomAuthRequest) -> Result<()> {
         }
         "ssh_key" => {
             let private_key = req.private_key.as_deref().ok_or_else(|| anyhow!("Private key required"))?;
-            server_core::set_custom_ssh_key_auth(
-                &relay.name,
+            server_core::set_custom_ssh_key_auth_by_id(
+                relay.id,
                 req.username.as_deref(),
                 private_key,
                 req.passphrase.as_deref(),
@@ -345,7 +348,7 @@ pub async fn set_custom_auth(id: i64, req: CustomAuthRequest) -> Result<()> {
         }
         "agent" => {
             let public_key = req.public_key.as_deref().ok_or_else(|| anyhow!("Public key required"))?;
-            server_core::set_custom_agent_auth(&relay.name, req.username.as_deref(), public_key, &req.username_mode)
+            server_core::set_custom_agent_auth_by_id(relay.id, req.username.as_deref(), public_key, &req.username_mode)
                 .await
                 .map_err(|e| anyhow!("{}", e))?;
         }
@@ -363,11 +366,11 @@ pub async fn set_custom_auth(id: i64, req: CustomAuthRequest) -> Result<()> {
 pub async fn clear_relay_auth(id: i64) -> Result<()> {
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
 
-    let relay = state_store::fetch_relay_host_by_id(&pool, id)
+    let relay = state_store::fetch_relay_host_by_id(&*pool, id)
         .await
         .map_err(|e| anyhow!("{}", e))?
         .ok_or_else(|| anyhow!("Relay not found"))?;
 
-    server_core::clear_all_auth(&relay.name).await.map_err(|e| anyhow!("{}", e))?;
+    server_core::clear_all_auth_by_id(relay.id).await.map_err(|e| anyhow!("{}", e))?;
     Ok(())
 }

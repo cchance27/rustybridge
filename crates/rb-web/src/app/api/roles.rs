@@ -18,31 +18,31 @@ fn ensure_role_claim(auth: &WebAuthSession, level: ClaimLevel) -> Result<(), Ser
 )]
 pub async fn list_roles() -> Result<Vec<RoleInfo>, ServerFnError> {
     ensure_role_claim(&auth, ClaimLevel::View)?;
-    use server_core::{get_role_claims_server, list_role_groups_server, list_role_users_server};
-    use state_store::list_roles;
+    use state_store::{get_role_claims_by_id, list_role_groups_by_id, list_role_users_by_id, list_roles};
 
-    let roles = list_roles(&pool).await.map_err(|e| ServerFnError::new(e.to_string()))?;
+    let roles = list_roles(&*pool).await.map_err(|e| ServerFnError::new(e.to_string()))?;
 
     let mut result = Vec::new();
     for role in roles {
         // Get user count and names
-        let users = list_role_users_server(&role.name)
+        let users = list_role_users_by_id(&*pool, role.id)
             .await
             .map_err(|e| ServerFnError::new(e.to_string()))?;
         let user_count = users.len() as i64;
 
         // Get group count and names
-        let groups = list_role_groups_server(&role.name)
+        let groups = list_role_groups_by_id(&*pool, role.id)
             .await
             .map_err(|e| ServerFnError::new(e.to_string()))?;
         let group_count = groups.len() as i64;
 
         // Get claims
-        let claims = get_role_claims_server(&role.name)
+        let claims = get_role_claims_by_id(&*pool, role.id)
             .await
             .map_err(|e| ServerFnError::new(e.to_string()))?;
 
         result.push(RoleInfo {
+            id: role.id,
             name: role.name,
             description: role.description,
             user_count,
@@ -58,112 +58,125 @@ pub async fn list_roles() -> Result<Vec<RoleInfo>, ServerFnError> {
 
 #[post(
     "/api/roles",
-    auth: WebAuthSession
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>
 )]
 pub async fn create_role(name: String, description: Option<String>) -> Result<(), ServerFnError> {
     ensure_role_claim(&auth, ClaimLevel::Create)?;
-    use server_core::create_role;
-    create_role(&name, description.as_deref())
+    state_store::create_role(&*pool, &name, description.as_deref())
         .await
+        .map(|_| ())
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
 #[delete(
-    "/api/roles/{name}",
-    auth: WebAuthSession
+    "/api/roles/{id}",
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>
 )]
-pub async fn delete_role(name: String) -> Result<(), ServerFnError> {
+pub async fn delete_role(id: i64) -> Result<(), ServerFnError> {
     ensure_role_claim(&auth, ClaimLevel::Delete)?;
-    use server_core::delete_role_server;
-    delete_role_server(&name).await.map_err(|e| ServerFnError::new(e.to_string()))
-}
-
-#[get(
-    "/api/roles/{name}/users",
-    auth: WebAuthSession
-)]
-pub async fn list_role_users(name: String) -> Result<Vec<String>, ServerFnError> {
-    ensure_role_claim(&auth, ClaimLevel::View)?;
-    use server_core::list_role_users_server;
-    list_role_users_server(&name).await.map_err(|e| ServerFnError::new(e.to_string()))
-}
-
-#[post(
-    "/api/roles/{name}/users",
-    auth: WebAuthSession
-)]
-pub async fn assign_role_to_user(name: String, username: String) -> Result<(), ServerFnError> {
-    ensure_role_claim(&auth, ClaimLevel::Edit)?;
-    use server_core::assign_role;
-    assign_role(&username, &name).await.map_err(|e| ServerFnError::new(e.to_string()))
-}
-
-#[delete(
-    "/api/roles/{name}/users/{username}",
-    auth: WebAuthSession
-)]
-pub async fn revoke_role_from_user(name: String, username: String) -> Result<(), ServerFnError> {
-    ensure_role_claim(&auth, ClaimLevel::Delete)?;
-    use server_core::revoke_role_from_user_server;
-    revoke_role_from_user_server(&username, &name)
+    state_store::delete_role_by_id(&*pool, id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
 #[get(
-    "/api/roles/{name}/groups",
-    auth: WebAuthSession
+    "/api/roles/{id}/users",
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>
 )]
-pub async fn list_role_groups(name: String) -> Result<Vec<String>, ServerFnError> {
+pub async fn list_role_users(id: i64) -> Result<Vec<String>, ServerFnError> {
     ensure_role_claim(&auth, ClaimLevel::View)?;
-    use server_core::list_role_groups_server;
-    list_role_groups_server(&name).await.map_err(|e| ServerFnError::new(e.to_string()))
+    state_store::list_role_users_by_id(&*pool, id)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
 #[post(
-    "/api/roles/{name}/groups",
-    auth: WebAuthSession
+    "/api/roles/{id}/users",
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>
 )]
-pub async fn assign_role_to_group(name: String, group_name: String) -> Result<(), ServerFnError> {
+pub async fn assign_role_to_user(id: i64, user_id: i64) -> Result<(), ServerFnError> {
     ensure_role_claim(&auth, ClaimLevel::Edit)?;
-    use server_core::assign_role_to_group_server;
-    assign_role_to_group_server(&group_name, &name)
+    state_store::assign_role_to_user_by_ids(&*pool, user_id, id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
 #[delete(
-    "/api/roles/{name}/groups/{group_name}",
-    auth: WebAuthSession
+    "/api/roles/{id}/users/{user_id}",
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>
 )]
-pub async fn revoke_role_from_group(name: String, group_name: String) -> Result<(), ServerFnError> {
+pub async fn revoke_role_from_user(id: i64, user_id: i64) -> Result<(), ServerFnError> {
     ensure_role_claim(&auth, ClaimLevel::Delete)?;
-    use server_core::revoke_role_from_group_server;
-    revoke_role_from_group_server(&group_name, &name)
+    let mut conn = pool.acquire().await.map_err(|e| ServerFnError::new(e.to_string()))?;
+    state_store::revoke_role_from_user_by_ids(&mut conn, user_id, id)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+#[get(
+    "/api/roles/{id}/groups",
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>
+)]
+pub async fn list_role_groups(id: i64) -> Result<Vec<String>, ServerFnError> {
+    ensure_role_claim(&auth, ClaimLevel::View)?;
+    state_store::list_role_groups_by_id(&*pool, id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
 #[post(
-    "/api/roles/{name}/claims",
-    auth: WebAuthSession
+    "/api/roles/{id}/groups",
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>
 )]
-pub async fn add_role_claim(name: String, claim: ClaimType) -> Result<(), ServerFnError> {
+pub async fn assign_role_to_group(id: i64, group_id: i64) -> Result<(), ServerFnError> {
     ensure_role_claim(&auth, ClaimLevel::Edit)?;
-    use server_core::add_role_claim;
-    add_role_claim(&name, &claim).await.map_err(|e| ServerFnError::new(e.to_string()))
+    state_store::assign_role_to_group_by_ids(&*pool, group_id, id)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
-/// NOTE: Uses POST instead of DELETE because ClaimType contains colons (e.g. "relays:view")
-/// which cause routing issues when used as path parameters in DELETE requests
-#[post(
-    "/api/roles/{name}/claims/remove",
-    auth: WebAuthSession
+#[delete(
+    "/api/roles/{id}/groups/{group_id}",
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>
 )]
-pub async fn remove_role_claim(name: String, claim: ClaimType) -> Result<(), ServerFnError> {
+pub async fn revoke_role_from_group(id: i64, group_id: i64) -> Result<(), ServerFnError> {
     ensure_role_claim(&auth, ClaimLevel::Delete)?;
-    use server_core::remove_role_claim_server;
-    remove_role_claim_server(&name, &claim)
+    state_store::revoke_role_from_group_by_ids(&*pool, group_id, id)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+#[post(
+    "/api/roles/{id}/claims",
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>
+)]
+pub async fn add_role_claim(id: i64, claim: ClaimType) -> Result<(), ServerFnError> {
+    ensure_role_claim(&auth, ClaimLevel::Edit)?;
+    use state_store::add_claim_to_role_by_id;
+    add_claim_to_role_by_id(&*pool, id, &claim)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Now uses proper DELETE method with role ID (no colon encoding issues)
+#[delete(
+    "/api/roles/{id}/claims",
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>
+)]
+pub async fn remove_role_claim(id: i64, claim: ClaimType) -> Result<(), ServerFnError> {
+    ensure_role_claim(&auth, ClaimLevel::Delete)?;
+    use state_store::remove_claim_from_role_by_id;
+    remove_claim_from_role_by_id(&*pool, id, &claim)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }

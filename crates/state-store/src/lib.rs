@@ -43,5 +43,29 @@ pub use relay::*;
 pub use ssh_keys::*;
 pub use users::*;
 
+/// The ID of the Super Admin role (always 1).
+pub const SUPER_ADMIN_ROLE_ID: i64 = 1;
+
+/// Helper to execute a function within a database transaction.
+/// If the function returns Ok, the transaction is committed.
+/// If the function returns Err, the transaction is rolled back.
+pub async fn execute_transaction<T, F, Fut>(pool: &sqlx::SqlitePool, f: F) -> DbResult<T>
+where
+    F: FnOnce(&mut sqlx::Transaction<'_, sqlx::Sqlite>) -> Fut,
+    Fut: std::future::Future<Output = DbResult<T>>,
+{
+    let mut tx = pool.begin().await?;
+    match f(&mut tx).await {
+        Ok(result) => {
+            tx.commit().await?;
+            Ok(result)
+        }
+        Err(e) => {
+            tx.rollback().await?;
+            Err(e)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests_rbac;

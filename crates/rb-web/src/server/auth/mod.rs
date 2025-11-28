@@ -16,12 +16,12 @@ pub mod oidc;
 pub mod oidc_link;
 pub mod oidc_unlink;
 
-#[post("/api/auth/login", 
+#[post("/api/auth/login",
     auth: WebAuthSession,
     pool: axum::Extension<sqlx::SqlitePool>,
     session: axum_session::Session<axum_session_sqlx::SessionSqlitePool>)]
 pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
-    use state_store::{get_latest_oidc_profile, get_user_claims};
+    use state_store::{get_latest_oidc_profile, get_user_claims_by_id};
 
     // Touch the session to ensure it exists before we mutate auth state (avoids axum_session warnings)
     let _ = session.get_session_id();
@@ -33,17 +33,18 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
             // Get user ID and claims
 
             use rb_types::auth::AuthUserInfo;
-            let user_id = state_store::fetch_user_id_by_name(&pool, &request.username)
+            let user_id = state_store::fetch_user_id_by_name(&*pool, &request.username)
                 .await
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?
                 .ok_or_else(|| anyhow::anyhow!("User not found"))?;
 
-            let claims = get_user_claims(&pool, &request.username)
+            let mut conn = pool.acquire().await.map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let claims = get_user_claims_by_id(&mut conn, user_id)
                 .await
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             // Fetch latest OIDC profile info if available
-            let oidc_profile = get_latest_oidc_profile(&pool, user_id)
+            let oidc_profile = get_latest_oidc_profile(&*pool, user_id)
                 .await
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 

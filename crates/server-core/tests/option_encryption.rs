@@ -16,24 +16,21 @@ async fn option_encryption_and_masked_listing() -> Result<()> {
     let pool: SqlitePool = handle.into_pool();
 
     // Insert host
-    sqlx::query("INSERT INTO relay_hosts (name, ip, port) VALUES ('h2', '127.0.0.1', 22)")
-        .execute(&pool)
-        .await?;
+    let host_id = state_store::insert_relay_host(&pool, "h2", "127.0.0.1", 22).await?;
 
     // Set an option
-    server_core::set_relay_option("h2", "api.secret", "supersecret", true).await?;
+    server_core::set_relay_option_by_id(host_id, "api.secret", "supersecret", true).await?;
 
     // Verify it's encrypted at rest
-    let row = sqlx::query(
-        "SELECT value FROM relay_host_options WHERE relay_host_id = (SELECT id FROM relay_hosts WHERE name='h2') AND key='api.secret'",
-    )
-    .fetch_one(&pool)
-    .await?;
+    let row = sqlx::query("SELECT value FROM relay_host_options WHERE relay_host_id = ? AND key='api.secret'")
+        .bind(host_id)
+        .fetch_one(&pool)
+        .await?;
     let stored: String = row.get("value");
     assert!(server_core::secrets::is_encrypted_marker(&stored));
 
     // List via helper: should be masked
-    let items = server_core::list_options("h2").await?;
+    let items = server_core::list_options_by_id(host_id).await?;
     let (_, v) = items.into_iter().find(|(k, _)| k == "api.secret").expect("entry");
     assert_eq!(v, "<encrypted>");
     Ok(())

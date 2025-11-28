@@ -15,7 +15,7 @@ pub async fn oidc_unlink(auth: WebAuthSession, pool: Extension<sqlx::SqlitePool>
         }
     };
 
-    match state_store::delete_oidc_link_for_user(&pool, user_id).await {
+    match state_store::delete_oidc_link_for_user(&*pool, user_id).await {
         Ok(result) => {
             let rows_affected = result;
             if rows_affected > 0 {

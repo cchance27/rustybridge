@@ -18,20 +18,17 @@ async fn rotation_reencrypts_credentials_and_options() -> Result<()> {
     let pool: SqlitePool = handle.into_pool();
 
     // Setup: host + option + credential
-    sqlx::query("INSERT INTO relay_hosts (name, ip, port) VALUES ('h3', '127.0.0.1', 22)")
-        .execute(&pool)
-        .await?;
-    server_core::set_relay_option("h3", "api.secret", "abc123", true).await?;
-    let _cred = server_core::create_password_credential("credR", Some("ux"), "pw-xyz", "fixed", true).await?;
-    server_core::assign_credential("h3", "credR").await?;
+    let host_id = state_store::insert_relay_host(&pool, "h3", "127.0.0.1", 22).await?;
+    server_core::set_relay_option_by_id(host_id, "api.secret", "abc123", true).await?;
+    let cred_id = server_core::create_password_credential("credR", Some("ux"), "pw-xyz", "fixed", true).await?;
+    server_core::assign_credential_by_ids(host_id, cred_id).await?;
 
     // Capture pre-rotation ciphertexts
-    let before_opt: String = sqlx::query(
-        "SELECT value FROM relay_host_options WHERE relay_host_id=(SELECT id FROM relay_hosts WHERE name='h3') AND key='api.secret'",
-    )
-    .fetch_one(&pool)
-    .await?
-    .get("value");
+    let before_opt: String = sqlx::query("SELECT value FROM relay_host_options WHERE relay_host_id=? AND key='api.secret'")
+        .bind(host_id)
+        .fetch_one(&pool)
+        .await?
+        .get("value");
     let before_cred: (Vec<u8>, Vec<u8>, Vec<u8>) = {
         let row = sqlx::query("SELECT salt, nonce, secret FROM relay_credentials WHERE name='credR'")
             .fetch_one(&pool)
@@ -43,12 +40,11 @@ async fn rotation_reencrypts_credentials_and_options() -> Result<()> {
     server_core::rotate_secrets_key("old-secret", "new-secret").await?;
 
     // Verify ciphertexts changed and plain decrypted matches
-    let after_opt: String = sqlx::query(
-        "SELECT value FROM relay_host_options WHERE relay_host_id=(SELECT id FROM relay_hosts WHERE name='h3') AND key='api.secret'",
-    )
-    .fetch_one(&pool)
-    .await?
-    .get("value");
+    let after_opt: String = sqlx::query("SELECT value FROM relay_host_options WHERE relay_host_id=? AND key='api.secret'")
+        .bind(host_id)
+        .fetch_one(&pool)
+        .await?
+        .get("value");
     assert_ne!(before_opt, after_opt);
     // Derive the new master key from passphrase (matches rotation logic)
     let new_master = server_core::secrets::derive_master_key_from_passphrase("new-secret").unwrap();

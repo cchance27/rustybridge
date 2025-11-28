@@ -13,12 +13,14 @@ use crate::{
 #[component]
 pub fn EditGroupModal(
     open: Signal<bool>,
+    group_id: Signal<i64>,
     group_name: Signal<String>,
     roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
     groups: Resource<Result<Vec<rb_types::users::GroupInfo>, ServerFnError>>,
     toast: Signal<Option<ToastMessage>>,
 ) -> Element {
     let name = group_name();
+    let group_id_val = group_id();
     let mut active_tab = use_signal(|| "general"); // general, roles, claims
 
     // Name state
@@ -52,13 +54,25 @@ pub fn EditGroupModal(
     let name_for_save = name.clone();
     let on_save_general = move |_| {
         let new_name = edit_name();
-        // Rename logic (placeholder)
+        // Rename logic
         if new_name != name_for_save {
             spawn(async move {
-                toast.set(Some(ToastMessage {
-                    message: "Group renaming not yet implemented. Please delete and recreate the group.".to_string(),
-                    toast_type: ToastType::Warning,
-                }));
+                match crate::app::api::groups::update_group(group_id_val, new_name.clone()).await {
+                    Ok(_) => {
+                        toast.set(Some(ToastMessage {
+                            message: format!("Renamed group to '{}'", new_name),
+                            toast_type: ToastType::Success,
+                        }));
+                        groups.restart();
+                        open.set(false);
+                    }
+                    Err(e) => {
+                        toast.set(Some(ToastMessage {
+                            message: format!("Failed to rename group: {}", e),
+                            toast_type: ToastType::Error,
+                        }));
+                    }
+                }
             });
         } else {
             open.set(false);
@@ -67,58 +81,70 @@ pub fn EditGroupModal(
 
     // Role Handlers
     let add_role_handler = move |_| {
-        let role = selected_role_to_add();
-        let group = group_name();
-        if role.is_empty() {
+        let role_name = selected_role_to_add();
+        let group_id_for_add = group_id_val;
+        let group_name = group_name();
+        if role_name.is_empty() {
             return;
         }
 
         spawn(async move {
-            match assign_role_to_group(role.clone(), group.clone()).await {
-                Ok(_) => {
-                    groups.restart();
-                    roles.restart(); // Update roles too as counts change
-                    let mut current = group_roles();
-                    if !current.contains(&role) {
-                        current.push(role.clone());
-                        group_roles.set(current);
+            // Find role ID from role name
+            if let Some(Ok(all_roles)) = roles.value()().as_ref()
+                && let Some(role) = all_roles.iter().find(|r| r.name == role_name)
+            {
+                match assign_role_to_group(group_id_for_add, role.id).await {
+                    Ok(_) => {
+                        groups.restart();
+                        roles.restart(); // Update roles too as counts change
+                        let mut current = group_roles();
+                        if !current.contains(&role_name) {
+                            current.push(role_name.clone());
+                            group_roles.set(current);
+                        }
+                        selected_role_to_add.set(String::new());
+                        toast.set(Some(ToastMessage {
+                            message: format!("Assigned role '{}' to group '{}'", role_name, group_name),
+                            toast_type: ToastType::Success,
+                        }));
                     }
-                    selected_role_to_add.set(String::new());
-                    toast.set(Some(ToastMessage {
-                        message: format!("Assigned role '{}' to group '{}'", role, group),
-                        toast_type: ToastType::Success,
-                    }));
-                }
-                Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to assign role: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    Err(e) => {
+                        toast.set(Some(ToastMessage {
+                            message: format!("Failed to assign role: {}", e),
+                            toast_type: ToastType::Error,
+                        }));
+                    }
                 }
             }
         });
     };
 
-    let remove_role_handler = move |role: String| {
-        let group = group_name();
+    let remove_role_handler = move |role_name: String| {
+        let group_id_for_remove = group_id_val;
+        let group_name = group_name();
         spawn(async move {
-            match revoke_role_from_group(role.clone(), group.clone()).await {
-                Ok(_) => {
-                    groups.restart();
-                    roles.restart();
-                    let mut current = group_roles();
-                    current.retain(|r| r != &role);
-                    group_roles.set(current);
-                    toast.set(Some(ToastMessage {
-                        message: format!("Removed role '{}' from group '{}'", role, group),
-                        toast_type: ToastType::Success,
-                    }));
-                }
-                Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to remove role: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+            // Find role ID from role name
+            if let Some(Ok(all_roles)) = roles.value()().as_ref()
+                && let Some(role) = all_roles.iter().find(|r| r.name == role_name)
+            {
+                match revoke_role_from_group(group_id_for_remove, role.id).await {
+                    Ok(_) => {
+                        groups.restart();
+                        roles.restart();
+                        let mut current = group_roles();
+                        current.retain(|r| r != &role_name);
+                        group_roles.set(current);
+                        toast.set(Some(ToastMessage {
+                            message: format!("Removed role '{}' from group '{}'", role_name, group_name),
+                            toast_type: ToastType::Success,
+                        }));
+                    }
+                    Err(e) => {
+                        toast.set(Some(ToastMessage {
+                            message: format!("Failed to remove role: {}", e),
+                            toast_type: ToastType::Error,
+                        }));
+                    }
                 }
             }
         });
@@ -144,7 +170,7 @@ pub fn EditGroupModal(
                 }
             };
 
-            match add_group_claim(group.clone(), claim_type.clone()).await {
+            match add_group_claim(group_id_val, claim_type.clone()).await {
                 Ok(_) => {
                     groups.restart();
                     let mut current = group_claims();
@@ -169,9 +195,10 @@ pub fn EditGroupModal(
     };
 
     let remove_claim_handler = move |claim: ClaimType| {
+        let group_id_for_remove = group_id_val;
         let group = group_name();
         spawn(async move {
-            match remove_group_claim(group.clone(), claim.clone()).await {
+            match remove_group_claim(group_id_for_remove, claim.clone()).await {
                 Ok(_) => {
                     groups.restart();
                     let mut current = group_claims();
@@ -245,7 +272,6 @@ pub fn EditGroupModal(
                                     value: "{edit_name}",
                                     oninput: move |e| edit_name.set(e.value()),
                                 }
-                                div { class: "label", span { class: "label-text-alt text-warning", "Renaming is not fully supported yet." } }
                             }
                             button {
                                 class: "btn btn-primary self-end",

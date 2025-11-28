@@ -18,18 +18,21 @@ pub fn GroupsSection(
 ) -> Element {
     // Delete confirmation state
     let mut delete_confirm_open = use_signal(|| false);
+    let mut delete_target_id = use_signal(|| 0i64);
     let mut delete_target_name = use_signal(String::new);
 
-    let mut open_delete_confirm = move |target_name: String| {
+    let mut open_delete_confirm = move |target_id: i64, target_name: String| {
+        delete_target_id.set(target_id);
         delete_target_name.set(target_name);
         delete_confirm_open.set(true);
     };
 
     let handle_delete = move |_| {
+        let target_id = delete_target_id();
         let target_name = delete_target_name();
 
         spawn(async move {
-            match delete_group(target_name.clone()).await {
+            match delete_group(target_id).await {
                 Ok(_) => {
                     delete_confirm_open.set(false);
                     toast.set(Some(ToastMessage {
@@ -52,10 +55,12 @@ pub fn GroupsSection(
 
     // Edit Group Modal State
     let mut edit_group_modal_open = use_signal(|| false);
+    let mut edit_group_id = use_signal(|| 0i64);
     let mut edit_group_name = use_signal(String::new);
 
-    // Manage Group Roles Modal State
+    // Manage roles modal state
     let mut manage_roles_modal_open = use_signal(|| false);
+    let mut manage_roles_group_id = use_signal(|| 0i64);
     let mut manage_roles_group = use_signal(String::new);
     let mut manage_roles_current = use_signal(Vec::<String>::new);
     let mut manage_roles_available = use_signal(Vec::<String>::new);
@@ -63,17 +68,20 @@ pub fn GroupsSection(
 
     // Group members modal state
     let mut members_modal_open = use_signal(|| false);
+    let mut members_group_id = use_signal(|| 0i64);
     let mut members_group_name = use_signal(String::new);
     let mut group_members = use_signal(Vec::<String>::new);
     let mut available_users_for_group = use_signal(Vec::<String>::new);
     let mut selected_user_to_add = use_signal(String::new);
 
-    let mut open_edit_group = move |group: String| {
-        edit_group_name.set(group);
+    let mut open_edit_group = move |group_id: i64, group_name: String| {
+        edit_group_id.set(group_id);
+        edit_group_name.set(group_name);
         edit_group_modal_open.set(true);
     };
 
     let mut open_manage_roles = move |group: &rb_types::users::GroupInfo| {
+        manage_roles_group_id.set(group.id);
         manage_roles_group.set(group.name.clone());
         manage_roles_current.set(group.roles.clone());
         if let Some(Ok(all_roles)) = roles.value()().as_ref() {
@@ -87,13 +95,14 @@ pub fn GroupsSection(
         manage_roles_modal_open.set(true);
     };
 
-    let mut open_manage_members = move |group: String| {
-        members_group_name.set(group.clone());
+    let mut open_manage_members = move |group_id: i64, group_name: String| {
+        members_group_id.set(group_id);
+        members_group_name.set(group_name.clone());
         selected_user_to_add.set(String::new());
 
         // Load members and available users
         spawn(async move {
-            if let Ok(members) = list_group_members(group.clone()).await {
+            if let Ok(members) = list_group_members(group_id).await {
                 group_members.set(members.clone());
 
                 // Get all users and filter out those already in the group
@@ -107,74 +116,86 @@ pub fn GroupsSection(
     };
 
     let add_user_to_group = move |_| {
-        let group = members_group_name();
-        let user = selected_user_to_add();
+        let group_id = members_group_id();
+        let group_name = members_group_name();
+        let username = selected_user_to_add();
 
-        if user.is_empty() {
+        if username.is_empty() {
             return;
         }
 
         spawn(async move {
-            match add_member_to_group(group.clone(), user.clone()).await {
-                Ok(_) => {
-                    // Reload members
-                    if let Ok(members) = list_group_members(group.clone()).await {
-                        group_members.set(members.clone());
+            // Find user ID from username
+            if let Ok(all_users) = list_users().await
+                && let Some(user) = all_users.iter().find(|u| u.username == username)
+            {
+                match add_member_to_group(group_id, user.id).await {
+                    Ok(_) => {
+                        // Reload members
+                        if let Ok(members) = list_group_members(group_id).await {
+                            group_members.set(members.clone());
 
-                        // Update available users
-                        if let Ok(all_users) = list_users().await {
-                            let available: Vec<String> =
-                                all_users.into_iter().map(|u| u.username).filter(|u| !members.contains(u)).collect();
-                            available_users_for_group.set(available);
+                            // Update available users
+                            if let Ok(all_users) = list_users().await {
+                                let available: Vec<String> =
+                                    all_users.into_iter().map(|u| u.username).filter(|u| !members.contains(u)).collect();
+                                available_users_for_group.set(available);
+                            }
                         }
+                        selected_user_to_add.set(String::new());
+                        toast.set(Some(ToastMessage {
+                            message: format!("Added '{}' to group '{}'", username, group_name),
+                            toast_type: ToastType::Success,
+                        }));
+                        groups.restart();
+                        users.restart(); // Refresh users list to show updated group memberships
                     }
-                    selected_user_to_add.set(String::new());
-                    toast.set(Some(ToastMessage {
-                        message: format!("Added '{}' to group '{}'", user, group),
-                        toast_type: ToastType::Success,
-                    }));
-                    groups.restart();
-                    users.restart(); // Refresh users list to show updated group memberships
-                }
-                Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to add user to group: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    Err(e) => {
+                        toast.set(Some(ToastMessage {
+                            message: format!("Failed to add user to group: {}", e),
+                            toast_type: ToastType::Error,
+                        }));
+                    }
                 }
             }
         });
     };
 
-    let remove_user_from_group_handler = move |user: String| {
-        let group = members_group_name();
+    let remove_user_from_group_handler = move |username: String| {
+        let group_id = members_group_id();
+        let group_name = members_group_name();
 
         spawn(async move {
-            match remove_member_from_group(group.clone(), user.clone()).await {
-                Ok(_) => {
-                    // Reload members
-                    if let Ok(members) = list_group_members(group.clone()).await {
-                        group_members.set(members.clone());
+            // Find user ID from username
+            if let Ok(all_users) = list_users().await
+                && let Some(user) = all_users.iter().find(|u| u.username == username)
+            {
+                match remove_member_from_group(group_id, user.id).await {
+                    Ok(_) => {
+                        // Reload members
+                        if let Ok(members) = list_group_members(group_id).await {
+                            group_members.set(members.clone());
 
-                        // Update available users
-                        if let Ok(all_users) = list_users().await {
-                            let available: Vec<String> =
-                                all_users.into_iter().map(|u| u.username).filter(|u| !members.contains(u)).collect();
-                            available_users_for_group.set(available);
+                            // Update available users
+                            if let Ok(all_users) = list_users().await {
+                                let available: Vec<String> =
+                                    all_users.into_iter().map(|u| u.username).filter(|u| !members.contains(u)).collect();
+                                available_users_for_group.set(available);
+                            }
                         }
+                        toast.set(Some(ToastMessage {
+                            message: format!("Removed '{}' from group '{}'", username, group_name),
+                            toast_type: ToastType::Success,
+                        }));
+                        groups.restart();
+                        users.restart(); // Refresh users list to show updated group memberships
                     }
-                    toast.set(Some(ToastMessage {
-                        message: format!("Removed '{}' from group '{}'", user, group),
-                        toast_type: ToastType::Success,
-                    }));
-                    groups.restart();
-                    users.restart(); // Refresh users list to show updated group memberships
-                }
-                Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to remove user from group: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    Err(e) => {
+                        toast.set(Some(ToastMessage {
+                            message: format!("Failed to remove user from group: {}", e),
+                            toast_type: ToastType::Error,
+                        }));
+                    }
                 }
             }
         });
@@ -227,8 +248,9 @@ pub fn GroupsSection(
                                                             "badge badge-ghost whitespace-nowrap cursor-pointer hover:brightness-90"
                                                         },
                                                         onclick: {
-                                                            let g = group.name.clone();
-                                                            move |_| open_manage_members(g.clone())
+                                                            let group_id = group.id;
+                                                            let group_name = group.name.clone();
+                                                            move |_| open_manage_members(group_id, group_name.clone())
                                                         },
                                                         "{group.member_count} "
                                                         {if group.member_count == 1 { "member" } else { "members" }}
@@ -349,8 +371,9 @@ pub fn GroupsSection(
                                                     button {
                                                         class: "btn btn-xs btn-primary join-item",
                                                         onclick: {
-                                                            let g = group.name.clone();
-                                                            move |_| open_edit_group(g.clone())
+                                                            let group_id = group.id;
+                                                            let group_name = group.name.clone();
+                                                            move |_| open_edit_group(group_id, group_name.clone())
                                                         },
                                                         "Edit"
                                                     }
@@ -361,8 +384,9 @@ pub fn GroupsSection(
                                                     button {
                                                         class: "btn btn-xs btn-secondary join-item",
                                                         onclick: {
-                                                            let g = group.name.clone();
-                                                            move |_| open_delete_confirm(g.clone())
+                                                            let group_id = group.id;
+                                                            let group_name = group.name.clone();
+                                                            move |_| open_delete_confirm(group_id, group_name.clone())
                                                         },
                                                         "Delete"
                                                     }
@@ -391,6 +415,7 @@ pub fn GroupsSection(
         // Edit Group Modal
         EditGroupModal {
             open: edit_group_modal_open,
+            group_id: edit_group_id,
             group_name: edit_group_name,
             roles,
             groups,
@@ -400,6 +425,7 @@ pub fn GroupsSection(
         // Manage Group Roles Modal
         ManageGroupRolesModal {
              roles_modal_open: manage_roles_modal_open,
+             group_id: manage_roles_group_id,
              group_name: manage_roles_group,
              group_roles: manage_roles_current,
              available_roles: manage_roles_available,

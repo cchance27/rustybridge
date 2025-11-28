@@ -33,11 +33,19 @@ impl ServerHandler {
         // Users with any *:view claim or wildcard get management access
         let can_manage = if let Ok(handle) = state_store::server_db().await {
             let pool = handle.into_pool();
-            if let Ok(claims) = state_store::get_user_claims(&pool, username).await {
-                claims.iter().any(|c| {
-                    let claim_str = c.to_string();
-                    claim_str == "*" || claim_str.ends_with(":view")
-                })
+            if let Ok(mut conn) = pool.acquire().await {
+                if let Some(user_id) = state_store::fetch_user_id_by_name(&mut *conn, username).await.ok().flatten() {
+                    if let Ok(claims) = state_store::get_user_claims_by_id(&mut conn, user_id).await {
+                        claims.iter().any(|c| {
+                            let claim_str = c.to_string();
+                            claim_str == "*" || claim_str.ends_with(":view")
+                        })
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
             } else {
                 false
             }

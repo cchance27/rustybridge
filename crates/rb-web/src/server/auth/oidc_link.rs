@@ -181,7 +181,7 @@ pub async fn oidc_link_callback(
     let _picture: Option<String> = None;
 
     // Check if this OIDC account is already linked to another user
-    match state_store::find_user_id_by_oidc_subject(&pool, &config.issuer_url, &subject).await {
+    match state_store::find_user_id_by_oidc_subject(&*pool, &config.issuer_url, &subject).await {
         Ok(Some(existing_user_id)) if existing_user_id != user_id => {
             tracing::warn!(
                 user_id = %user_id,
@@ -206,7 +206,7 @@ pub async fn oidc_link_callback(
     }
 
     // Insert or update the link
-    if let Err(e) = state_store::upsert_oidc_link(&pool, user_id, &config.issuer_url, &subject, &email, &_name, &_picture).await {
+    if let Err(e) = state_store::upsert_oidc_link(&*pool, user_id, &config.issuer_url, &subject, &email, &_name, &_picture).await {
         tracing::error!("Failed to link OIDC account: {}", e);
         return Redirect::to("/oidc/error?error=link_failed").into_response();
     }

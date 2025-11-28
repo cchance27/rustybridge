@@ -3,7 +3,7 @@
 use std::str::FromStr;
 
 use rb_types::state::Role;
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, SqliteExecutor};
 
 use crate::{ClaimType, DbResult};
 
@@ -14,102 +14,115 @@ fn current_ts() -> i64 {
         .as_secs() as i64
 }
 
-pub async fn create_role(pool: &SqlitePool, name: &str, description: Option<&str>) -> DbResult<i64> {
+pub async fn create_role(executor: impl SqliteExecutor<'_>, name: &str, description: Option<&str>) -> DbResult<i64> {
     let now = current_ts();
-    sqlx::query("INSERT INTO roles (name, description, created_at) VALUES (?, ?, ?)")
+    let result = sqlx::query("INSERT INTO roles (name, description, created_at) VALUES (?, ?, ?)")
         .bind(name)
         .bind(description)
         .bind(now)
-        .execute(pool)
+        .execute(executor)
         .await?;
-    let row = sqlx::query("SELECT id FROM roles WHERE name = ?")
-        .bind(name)
-        .fetch_one(pool)
-        .await?;
-    Ok(row.get::<i64, _>("id"))
+    Ok(result.last_insert_rowid())
 }
 
-pub async fn delete_role(pool: &SqlitePool, name: &str) -> DbResult<()> {
-    sqlx::query("DELETE FROM roles WHERE name = ?").bind(name).execute(pool).await?;
+/// Delete a role by ID (preferred over name-based deletion).
+///
+/// # Super Admin Protection
+/// Cannot delete role ID 1 (Super Admin role).
+pub async fn delete_role_by_id(executor: impl SqliteExecutor<'_>, id: i64) -> DbResult<()> {
+    if id == crate::SUPER_ADMIN_ROLE_ID {
+        return Err(crate::DbError::InvalidOperation {
+            operation: "delete_role".to_string(),
+            reason: "Cannot delete Super Admin role (role ID 1 is protected)".to_string(),
+        });
+    }
+
+    sqlx::query("DELETE FROM roles WHERE id = ?").bind(id).execute(executor).await?;
     Ok(())
 }
 
-pub async fn list_roles(pool: &SqlitePool) -> DbResult<Vec<Role>> {
+pub async fn list_roles(executor: impl SqliteExecutor<'_>) -> DbResult<Vec<Role>> {
     let rows = sqlx::query_as::<_, Role>("SELECT id, name, description, created_at FROM roles ORDER BY name")
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await?;
     Ok(rows)
 }
 
-pub async fn assign_role_to_user(pool: &SqlitePool, username: &str, role_name: &str) -> DbResult<()> {
-    let user_id = crate::fetch_user_id_by_name(pool, username)
-        .await?
-        .ok_or(crate::DbError::UserNotFound {
-            username: username.to_string(),
-        })?;
-    let role_id = fetch_role_id_by_name(pool, role_name).await?.ok_or(crate::DbError::GroupNotFound {
-        group: role_name.to_string(), // Reusing GroupNotFound for generic "not found" or add RoleNotFound
-    })?;
+/// Assign a role to a user using IDs (preferred over name-based operation).
+pub async fn assign_role_to_user_by_ids(executor: impl SqliteExecutor<'_>, user_id: i64, role_id: i64) -> DbResult<()> {
     sqlx::query("INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)")
         .bind(user_id)
         .bind(role_id)
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }
 
-pub async fn revoke_role_from_user(pool: &SqlitePool, username: &str, role_name: &str) -> DbResult<()> {
-    let user_id = crate::fetch_user_id_by_name(pool, username)
-        .await?
-        .ok_or(crate::DbError::UserNotFound {
-            username: username.to_string(),
-        })?;
-    let role_id = fetch_role_id_by_name(pool, role_name).await?.ok_or(crate::DbError::GroupNotFound {
-        group: role_name.to_string(),
-    })?;
+/// Revoke a role from a user using IDs (preferred over name-based operation).
+///
+/// # Super Admin Protection
+/// Ensures at least 1 user has the Super Admin role (role ID 1).
+pub async fn revoke_role_from_user_by_ids(conn: &mut sqlx::SqliteConnection, user_id: i64, role_id: i64) -> DbResult<()> {
+    // Super Admin protection: ensure at least 1 user has the Super Admin role
+    if role_id == crate::SUPER_ADMIN_ROLE_ID {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_roles WHERE role_id = ?")
+            .bind(crate::SUPER_ADMIN_ROLE_ID)
+            .fetch_one(&mut *conn)
+            .await?;
+
+        if count <= 1 {
+            return Err(crate::DbError::InvalidOperation {
+                operation: "revoke_role".to_string(),
+                reason: "Cannot revoke Super Admin role from last user (role ID 1 must have at least 1 user)".to_string(),
+            });
+        }
+    }
+
     sqlx::query("DELETE FROM user_roles WHERE user_id = ? AND role_id = ?")
         .bind(user_id)
         .bind(role_id)
-        .execute(pool)
+        .execute(conn)
         .await?;
     Ok(())
 }
 
-pub async fn add_claim_to_role(pool: &SqlitePool, role_name: &str, claim: &ClaimType) -> DbResult<()> {
-    let role_id = fetch_role_id_by_name(pool, role_name).await?.ok_or(crate::DbError::GroupNotFound {
-        group: role_name.to_string(),
-    })?;
+/// Add a claim to a role using role ID (preferred over name-based operation).
+pub async fn add_claim_to_role_by_id(executor: impl SqliteExecutor<'_>, role_id: i64, claim: &ClaimType) -> DbResult<()> {
     sqlx::query("INSERT OR IGNORE INTO role_claims (role_id, claim_key) VALUES (?, ?)")
         .bind(role_id)
         .bind(claim.to_string())
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }
 
-pub async fn remove_claim_from_role(pool: &SqlitePool, role_name: &str, claim: &ClaimType) -> DbResult<()> {
-    let role_id = fetch_role_id_by_name(pool, role_name).await?.ok_or(crate::DbError::GroupNotFound {
-        group: role_name.to_string(),
-    })?;
+/// Remove a claim from a role using role ID (preferred over name-based operation).
+///
+/// # Super Admin Protection
+/// Cannot modify claims for role ID 1 (Super Admin role).
+pub async fn remove_claim_from_role_by_id(executor: impl SqliteExecutor<'_>, role_id: i64, claim: &ClaimType) -> DbResult<()> {
+    if role_id == crate::SUPER_ADMIN_ROLE_ID {
+        return Err(crate::DbError::InvalidOperation {
+            operation: "remove_role_claim".to_string(),
+            reason: "Cannot modify Super Admin role claims (role ID 1 is protected)".to_string(),
+        });
+    }
+
     sqlx::query("DELETE FROM role_claims WHERE role_id = ? AND claim_key = ?")
         .bind(role_id)
         .bind(claim.to_string())
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }
 
-pub async fn get_user_claims(pool: &SqlitePool, username: &str) -> DbResult<Vec<ClaimType>> {
-    let user_id = crate::fetch_user_id_by_name(pool, username)
-        .await?
-        .ok_or(crate::DbError::UserNotFound {
-            username: username.to_string(),
-        })?;
-
+/// Get all user claims (direct + via roles + via groups + via group roles) by user ID.
+/// This is the preferred method to avoid race conditions.
+pub async fn get_user_claims_by_id(conn: &mut sqlx::SqliteConnection, user_id: i64) -> DbResult<Vec<ClaimType>> {
     // Fetch direct user claims
     let user_claims = sqlx::query_scalar::<_, String>("SELECT claim_key FROM user_claims WHERE user_id = ?")
         .bind(user_id)
-        .fetch_all(pool)
+        .fetch_all(&mut *conn)
         .await?;
 
     // Fetch claims via roles
@@ -122,7 +135,7 @@ pub async fn get_user_claims(pool: &SqlitePool, username: &str) -> DbResult<Vec<
         "#,
     )
     .bind(user_id)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     // Fetch claims via groups
@@ -135,7 +148,7 @@ pub async fn get_user_claims(pool: &SqlitePool, username: &str) -> DbResult<Vec<
         "#,
     )
     .bind(user_id)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     // Fetch claims via group roles (NEW: groups → roles → claims)
@@ -149,7 +162,7 @@ pub async fn get_user_claims(pool: &SqlitePool, username: &str) -> DbResult<Vec<
         "#,
     )
     .bind(user_id)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     let mut all_claims = Vec::new();
@@ -166,182 +179,133 @@ pub async fn get_user_claims(pool: &SqlitePool, username: &str) -> DbResult<Vec<
     Ok(all_claims.into_iter().filter_map(|s| ClaimType::from_str(&s).ok()).collect())
 }
 
-pub async fn get_user_direct_claims(pool: &SqlitePool, username: &str) -> DbResult<Vec<ClaimType>> {
-    let user_id = crate::fetch_user_id_by_name(pool, username)
-        .await?
-        .ok_or(crate::DbError::UserNotFound {
-            username: username.to_string(),
-        })?;
-
-    // Fetch direct user claims only
+/// Get direct user claims by user ID (preferred over username-based lookup).
+pub async fn get_user_direct_claims_by_id(executor: impl SqliteExecutor<'_>, user_id: i64) -> DbResult<Vec<ClaimType>> {
     let user_claims = sqlx::query_scalar::<_, String>("SELECT claim_key FROM user_claims WHERE user_id = ?")
         .bind(user_id)
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await?;
 
     Ok(user_claims.into_iter().filter_map(|s| ClaimType::from_str(&s).ok()).collect())
 }
 
-pub async fn add_claim_to_user(pool: &SqlitePool, username: &str, claim: &ClaimType) -> DbResult<()> {
-    let user_id = crate::fetch_user_id_by_name(pool, username)
-        .await?
-        .ok_or(crate::DbError::UserNotFound {
-            username: username.to_string(),
-        })?;
+/// Add a claim to a user using user ID (preferred over username-based operation).
+pub async fn add_claim_to_user_by_id(executor: impl SqliteExecutor<'_>, user_id: i64, claim: &ClaimType) -> DbResult<()> {
     sqlx::query("INSERT OR IGNORE INTO user_claims (user_id, claim_key) VALUES (?, ?)")
         .bind(user_id)
         .bind(claim.to_string())
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }
 
-pub async fn remove_claim_from_user(pool: &SqlitePool, username: &str, claim: &ClaimType) -> DbResult<()> {
-    let user_id = crate::fetch_user_id_by_name(pool, username)
-        .await?
-        .ok_or(crate::DbError::UserNotFound {
-            username: username.to_string(),
-        })?;
+/// Remove a claim from a user using user ID (preferred over username-based operation).
+pub async fn remove_claim_from_user_by_id(executor: impl SqliteExecutor<'_>, user_id: i64, claim: &ClaimType) -> DbResult<()> {
     sqlx::query("DELETE FROM user_claims WHERE user_id = ? AND claim_key = ?")
         .bind(user_id)
         .bind(claim.to_string())
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }
 
-pub async fn add_claim_to_group(pool: &SqlitePool, group_name: &str, claim: &ClaimType) -> DbResult<()> {
-    let group_id = crate::fetch_group_id_by_name(pool, group_name)
-        .await?
-        .ok_or(crate::DbError::GroupNotFound {
-            group: group_name.to_string(),
-        })?;
+/// Add a claim to a group using group ID (preferred over name-based operation).
+pub async fn add_claim_to_group_by_id(executor: impl SqliteExecutor<'_>, group_id: i64, claim: &ClaimType) -> DbResult<()> {
     sqlx::query("INSERT OR IGNORE INTO group_claims (group_id, claim_key) VALUES (?, ?)")
         .bind(group_id)
         .bind(claim.to_string())
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }
 
-pub async fn remove_claim_from_group(pool: &SqlitePool, group_name: &str, claim: &ClaimType) -> DbResult<()> {
-    let group_id = crate::fetch_group_id_by_name(pool, group_name)
-        .await?
-        .ok_or(crate::DbError::GroupNotFound {
-            group: group_name.to_string(),
-        })?;
+/// Remove a claim from a group using group ID (preferred over name-based operation).
+pub async fn remove_claim_from_group_by_id(executor: impl SqliteExecutor<'_>, group_id: i64, claim: &ClaimType) -> DbResult<()> {
     sqlx::query("DELETE FROM group_claims WHERE group_id = ? AND claim_key = ?")
         .bind(group_id)
         .bind(claim.to_string())
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }
 
-pub async fn get_group_claims(pool: &SqlitePool, group_name: &str) -> DbResult<Vec<ClaimType>> {
-    let group_id = crate::fetch_group_id_by_name(pool, group_name)
-        .await?
-        .ok_or(crate::DbError::GroupNotFound {
-            group: group_name.to_string(),
-        })?;
+/// Get group claims by group ID (preferred over name-based lookup).
+pub async fn get_group_claims_by_id(executor: impl SqliteExecutor<'_>, group_id: i64) -> DbResult<Vec<ClaimType>> {
     let claims = sqlx::query_scalar::<_, String>("SELECT claim_key FROM group_claims WHERE group_id = ?")
         .bind(group_id)
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await?;
 
     Ok(claims.into_iter().filter_map(|s| ClaimType::from_str(&s).ok()).collect())
 }
 
-pub async fn get_role_claims(pool: &SqlitePool, role_name: &str) -> DbResult<Vec<ClaimType>> {
-    let role_id = fetch_role_id_by_name(pool, role_name).await?.ok_or(crate::DbError::GroupNotFound {
-        group: role_name.to_string(), // TODO: Add RoleNotFound error
-    })?;
+/// Get role claims by role ID (preferred over name-based lookup).
+pub async fn get_role_claims_by_id(executor: impl SqliteExecutor<'_>, role_id: i64) -> DbResult<Vec<ClaimType>> {
     let claims = sqlx::query_scalar::<_, String>("SELECT claim_key FROM role_claims WHERE role_id = ?")
         .bind(role_id)
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await?;
 
     Ok(claims.into_iter().filter_map(|s| ClaimType::from_str(&s).ok()).collect())
 }
 
-pub async fn list_user_roles(pool: &SqlitePool, username: &str) -> DbResult<Vec<String>> {
-    let rows = sqlx::query(
-        "SELECT r.name FROM roles r JOIN user_roles ur ON r.id = ur.role_id JOIN users u ON u.id = ur.user_id WHERE u.username = ? ORDER BY r.name",
-    )
-    .bind(username)
-    .fetch_all(pool)
-    .await?;
+pub async fn list_user_roles_by_id(executor: impl SqliteExecutor<'_>, user_id: i64) -> DbResult<Vec<String>> {
+    let rows = sqlx::query("SELECT r.name FROM roles r JOIN user_roles ur ON r.id = ur.role_id WHERE ur.user_id = ? ORDER BY r.name")
+        .bind(user_id)
+        .fetch_all(executor)
+        .await?;
     Ok(rows.into_iter().map(|r| r.get::<String, _>("name")).collect())
 }
 
-pub async fn list_role_users(pool: &SqlitePool, role_name: &str) -> DbResult<Vec<String>> {
-    let rows = sqlx::query(
-        "SELECT u.username FROM users u JOIN user_roles ur ON u.id = ur.user_id JOIN roles r ON r.id = ur.role_id WHERE r.name = ? ORDER BY u.username",
-    )
-    .bind(role_name)
-    .fetch_all(pool)
-    .await?;
+pub async fn list_role_users_by_id(executor: impl SqliteExecutor<'_>, role_id: i64) -> DbResult<Vec<String>> {
+    let rows =
+        sqlx::query("SELECT u.username FROM users u JOIN user_roles ur ON u.id = ur.user_id WHERE ur.role_id = ? ORDER BY u.username")
+            .bind(role_id)
+            .fetch_all(executor)
+            .await?;
     Ok(rows.into_iter().map(|r| r.get::<String, _>("username")).collect())
 }
 
-pub async fn list_group_roles(pool: &SqlitePool, group_name: &str) -> DbResult<Vec<String>> {
-    let rows = sqlx::query(
-        "SELECT r.name FROM roles r JOIN group_roles gr ON r.id = gr.role_id JOIN groups g ON g.id = gr.group_id WHERE g.name = ? ORDER BY r.name",
-    )
-    .bind(group_name)
-    .fetch_all(pool)
-    .await?;
+pub async fn list_group_roles_by_id(executor: impl SqliteExecutor<'_>, group_id: i64) -> DbResult<Vec<String>> {
+    let rows = sqlx::query("SELECT r.name FROM roles r JOIN group_roles gr ON r.id = gr.role_id WHERE gr.group_id = ? ORDER BY r.name")
+        .bind(group_id)
+        .fetch_all(executor)
+        .await?;
     Ok(rows.into_iter().map(|r| r.get::<String, _>("name")).collect())
 }
 
-pub async fn list_role_groups(pool: &SqlitePool, role_name: &str) -> DbResult<Vec<String>> {
-    let rows = sqlx::query(
-        "SELECT g.name FROM groups g JOIN group_roles gr ON g.id = gr.group_id JOIN roles r ON r.id = gr.role_id WHERE r.name = ? ORDER BY g.name",
-    )
-    .bind(role_name)
-    .fetch_all(pool)
-    .await?;
+pub async fn list_role_groups_by_id(executor: impl SqliteExecutor<'_>, role_id: i64) -> DbResult<Vec<String>> {
+    let rows = sqlx::query("SELECT g.name FROM groups g JOIN group_roles gr ON g.id = gr.group_id WHERE gr.role_id = ? ORDER BY g.name")
+        .bind(role_id)
+        .fetch_all(executor)
+        .await?;
     Ok(rows.into_iter().map(|r| r.get::<String, _>("name")).collect())
 }
 
-pub async fn assign_role_to_group(pool: &SqlitePool, group_name: &str, role_name: &str) -> DbResult<()> {
-    let group_id = crate::fetch_group_id_by_name(pool, group_name)
-        .await?
-        .ok_or(crate::DbError::GroupNotFound {
-            group: group_name.to_string(),
-        })?;
-    let role_id = fetch_role_id_by_name(pool, role_name).await?.ok_or(crate::DbError::GroupNotFound {
-        group: role_name.to_string(), // TODO: Add RoleNotFound error
-    })?;
+/// Assign a role to a group using IDs (preferred over name-based operation).
+pub async fn assign_role_to_group_by_ids(executor: impl SqliteExecutor<'_>, group_id: i64, role_id: i64) -> DbResult<()> {
     sqlx::query("INSERT OR IGNORE INTO group_roles (group_id, role_id) VALUES (?, ?)")
         .bind(group_id)
         .bind(role_id)
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }
 
-pub async fn revoke_role_from_group(pool: &SqlitePool, group_name: &str, role_name: &str) -> DbResult<()> {
-    let group_id = crate::fetch_group_id_by_name(pool, group_name)
-        .await?
-        .ok_or(crate::DbError::GroupNotFound {
-            group: group_name.to_string(),
-        })?;
-    let role_id = fetch_role_id_by_name(pool, role_name).await?.ok_or(crate::DbError::GroupNotFound {
-        group: role_name.to_string(),
-    })?;
+/// Revoke a role from a group using IDs (preferred over name-based operation).
+pub async fn revoke_role_from_group_by_ids(executor: impl SqliteExecutor<'_>, group_id: i64, role_id: i64) -> DbResult<()> {
     sqlx::query("DELETE FROM group_roles WHERE group_id = ? AND role_id = ?")
         .bind(group_id)
         .bind(role_id)
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }
 
-pub async fn fetch_role_id_by_name(pool: &SqlitePool, name: &str) -> DbResult<Option<i64>> {
+pub async fn fetch_role_id_by_name(executor: impl SqliteExecutor<'_>, name: &str) -> DbResult<Option<i64>> {
     let row = sqlx::query("SELECT id FROM roles WHERE name = ?")
         .bind(name)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await?;
     Ok(row.map(|r| r.get::<i64, _>("id")))
 }

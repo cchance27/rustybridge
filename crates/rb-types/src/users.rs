@@ -31,6 +31,8 @@ pub struct UserGroupInfo {
 /// Group info with statistics.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GroupInfo {
+    /// Group ID.
+    pub id: i64,
     /// Group name.
     pub name: String,
     /// Number of members in this group.
@@ -50,6 +52,8 @@ pub struct GroupInfo {
 /// Role info with statistics.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RoleInfo {
+    /// Role ID.
+    pub id: i64,
     /// Role name.
     pub name: String,
     /// Role description.

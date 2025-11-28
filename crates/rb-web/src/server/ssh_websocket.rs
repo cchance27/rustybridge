@@ -85,7 +85,7 @@ async fn ensure_relay_websocket_permissions(
             SshAccessError::RelayNotFound
         })?;
 
-    let has_access = user_has_relay_access(pool, &user.username, relay.id).await.map_err(|err| {
+    let has_access = user_has_relay_access(pool, user.id, relay.id).await.map_err(|err| {
         tracing::error!(user = %user.username, relay = %relay_name, "Failed to check relay ACL: {err}");
         SshAccessError::Internal
     })?;

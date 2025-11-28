@@ -25,13 +25,16 @@ pub fn UsersSection(
     // Delete confirmation state
     let mut delete_confirm_open = use_signal(|| false);
     let mut delete_target_name = use_signal(String::new);
+    let mut delete_target_id = use_signal(|| 0i64);
 
     let mut edit_modal_open = use_signal(|| false);
+    let mut editing_user_id = use_signal(|| None::<i64>);
     let mut editing_username = use_signal(|| None::<String>);
     let oidc_refresh_trigger = use_signal(|| 0u32);
 
-    // Role management state
+    // Manage roles modal state
     let mut manage_roles_modal_open = use_signal(|| false);
+    let mut manage_roles_user_id = use_signal(|| 0i64);
     let mut manage_roles_username = use_signal(String::new);
     let mut manage_roles_current = use_signal(Vec::<String>::new);
     let mut manage_roles_available = use_signal(Vec::<String>::new);
@@ -39,17 +42,20 @@ pub fn UsersSection(
 
     // Group management state
     let mut manage_groups_modal_open = use_signal(|| false);
+    let mut manage_groups_user_id = use_signal(|| 0i64);
     let mut manage_groups_username = use_signal(String::new);
     let mut manage_groups_current = use_signal(Vec::<String>::new);
     let mut manage_groups_available = use_signal(Vec::<String>::new);
     let manage_groups_selected = use_signal(String::new);
 
-    let mut open_edit = move |username: String| {
+    let mut open_edit = move |user_id: i64, username: String| {
+        editing_user_id.set(Some(user_id));
         editing_username.set(Some(username));
         edit_modal_open.set(true);
     };
 
     let mut open_manage_roles = move |user_obj: &rb_types::users::UserGroupInfo| {
+        manage_roles_user_id.set(user_obj.id);
         manage_roles_username.set(user_obj.username.clone());
         manage_roles_current.set(user_obj.roles.clone());
 
@@ -66,6 +72,7 @@ pub fn UsersSection(
     };
 
     let mut open_manage_groups = move |user_obj: &rb_types::users::UserGroupInfo| {
+        manage_groups_user_id.set(user_obj.id);
         manage_groups_username.set(user_obj.username.clone());
         manage_groups_current.set(user_obj.groups.clone());
 
@@ -81,16 +88,18 @@ pub fn UsersSection(
         manage_groups_modal_open.set(true);
     };
 
-    let mut open_delete_confirm = move |target_name: String| {
+    let mut open_delete_confirm = move |target_id: i64, target_name: String| {
+        delete_target_id.set(target_id);
         delete_target_name.set(target_name);
         delete_confirm_open.set(true);
     };
 
     let handle_delete = move |_| {
+        let target_id = delete_target_id();
         let target_name = delete_target_name();
 
         spawn(async move {
-            match delete_user(target_name.clone()).await {
+            match delete_user(target_id).await {
                 Ok(_) => {
                     delete_confirm_open.set(false);
                     toast.set(Some(ToastMessage {
@@ -309,12 +318,14 @@ pub fn UsersSection(
                                                 any_claims: vec![ClaimType::Users(ClaimLevel::Edit), ClaimType::Users(ClaimLevel::Delete)],
                                                 TableActions {
                                                     on_edit: {
-                                                        let u = user.username.clone();
-                                                        move |_| open_edit(u.clone())
+                                                        let user_id = user.id;
+                                                        let username = user.username.clone();
+                                                        move |_| open_edit(user_id, username.clone())
                                                     },
                                                     on_delete: {
-                                                        let u = user.username.clone();
-                                                        move |_| open_delete_confirm(u.clone())
+                                                        let user_id = user.id;
+                                                        let username = user.username.clone();
+                                                        move |_| open_delete_confirm(user_id, username.clone())
                                                     }
                                                 },
                                             }
@@ -325,6 +336,7 @@ pub fn UsersSection(
                             Protected {
                                 any_claims: vec![ClaimType::Users(ClaimLevel::Delete)],
                                 ConfirmDeleteUserModal {
+                                    user_id: delete_target_id,
                                     username: delete_target_name,
                                     delete_confirm_open,
                                     handle_delete,
@@ -334,6 +346,7 @@ pub fn UsersSection(
                                 any_claims: vec![ClaimType::Roles(ClaimLevel::Edit)],
                                 ManageUserRolesModal {
                                     roles_modal_open: manage_roles_modal_open,
+                                    user_id: manage_roles_user_id,
                                     username: manage_roles_username,
                                     user_roles: manage_roles_current,
                                     available_roles: manage_roles_available,
@@ -347,6 +360,7 @@ pub fn UsersSection(
                                 any_claims: vec![ClaimType::Groups(ClaimLevel::Edit)],
                                 ManageUserGroupsModal {
                                     groups_modal_open: manage_groups_modal_open,
+                                    user_id: manage_groups_user_id,
                                     username: manage_groups_username,
                                     user_groups: manage_groups_current,
                                     available_groups: manage_groups_available,
@@ -375,6 +389,7 @@ pub fn UsersSection(
         if editing_username().is_some() {
             EditUserModal {
                 open: edit_modal_open,
+                user_id: editing_user_id,
                 username: editing_username,
                 users,
                 toast,

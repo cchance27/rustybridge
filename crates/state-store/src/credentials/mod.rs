@@ -1,7 +1,7 @@
 //! Credential management operations.
 
 use rb_types::state::RelayCredentialRow;
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, SqliteExecutor};
 
 use crate::DbResult;
 
@@ -21,7 +21,7 @@ fn map_cred_row(r: sqlx::sqlite::SqliteRow) -> RelayCredentialRow {
 
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_relay_credential(
-    pool: &SqlitePool,
+    executor: impl SqliteExecutor<'_>,
     name: &str,
     kind: &str,
     salt: &[u8],
@@ -35,7 +35,7 @@ pub async fn insert_relay_credential(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    sqlx::query(
+    let result = sqlx::query(
         "INSERT INTO relay_credentials (name, kind, salt, nonce, secret, meta, username_mode, password_required, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(name)
@@ -48,46 +48,37 @@ pub async fn insert_relay_credential(
     .bind(password_required as i64)
     .bind(now)
     .bind(now)
-    .execute(pool)
+    .execute(executor)
     .await?;
-    let row = sqlx::query("SELECT id FROM relay_credentials WHERE name = ?")
-        .bind(name)
-        .fetch_one(pool)
-        .await?;
-    Ok(row.get::<i64, _>("id"))
+
+    Ok(result.last_insert_rowid())
 }
 
-pub async fn delete_relay_credential_by_name(pool: &SqlitePool, name: &str) -> DbResult<()> {
-    sqlx::query("DELETE FROM relay_credentials WHERE name = ?")
-        .bind(name)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
-pub async fn get_relay_credential_by_name(pool: &SqlitePool, name: &str) -> DbResult<Option<RelayCredentialRow>> {
+pub async fn get_relay_credential_by_name(executor: impl SqliteExecutor<'_>, name: &str) -> DbResult<Option<RelayCredentialRow>> {
     let row = sqlx::query(
         "SELECT id, name, kind, salt, nonce, secret, meta, username_mode, password_required FROM relay_credentials WHERE name = ?",
     )
     .bind(name)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
     Ok(row.map(map_cred_row))
 }
 
-pub async fn get_relay_credential_by_id(pool: &SqlitePool, id: i64) -> DbResult<Option<RelayCredentialRow>> {
+pub async fn get_relay_credential_by_id(executor: impl SqliteExecutor<'_>, id: i64) -> DbResult<Option<RelayCredentialRow>> {
     let row = sqlx::query(
         "SELECT id, name, kind, salt, nonce, secret, meta, username_mode, password_required FROM relay_credentials WHERE id = ?",
     )
     .bind(id)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
     Ok(row.map(map_cred_row))
 }
 
-pub async fn list_relay_credentials(pool: &SqlitePool) -> DbResult<Vec<(i64, String, String, Option<String>, String, bool)>> {
+pub async fn list_relay_credentials(
+    executor: impl SqliteExecutor<'_>,
+) -> DbResult<Vec<(i64, String, String, Option<String>, String, bool)>> {
     let rows = sqlx::query("SELECT id, name, kind, meta, username_mode, password_required FROM relay_credentials ORDER BY name")
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await?;
     Ok(rows
         .into_iter()
@@ -106,7 +97,7 @@ pub async fn list_relay_credentials(pool: &SqlitePool) -> DbResult<Vec<(i64, Str
 
 #[allow(clippy::too_many_arguments)]
 pub async fn update_relay_credential(
-    pool: &SqlitePool,
+    executor: impl SqliteExecutor<'_>,
     id: i64,
     kind: &str,
     salt: &[u8],
@@ -130,15 +121,15 @@ pub async fn update_relay_credential(
         .bind(password_required as i64)
         .bind(now)
         .bind(id)
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }
 
-pub async fn delete_relay_credential_by_id(pool: &SqlitePool, id: i64) -> DbResult<()> {
+pub async fn delete_relay_credential_by_id(executor: impl SqliteExecutor<'_>, id: i64) -> DbResult<()> {
     sqlx::query("DELETE FROM relay_credentials WHERE id = ?")
         .bind(id)
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }

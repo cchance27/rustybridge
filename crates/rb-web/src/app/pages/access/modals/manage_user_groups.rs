@@ -8,6 +8,7 @@ use crate::{
 #[component]
 pub fn ManageUserGroupsModal(
     groups_modal_open: Signal<bool>,
+    user_id: Signal<i64>,
     username: Signal<String>,
     user_groups: Signal<Vec<String>>,
     available_groups: Signal<Vec<String>>,
@@ -17,81 +18,93 @@ pub fn ManageUserGroupsModal(
     toast: Signal<Option<ToastMessage>>,
 ) -> Element {
     let add_group_handler = move |_| {
-        let user = username();
-        let group = selected_group_to_add();
+        let user_name = username();
+        let group_name = selected_group_to_add();
+        let user_id_val = user_id();
 
-        if group.is_empty() {
+        if group_name.is_empty() {
             return;
         }
 
         spawn(async move {
-            match add_member_to_group(group.clone(), user.clone()).await {
-                Ok(_) => {
-                    // Update local state
-                    let mut current_groups = user_groups();
-                    current_groups.push(group.clone());
-                    user_groups.set(current_groups.clone());
+            // Find group ID from group name
+            if let Some(Ok(all_groups)) = groups.value()().as_ref()
+                && let Some(group) = all_groups.iter().find(|g| g.name == group_name)
+            {
+                match add_member_to_group(group.id, user_id_val).await {
+                    Ok(_) => {
+                        // Update local state
+                        let mut current_groups = user_groups();
+                        current_groups.push(group_name.clone());
+                        user_groups.set(current_groups.clone());
 
-                    // Update available groups
-                    let mut available = available_groups();
-                    available.retain(|g| g != &group);
-                    available_groups.set(available);
+                        // Update available groups
+                        let mut available = available_groups();
+                        available.retain(|g| g != &group_name);
+                        available_groups.set(available);
 
-                    selected_group_to_add.set(String::new());
+                        selected_group_to_add.set(String::new());
 
-                    toast.set(Some(ToastMessage {
-                        message: format!("Added user '{}' to group '{}'", user, group),
-                        toast_type: ToastType::Success,
-                    }));
+                        toast.set(Some(ToastMessage {
+                            message: format!("Added user '{}' to group '{}'", user_name, group_name),
+                            toast_type: ToastType::Success,
+                        }));
 
-                    // Refresh resources
-                    users.restart();
-                    groups.restart();
-                }
-                Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to add user to group: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                        // Refresh resources
+                        users.restart();
+                        groups.restart();
+                    }
+                    Err(e) => {
+                        toast.set(Some(ToastMessage {
+                            message: format!("Failed to add user to group: {}", e),
+                            toast_type: ToastType::Error,
+                        }));
+                    }
                 }
             }
         });
     };
 
-    let remove_group_handler = move |group: String| {
-        let user = username();
+    let remove_group_handler = move |group_name: String| {
+        let user_name = username();
+        let user_id_val = user_id();
 
         spawn(async move {
-            match remove_member_from_group(group.clone(), user.clone()).await {
-                Ok(_) => {
-                    // Update local state
-                    let mut current_groups = user_groups();
-                    current_groups.retain(|g| g != &group);
-                    user_groups.set(current_groups.clone());
+            // Find group ID from group name
+            if let Some(Ok(all_groups)) = groups.value()().as_ref()
+                && let Some(group) = all_groups.iter().find(|g| g.name == group_name)
+            {
+                match remove_member_from_group(group.id, user_id_val).await {
+                    Ok(_) => {
+                        // Update local state
+                        let mut current_groups = user_groups();
+                        current_groups.retain(|g| g != &group_name);
+                        user_groups.set(current_groups.clone());
 
-                    // Update available groups
-                    if let Some(Ok(all_groups)) = groups.value()().as_ref() {
-                        let available: Vec<String> = all_groups
-                            .iter()
-                            .map(|g| g.name.clone())
-                            .filter(|g| !current_groups.contains(g))
-                            .collect();
-                        available_groups.set(available);
+                        // Update available groups
+                        if let Some(Ok(all_groups)) = groups.value()().as_ref() {
+                            let available: Vec<String> = all_groups
+                                .iter()
+                                .map(|g| g.name.clone())
+                                .filter(|g| !current_groups.contains(g))
+                                .collect();
+                            available_groups.set(available);
+                        }
+
+                        toast.set(Some(ToastMessage {
+                            message: format!("Removed user '{}' from group '{}'", user_name, group_name),
+                            toast_type: ToastType::Success,
+                        }));
+
+                        users.restart();
+                        groups.restart();
                     }
-
-                    toast.set(Some(ToastMessage {
-                        message: format!("Removed user '{}' from group '{}'", user, group),
-                        toast_type: ToastType::Success,
-                    }));
-
-                    users.restart();
-                    groups.restart();
-                }
-                Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to remove user from group: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    Err(e) => {
+                        toast.set(Some(ToastMessage {
+                            message: format!("Failed to remove user from group: {}", e),
+                            toast_type: ToastType::Error,
+                        }));
+                    }
                 }
             }
         });

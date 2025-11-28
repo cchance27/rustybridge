@@ -16,19 +16,10 @@ async fn assign_writes_encrypted_values_and_unassign_removes() -> Result<()> {
     state_store::migrate_server(&handle).await?;
     let pool: SqlitePool = handle.into_pool();
 
-    sqlx::query("INSERT INTO relay_hosts (name, ip, port) VALUES ('h4', '127.0.0.1', 22)")
-        .execute(&pool)
-        .await?;
-    server_core::create_password_credential("credA", Some("uA"), "pwA", "fixed", true).await?;
+    let host_id = state_store::insert_relay_host(&pool, "h4", "127.0.0.1", 22).await?;
+    let cred_id = server_core::create_password_credential("credA", Some("uA"), "pwA", "fixed", true).await?;
 
-    server_core::assign_credential("h4", "credA").await?;
-
-    let host_id: i64 = sqlx::query_scalar("SELECT id FROM relay_hosts WHERE name = 'h4'")
-        .fetch_one(&pool)
-        .await?;
-    let cred_id: i64 = sqlx::query_scalar("SELECT id FROM relay_credentials WHERE name = 'credA'")
-        .fetch_one(&pool)
-        .await?;
+    server_core::assign_credential_by_ids(host_id, cred_id).await?;
 
     // Verify auth.source, auth.id, and auth.method are stored as PLAIN TEXT (not encrypted)
     let source: String = sqlx::query_scalar("SELECT value FROM relay_host_options WHERE relay_host_id = ? AND key = 'auth.source'")
@@ -70,12 +61,15 @@ async fn assign_writes_encrypted_values_and_unassign_removes() -> Result<()> {
             .await?;
     assert!(!method_secure, "auth.method should have is_secure=false");
 
-    server_core::unassign_credential("h4").await?;
+    server_core::unassign_credential_by_id(host_id).await?;
 
-    let count: i64 = sqlx::query("SELECT COUNT(*) as c FROM relay_host_options WHERE relay_host_id=(SELECT id FROM relay_hosts WHERE name='h4') AND key in ('auth.source','auth.id','auth.method')")
-        .fetch_one(&pool)
-        .await?
-        .get("c");
+    let count: i64 = sqlx::query(
+        "SELECT COUNT(*) as c FROM relay_host_options WHERE relay_host_id=? AND key in ('auth.source','auth.id','auth.method')",
+    )
+    .bind(host_id)
+    .fetch_one(&pool)
+    .await?
+    .get("c");
     assert_eq!(count, 0);
     Ok(())
 }

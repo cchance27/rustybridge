@@ -15,10 +15,9 @@ pub async fn list_user_relays() -> Result<Vec<RelayInfo>> {
     // NOTE: We don't restrict this to relays:view claim because that claim
     // is to view ALL Relays for management not for connections.
     let user = ensure_authenticated(&auth)?;
-    let username = &user.username;
 
     use state_store::list_relay_hosts;
-    let relays = list_relay_hosts(&pool, Some(username)).await.context("Failed to list relays")?;
+    let relays = list_relay_hosts(&*pool, Some(user.id)).await.context("Failed to list relays")?;
 
     Ok(relays
         .into_iter()

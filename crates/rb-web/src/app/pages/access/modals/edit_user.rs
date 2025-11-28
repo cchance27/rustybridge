@@ -13,6 +13,7 @@ use crate::{
 #[component]
 pub fn EditUserModal(
     open: Signal<bool>,
+    user_id: Signal<Option<i64>>,
     username: Signal<Option<String>>,
     roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
     groups: Resource<Result<Vec<rb_types::users::GroupInfo>, ServerFnError>>,
@@ -20,6 +21,9 @@ pub fn EditUserModal(
     toast: Signal<Option<ToastMessage>>,
 ) -> Element {
     let Some(username_str) = username() else {
+        return rsx!();
+    };
+    let Some(user_id_val) = user_id() else {
         return rsx!();
     };
 
@@ -38,15 +42,17 @@ pub fn EditUserModal(
     let mut selected_group_to_add = use_signal(String::new);
 
     // Load user data when modal opens
+    let user_id_for_effect = user_id_val;
     let username_for_effect = username_str.clone();
     use_effect(move || {
+        let user_id_for_spawn = user_id_for_effect;
         let username_for_spawn = username_for_effect.clone();
         spawn(async move {
             // Need to access current value of open()
             let is_open = open();
             if is_open {
-                // Load claims
-                if let Ok(claims) = get_user_claims(username_for_spawn.clone()).await {
+                // Load claims using ID
+                if let Ok(claims) = get_user_claims(user_id_for_spawn).await {
                     user_claims.set(claims);
                 }
 
@@ -61,6 +67,7 @@ pub fn EditUserModal(
         });
     });
 
+    let user_id_for_save = user_id_val;
     let username_for_save = username_str.clone();
     let on_save = {
         move |_| {
@@ -77,12 +84,12 @@ pub fn EditUserModal(
                 validation_errors.set(errors);
                 return;
             }
-            let username_for_spawn = username_for_save.clone();
+            let user_id_for_spawn = user_id_for_save;
+            let username_for_message = username_for_save.clone();
             let password_val_clone = password_val.clone();
             spawn(async move {
-                let username_for_message = username_for_spawn.clone();
                 match update_user(
-                    username_for_spawn,
+                    user_id_for_spawn, // Use user ID instead of username
                     UpdateUserRequest {
                         password: if password_val_clone.is_empty() {
                             None
@@ -114,10 +121,12 @@ pub fn EditUserModal(
     };
 
     // Claims Logic
+    let user_id_for_remove_claim = user_id_val;
     let remove_claim_handler = move |claim: ClaimType, user: String| {
+        let user_id_for_spawn = user_id_for_remove_claim;
         spawn(async move {
             let claim_str = claim.to_string();
-            match remove_user_claim(user.clone(), claim.clone()).await {
+            match remove_user_claim(user_id_for_spawn, claim.clone()).await {
                 Ok(_) => {
                     users.restart();
                     let mut current = user_claims();
@@ -138,6 +147,7 @@ pub fn EditUserModal(
         });
     };
 
+    let user_id_for_add_claim = user_id_val;
     let username_for_add_claim = username_str.clone();
     let add_claim = {
         move |_| {
@@ -146,9 +156,9 @@ pub fn EditUserModal(
                 return;
             }
 
-            let username_for_spawn = username_for_add_claim.clone();
+            let user_id_for_spawn = user_id_for_add_claim;
+            let username_for_message = username_for_add_claim.clone();
             spawn(async move {
-                let username_for_message = username_for_spawn.clone();
                 let claim_type = match ClaimType::from_str(&claim_str) {
                     Ok(ct) => ct,
                     Err(e) => {
@@ -160,7 +170,7 @@ pub fn EditUserModal(
                     }
                 };
 
-                match add_user_claim(username_for_spawn, claim_type.clone()).await {
+                match add_user_claim(user_id_for_spawn, claim_type.clone()).await {
                     Ok(_) => {
                         users.restart();
                         let mut current = user_claims();
@@ -188,114 +198,141 @@ pub fn EditUserModal(
     // Roles Logic
     let username_for_add_role = username_str.clone();
     let add_role = move |_| {
-        let role = selected_role_to_add();
-        let user = username_for_add_role.clone();
+        let role_name = selected_role_to_add();
+        let user_name = username_for_add_role.clone();
+        let user_id_for_add = user_id_val;
 
-        if role.is_empty() {
+        if role_name.is_empty() {
             return;
         }
 
         spawn(async move {
-            match assign_role_to_user(role.clone(), user.clone()).await {
-                Ok(_) => {
-                    users.restart();
-                    roles.restart();
-                    let mut current = user_roles();
-                    current.push(role.clone());
-                    user_roles.set(current);
-                    selected_role_to_add.set(String::new());
-                    toast.set(Some(ToastMessage {
-                        message: format!("Assigned role '{}' to user '{}'", role, user),
-                        toast_type: ToastType::Success,
-                    }));
-                }
-                Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to assign role: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+            // Find role ID from role name
+            if let Some(Ok(all_roles)) = roles.value()().as_ref()
+                && let Some(role) = all_roles.iter().find(|r| r.name == role_name)
+            {
+                match assign_role_to_user(user_id_for_add, role.id).await {
+                    Ok(_) => {
+                        users.restart();
+                        roles.restart();
+                        let mut current = user_roles();
+                        current.push(role_name.clone());
+                        user_roles.set(current);
+                        selected_role_to_add.set(String::new());
+                        toast.set(Some(ToastMessage {
+                            message: format!("Assigned role '{}' to user '{}'", role_name, user_name),
+                            toast_type: ToastType::Success,
+                        }));
+                    }
+                    Err(e) => {
+                        toast.set(Some(ToastMessage {
+                            message: format!("Failed to assign role: {}", e),
+                            toast_type: ToastType::Error,
+                        }));
+                    }
                 }
             }
         });
     };
 
-    let remove_role_handler = move |role: String, user: String| {
+    let remove_role_handler = move |role_name: String, user_name: String| {
+        let user_id_for_remove = user_id_val;
         spawn(async move {
-            match revoke_role_from_user(role.clone(), user.clone()).await {
-                Ok(_) => {
-                    users.restart();
-                    roles.restart();
-                    let mut current = user_roles();
-                    current.retain(|r| r != &role);
-                    user_roles.set(current);
-                    toast.set(Some(ToastMessage {
-                        message: format!("Removed role '{}' from user '{}'", role, user),
-                        toast_type: ToastType::Success,
-                    }));
-                }
-                Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to remove role: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+            // Find role ID from role name
+            if let Some(Ok(all_roles)) = roles.value()().as_ref()
+                && let Some(role) = all_roles.iter().find(|r| r.name == role_name)
+            {
+                match revoke_role_from_user(user_id_for_remove, role.id).await {
+                    Ok(_) => {
+                        users.restart();
+                        roles.restart();
+                        let mut current = user_roles();
+                        current.retain(|r| r != &role_name);
+                        user_roles.set(current);
+                        toast.set(Some(ToastMessage {
+                            message: format!("Removed role '{}' from user '{}'", role_name, user_name),
+                            toast_type: ToastType::Success,
+                        }));
+                    }
+                    Err(e) => {
+                        toast.set(Some(ToastMessage {
+                            message: format!("Failed to remove role: {}", e),
+                            toast_type: ToastType::Error,
+                        }));
+                    }
                 }
             }
         });
     };
 
     // Groups Logic
+    let user_id_for_add_group = user_id_val;
     let username_for_add_group = username_str.clone();
     let add_group = move |_| {
-        let group = selected_group_to_add();
-        let user = username_for_add_group.clone();
+        let group_name = selected_group_to_add();
+        let username = username_for_add_group.clone();
+        let user_id_for_spawn = user_id_for_add_group;
 
-        if group.is_empty() {
+        if group_name.is_empty() {
             return;
         }
 
         spawn(async move {
-            match add_member_to_group(group.clone(), user.clone()).await {
-                Ok(_) => {
-                    users.restart();
-                    groups.restart();
-                    let mut current = user_groups();
-                    current.push(group.clone());
-                    user_groups.set(current);
-                    selected_group_to_add.set(String::new());
-                    toast.set(Some(ToastMessage {
-                        message: format!("Added user '{}' to group '{}'", user, group),
-                        toast_type: ToastType::Success,
-                    }));
-                }
-                Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to add user to group: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+            // Find group ID from group name
+            if let Some(Ok(all_groups)) = groups.value()().as_ref()
+                && let Some(group) = all_groups.iter().find(|g| g.name == group_name)
+            {
+                match add_member_to_group(group.id, user_id_for_spawn).await {
+                    Ok(_) => {
+                        users.restart();
+                        groups.restart();
+                        let mut current = user_groups();
+                        current.push(group_name.clone());
+                        user_groups.set(current);
+                        selected_group_to_add.set(String::new());
+                        toast.set(Some(ToastMessage {
+                            message: format!("Added user '{}' to group '{}'", username, group_name),
+                            toast_type: ToastType::Success,
+                        }));
+                    }
+                    Err(e) => {
+                        toast.set(Some(ToastMessage {
+                            message: format!("Failed to add user to group: {}", e),
+                            toast_type: ToastType::Error,
+                        }));
+                    }
                 }
             }
         });
     };
 
-    let remove_group_handler = move |group: String, user: String| {
+    let user_id_for_remove_group = user_id_val;
+    let remove_group_handler = move |group_name: String, username: String| {
+        let user_id_for_spawn = user_id_for_remove_group;
+
         spawn(async move {
-            match remove_member_from_group(group.clone(), user.clone()).await {
-                Ok(_) => {
-                    users.restart();
-                    groups.restart();
-                    let mut current = user_groups();
-                    current.retain(|g| g != &group);
-                    user_groups.set(current);
-                    toast.set(Some(ToastMessage {
-                        message: format!("Removed user '{}' from group '{}'", user, group),
-                        toast_type: ToastType::Success,
-                    }));
-                }
-                Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to remove user from group: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+            // Find group ID from group name
+            if let Some(Ok(all_groups)) = groups.value()().as_ref()
+                && let Some(group) = all_groups.iter().find(|g| g.name == group_name)
+            {
+                match remove_member_from_group(group.id, user_id_for_spawn).await {
+                    Ok(_) => {
+                        users.restart();
+                        groups.restart();
+                        let mut current = user_groups();
+                        current.retain(|g| g != &group_name);
+                        user_groups.set(current);
+                        toast.set(Some(ToastMessage {
+                            message: format!("Removed user '{}' from group '{}'", username, group_name),
+                            toast_type: ToastType::Success,
+                        }));
+                    }
+                    Err(e) => {
+                        toast.set(Some(ToastMessage {
+                            message: format!("Failed to remove user from group: {}", e),
+                            toast_type: ToastType::Error,
+                        }));
+                    }
                 }
             }
         });

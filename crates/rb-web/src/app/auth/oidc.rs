@@ -24,7 +24,7 @@ pub async fn get_oidc_link_status() -> Result<OidcLinkStatus, ServerFnError> {
         None => return Err(ServerFnError::new("Not authenticated")),
     };
 
-    let result = state_store::get_oidc_link_for_user(&pool, user_id)
+    let result = state_store::get_oidc_link_for_user(&*pool, user_id)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
 
@@ -56,7 +56,7 @@ pub async fn unlink_oidc() -> Result<(), ServerFnError> {
         None => return Err(ServerFnError::new("Not authenticated")),
     };
 
-    let result = state_store::delete_oidc_link_for_user(&pool, user_id)
+    let result = state_store::delete_oidc_link_for_user(&*pool, user_id)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
 
@@ -82,7 +82,7 @@ pub async fn get_user_oidc_status(user_id: i64) -> Result<OidcLinkStatus, Server
     // Require users:view permission
     ensure_claim(&auth, &ClaimType::Users(ClaimLevel::View)).map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    let result = state_store::get_oidc_link_for_user(&pool, user_id)
+    let result = state_store::get_oidc_link_for_user(&*pool, user_id)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
 
@@ -116,7 +116,7 @@ pub async fn unlink_user_oidc(user_id: i64) -> Result<(), ServerFnError> {
     // Require users:manage permission
     ensure_claim(&auth, &ClaimType::Users(ClaimLevel::Edit)).map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    let result = state_store::delete_oidc_link_for_user(&pool, user_id)
+    let result = state_store::delete_oidc_link_for_user(&*pool, user_id)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
 
