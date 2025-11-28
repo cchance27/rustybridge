@@ -95,24 +95,83 @@ Provide persistent, user-friendly SSH terminals in the web UI that survive page 
 - Multi-tab coordination.
 
 ## Implementation outline (step-by-step)
-1) Create `app/session/` module:
-   - Types + context provider + hooks.
-   - LocalStorage helpers for geometry/dock state.
-2) Update `app_root.rs` to wrap `Router` with `SessionProvider` and render global overlays (dock, connection drawer, session windows).
-3) Build components:
-   - `connection_drawer.rs` (wrap current `relay_drawer.rs` logic, always mounted).
-   - `session_dock.rs` (chips with status, thumbnail, timers, actions).
-   - `session_window.rs` (floating, draggable, resizable; header controls).
-4) Enhance `Terminal` props + callbacks; relocate WS close listener into provider; ensure cleanup only on close.
-5) Thumbnail capture: add JS helper to extract xterm canvas to data URL on minimize; store in session.
-6) UX polish: toasts for cap hit/errors; focus behavior; default window geometry; graceful empty states.
-7) Documentation: add user-facing note (dashboard/help) about non-reattachable limitation and 4-session cap.
+
+### ✅ PHASE 1 COMPLETE (Baseline Functionality)
+1) [x] Create `app/session/` module:
+   - [x] Types + context provider + hooks (`types.rs`, `provider.rs`)
+   - [x] Session model with ID, status, geometry, timestamps
+   - [x] 4-session cap enforcement (client-side)
+   - [ ] **REMAINING**: LocalStorage helpers for geometry/dock state persistence
+   
+2) [x] Update `app_root.rs` to wrap `Router` with `SessionProvider` and render global overlays
+   - [x] `SessionGlobalChrome` wraps Router and renders session windows
+   - [x] Left drawer: Open sessions list with restore/focus actions
+   - [x] Right drawer: Relay selection list
+   - [x] Session dock: Quick access chips on left sidebar
+   
+3) [x] Build components (`app/session/components/`):
+   - [x] `global_chrome.rs` - Main UI chrome with dual drawers, tabs, and mouse handlers
+   - [x] `session_dock.rs` - Session chips with status indicators (minimized sessions)
+   - [x] `session_window.rs` - Floating, draggable windows with header controls
+   
+4) [x] Enhance `Terminal` component and WebSocket integration:
+   - [x] Migrated to Dioxus typed WebSocket (`SshClientMsg` / `SshServerMsg`)
+   - [x] Added `on_close` callback prop for session cleanup
+   - [x] Fix input capture race condition with retry loop
+   - [x] Add explicit focus handling via `window.focusTerminal()`
+   - [x] **CRITICAL FIX**: Spawn receiving loop in parallel with input setup loop to prevent blocking output
+   - [x] Proper EOF handling with `eof: bool` flag in server messages
+   
+5) [x] Fix Window Management:
+   - [x] Implement drag logic in `SessionProvider` (start_drag, update_drag, end_drag)
+   - [x] Mouse handlers in `SessionGlobalChrome` for global drag/drop
+   - [x] Z-index management via `last_focused_at` timestamps
+   - [x] Fullscreen/windowed modes with proper fixed positioning
+   - [x] Minimize/restore with visibility toggle (component stays mounted)
+   
+6) [x] JavaScript Bridge Updates (`xterm-init.js`):
+   - [x] `window.writeToTerminal()` - Write data from Rust to xterm
+   - [x] `window.setupTerminalInput()` - Setup input callback to Rust
+   - [x] `window.focusTerminal()` - Explicit focus trigger
+   - [x] `window.fitTerminal()` - Trigger fit addon
+   - [x] ResizeObserver with visibility checks
+   - [x] Removed legacy `attachWebSocketToTerminal()` (now handled in Rust)
+
+### 🚧 PHASE 2 IN PROGRESS (Polish & Complete MVP)
+7) [ ] **NEXT PRIORITY**: Detached Session management and LocalStorage Integration for sizes/locations of sessions
+   - [ ] Need to support handling multi-session connected to the same ssh relay, user might have multiple browsers open, and they should see all their same terminals so they can all work properly
+   - [ ] Support for detaching sessions reattaching our webui.
+   - [ ] Save/load window geometry per session (x, y, width, height)
+   - [ ] Save/load dock collapsed state
+   - [ ] Key format: `rb_session_geometry_{relay_name}` or by session ID
+   - [ ] Security: Only store non-sensitive UI state (no credentials)
+
+8) [ ] Handle missing resize and other shell events we need to handle. (see `SshClientMsg` and `SshServerMsg` for what we need to handle and maybe additionals we need to add for best practices).
+
+9)  [ ] Thumbnail Minimizing actions add JS helper to extract xterm canvas to data URL on minimize; store in session. (this will be based on genie, but we need to plan clean it up and improve first, check with designer.)
+   
+10)  [ ] UX polish: 
+   - [ ] **Support shell window resizing** with handles at edges, saved to local storage or something temporary for the specific session window temporarily for restoring from dock etc.
+   - [ ] **New Shell Offsets**: Shells with no saved preferred location thats already in use.
+   - [ ] **Toast notifications**: Show toast when session cap (4) is reached
+   - [ ] **Disconnection handling**: show when we've lost connection to server, or when we lose our ssh/websocket connection and properly handle this if server tells us we lost a session after a reconnection.
+   - [ ] **Error handling**: Toast for connection failures, authentication errors
+   - [ ] **Focus behavior**: Tab order for keyboard navigation, Escape to minimize
+   - [ ] **Default window geometry**: Cascade windows (offset by 30px x/y), center first window
+   - [ ] **Bounds checking**: Prevent windows from being dragged off-screen
+   - [ ] **Empty states**: ✅ Already done for drawers
+   
+
+#### 🔧 REMAINING ISSUES
+- **Bounds**: Windows can be dragged off-screen
+  - *Solution*: Clamp geometry in `set_geometry()` method (add viewport bounds checking)
+  - *Priority*: Medium
+- **LocalStorage**: Window geometry not persisted across page refreshes
+  - *Solution*: Implement `storage.rs` module with save/load functions
+  - *Priority*: High (best UX impact)
 
 ## Risks & mitigations
 - Drag/resize jank: throttle pointer events; store only on mouseup.
-- Thumbnail size/memory: constrain canvas snapshot (e.g., scale to width 220px) before storing data URL.
-- Z-order bugs: centralize focus handling in provider.
 
 ## Config knobs (initial)
 - `MAX_SESSIONS_CLIENT` = 4 (const, provider-level).
-- `THUMBNAIL_MODE` flag: `"static-on-minimize"` (default) | `"periodic"` (future).

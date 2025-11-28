@@ -11,7 +11,7 @@ pub fn Layout(children: Element) -> Element {
                 NavBar {}
             }
             main {
-                class: "rb-main flex-grow p-4", {
+                class: "rb-main flex-grow px-12 py-4", {
                     children
                 }
             }

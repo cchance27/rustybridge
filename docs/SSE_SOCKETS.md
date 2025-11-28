@@ -14,6 +14,21 @@ The current SSH WebSocket implementation uses:
 - Complex connection lifecycle management
 - Interactive authentication prompt system
 
+### CRITICAL: Be aware the proper way to use server functions in Dioxus 0.7.1 is now 
+
+#[get(
+    "/api/ssh/{relay_name}", 
+    auth: WebAuthSession,
+    axum::Extension(pool): axum::Extension<sqlx::SqlitePool>
+)]
+async fn ssh_terminal_ws(
+    relay_name: String
+    options: WebSocketOptions,
+) -> Result<(), ServerFnError> {
+}
+
+Also their is no fullstack::prelude::*, you need to call the direct items you want to use no prelude for fullstack websocket items.
+
 ### 1.2 Migration to Dioxus Typed WebSocket
 
 #### Server-side Migration
@@ -37,11 +52,13 @@ pub async fn ssh_terminal_ws(
 **After (Dioxus Typed WebSocket):**
 ```rust
 // New Dioxus typed WebSocket handler
-#[get("/api/ssh/{relay_name}")]
-async fn ssh_terminal_ws(
-    Path(relay_name): Path<String>,
+#[get(
+    "/api/ssh/{relay_name}", 
     auth: WebAuthSession,
-    axum::Extension(pool): axum::Extension<sqlx::SqlitePool>,
+    axum::Extension(pool): axum::Extension<sqlx::SqlitePool>
+)]
+async fn ssh_terminal_ws(
+    relay_name: String
     options: WebSocketOptions,
 ) -> Result<Websocket<Vec<u8>, Vec<u8>, CborEncoding>> {
     // Ensure authentication and permissions (same logic as before)
@@ -233,11 +250,34 @@ pub fn SshTerminal(props: TerminalProps) -> Element {
 4. **Maintainability**: Cleaner server function approach vs raw Axum extraction
 5. **Future Features**: Enables collaborative SSH sessions and advanced real-time features
 
+
+### COMPLETED PHASE 1 NOTES BELOW
+
+## Phase 1 Migration Notes 
+
+We recently finished the “Phase 1” migration away from the legacy SSE hooks toward typed websockets in Dioxus 0.7.1. A few gotchas surfaced while bringing the SSH terminal online:
+
+1. **Typed payloads are worth it.** We replaced the raw `Vec<u8>` websocket with:
+   - `SshClientMsg { cmd: Option<SshControl>, data: Vec<u8> }`
+   - `SshServerMsg { data: Vec<u8>, eof: bool, exit_status: Option<i32> }`
+   This immediately gave us a clean channel for control messages (`Close`, `Resize`, future features) without touching the JS boundary.
+
+2. **Gate client I/O on connection status.** Calling `.recv()` on the `use_websocket` handle *before* a relay is selected yields `WebSocket already closed` and can wedge the hook. We introduced a `connected` signal and only start the terminal bridge when it flips to `true`.
+
+3. **Always dispatch a close event.** The dashboard listens for `window.dispatchEvent(new CustomEvent('ssh-connection-closed', …))` to reset `active_relay`. Make sure every exit path (SSH EOF, websocket error, manual disconnect) fires this event; otherwise the UI stays “connected” even though the socket died.
+
+4. **Client-initiated close must use the typed channel.** Setting `socket.set(Err(..))` while the recv loop is running caused WASM `RuntimeError: unreachable`. Instead, send `SshControl::Close` over the websocket and let the server shut down the SSH channel; the hook will naturally observe the close.
+
+5. **Surface EOF explicitly.** When the SSH session ends on the server we now push an empty chunk so the websocket emits `SshServerMsg { eof: true, … }`. The client reacts immediately, dispatching the close event without waiting for another keystroke.
+
+
 ## Phase 2: Additional Streaming Features Implementation
 
 ### 2.1 TextStream for Simple Notifications
 
 TextStream is ideal for simple text-based notifications and status updates.
+
+Not shown below but we'd likely need to use ensure_claims and bring auth in on the [get]'s where needed to secure things and use ensure claims or auth based on whats needed.
 
 #### Server Connectivity Status
 ```rust

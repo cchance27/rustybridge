@@ -44,13 +44,13 @@ async fn test_role_management() {
 
     // Verify claims
     let mut conn = pool.acquire().await.unwrap();
-    let claims = get_user_claims_by_id(&mut *conn, user_id).await.unwrap();
+    let claims = get_user_claims_by_id(&mut conn, user_id).await.unwrap();
     assert!(claims.contains(&ClaimType::Custom("test:claim".to_string())));
 
     // Revoke role
     let mut conn = pool.acquire().await.unwrap();
-    revoke_role_from_user_by_ids(&mut *conn, user_id, role_id).await.unwrap();
-    let claims_after = get_user_claims_by_id(&mut *conn, user_id).await.unwrap();
+    revoke_role_from_user_by_ids(&mut conn, user_id, role_id).await.unwrap();
+    let claims_after = get_user_claims_by_id(&mut conn, user_id).await.unwrap();
     assert!(!claims_after.contains(&ClaimType::Custom("test:claim".to_string())));
 
     // Delete role
@@ -83,7 +83,7 @@ async fn test_default_admin_role() {
     assign_role_to_user_by_ids(&pool, user_id, role_id).await.unwrap();
 
     let mut conn = pool.acquire().await.unwrap();
-    let claims = get_user_claims_by_id(&mut *conn, user_id).await.unwrap();
+    let claims = get_user_claims_by_id(&mut conn, user_id).await.unwrap();
     assert!(claims.contains(&ClaimType::Users(ClaimLevel::Wildcard)));
     assert!(claims.contains(&ClaimType::Roles(ClaimLevel::Wildcard)));
     assert!(claims.contains(&ClaimType::Groups(ClaimLevel::Wildcard)));
@@ -114,7 +114,7 @@ async fn test_super_admin_protection() {
 
     // Verify we can't revoke (assuming count is 1)
     let mut conn = pool.acquire().await.unwrap();
-    let err = revoke_role_from_user_by_ids(&mut *conn, user_id, 1).await.unwrap_err();
+    let err = revoke_role_from_user_by_ids(&mut conn, user_id, 1).await.unwrap_err();
     assert!(matches!(err, DbError::InvalidOperation { .. }));
 
     // 3. Cannot modify Super Admin claims

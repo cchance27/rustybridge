@@ -94,17 +94,20 @@ window.initRustyBridgeTerminal = async function (terminalId, options) {
 
             // Use ResizeObserver to handle container resizing
             const resizeObserver = new ResizeObserver(() => {
-                try {
-                    console.log('ResizeObserver fitting terminal...');
-                    fitAddon.fit();
-                } catch (e) {
-                    console.warn('ResizeObserver failed to fit terminal:', e);
+                // Only fit if the container is visible and has dimensions
+                if (container.clientWidth > 0 && container.clientHeight > 0) {
+                    try {
+                        console.log('ResizeObserver fitting terminal...');
+                        fitAddon.fit();
+                    } catch (e) {
+                        console.warn('ResizeObserver failed to fit terminal:', e);
+                    }
                 }
             });
             resizeObserver.observe(container);
-
-            // Store observer to disconnect later if needed (though we don't have a cleanup hook here yet)
-            // For now, this is attached to the DOM element's lifetime effectively
+            
+            // Store fitAddon on the terminal instance so we can access it later
+            term._fitAddon = fitAddon;
         }
 
         window.terminals = window.terminals || {};
@@ -122,129 +125,6 @@ window.initRustyBridgeTerminal = async function (terminalId, options) {
     }
 }
 
-// Function to attach a WebSocket to a terminal for SSH connections
-// connectToken is used to prevent stale async tasks from overwriting newer selections
-window.attachWebSocketToTerminal = async function (terminalId, websocketUrl, connectToken, onClose) {
-    try {
-        const term = window.terminals[terminalId];
-        if (!term) {
-            console.error('Terminal not found:', terminalId);
-            return null;
-        }
-
-        const isStale = () => term.activeSshToken !== connectToken;
-
-        console.log('[rb-web] attach called', { terminalId, websocketUrl, connectToken, active: term.activeSshToken });
-
-        // Create WebSocket connection
-        console.log('[rb-web] creating WebSocket', websocketUrl);
-        const socket = new WebSocket(websocketUrl);
-
-        // Wait for the socket to open before attaching, with a timeout so we don't hang forever
-        await new Promise((resolve, reject) => {
-            const timeoutMs = 8000;
-            const timeout = setTimeout(() => {
-                if (!isStale()) {
-                    console.warn('WebSocket open timed out, closing socket');
-                }
-                socket.close();
-                reject(new Error('WebSocket open timed out'));
-            }, timeoutMs);
-
-            socket.onopen = () => {
-                clearTimeout(timeout);
-                if (isStale()) {
-                    console.log('[rb-web] socket open but stale token, closing');
-                    socket.close();
-                    return;
-                }
-                console.log('WebSocket connected for terminal:', terminalId);
-                term.write('\r\n\x1b[32mConnected to SSH session\x1b[0m\r\n');
-                resolve();
-            };
-
-            socket.onerror = (error) => {
-                clearTimeout(timeout);
-                if (isStale()) {
-                    console.log('[rb-web] socket error but stale token, closing');
-                    socket.close();
-                    return;
-                }
-                console.error('WebSocket error:', error);
-                term.write('\r\n\x1b[31mWebSocket connection error\x1b[0m\r\n');
-                reject(error);
-            };
-
-            socket.onclose = (event) => {
-                clearTimeout(timeout);
-                if (isStale()) {
-                    console.log('[rb-web] socket close but stale token');
-                    return;
-                }
-                if (event.code !== 1000) {
-                    console.warn('WebSocket closed before open/attach:', event.code, event.reason);
-                    reject(new Error('WebSocket closed during connect'));
-                }
-            };
-        });
-
-        socket.onclose = () => {
-            if (isStale()) {
-                return;
-            }
-            console.log('WebSocket closed for terminal:', terminalId);
-            term.write('\r\n\x1b[33mConnection closed\x1b[0m\r\n');
-            // Notify Rust side that connection closed
-            if (onClose) {
-                onClose();
-            }
-        };
-
-        // Load attach addon if not already loaded
-        if (!window.AttachAddon) {
-            await loadScript('/xterm/addon-attach.js');
-            console.log("Loaded attach addon");
-        }
-
-        if (isStale()) {
-            socket.close();
-            return null;
-        }
-
-        // Attach the WebSocket to the terminal (socket is now open)
-        const attachAddon = new window.AttachAddon.AttachAddon(socket);
-        term.loadAddon(attachAddon);
-
-        // Disable local echo - the SSH server will echo back
-        term.options.disableStdin = false; // Keep stdin enabled
-
-        // Clear the welcome message
-        term.clear();
-
-        if (isStale()) {
-            attachAddon.dispose();
-            socket.close();
-            return null;
-        }
-
-        return {
-            socket: socket,
-            addon: attachAddon,
-            disconnect: () => {
-                attachAddon.dispose();
-                socket.close();
-            }
-        };
-    } catch (err) {
-        console.error('Failed to attach WebSocket:', err);
-        const term = window.terminals[terminalId];
-        if (term) {
-            term.write('\r\n\x1b[31mFailed to connect: ' + err.message + '\x1b[0m\r\n');
-        }
-        return null;
-    }
-}
-
 // Helper function for loadScript (needs to be accessible)
 async function loadScript(src) {
     if (document.querySelector(`script[src="${src}"]`)) return;
@@ -255,4 +135,88 @@ async function loadScript(src) {
         script.onerror = reject;
         document.head.appendChild(script);
     });
+}
+
+// Function to write data to the terminal from Rust
+window.writeToTerminal = function (terminalId, data) {
+    const term = window.terminals[terminalId];
+    if (term) {
+        // data can be a UTF-8 string or raw bytes (Uint8Array)
+        if (typeof data === 'string') {
+            term.write(data);
+            return;
+        }
+
+        if (data instanceof Uint8Array) {
+            window._rbTextDecoder = window._rbTextDecoder || new TextDecoder('utf-8', { fatal: false });
+            const decoded = window._rbTextDecoder.decode(data);
+            term.write(decoded);
+            return;
+        }
+
+        // Fallback for plain arrays or unexpected types
+        if (Array.isArray(data)) {
+            window._rbTextDecoder = window._rbTextDecoder || new TextDecoder('utf-8', { fatal: false });
+            const decoded = window._rbTextDecoder.decode(new Uint8Array(data));
+            term.write(decoded);
+            return;
+        }
+
+        term.write(String(data));
+    } else {
+        console.warn(`writeToTerminal: Terminal ${terminalId} not found`);
+    }
+};
+
+// Function to setup input handling to send data back to Rust
+window.setupTerminalInput = function (terminalId, onDataCallback) {
+    const term = window.terminals[terminalId];
+    if (term) {
+        if (term._inputDisposable) {
+            term._inputDisposable.dispose();
+        }
+        term._inputDisposable = term.onData(data => {
+            // Convert string to Uint8Array for consistency with Rust Vec<u8>
+            const encoder = new TextEncoder();
+            const bytes = encoder.encode(data);
+            // Pass the data to the callback (which will be a Dioxus closure)
+            // We need to pass it as an array or similar that Dioxus can handle
+            // Dioxus closures usually expect JSON-serializable args or specific types.
+            // For now, let's assume the callback handles the raw data or we pass it as array.
+            // Actually, Dioxus eval closures might be tricky with binary data.
+            // Let's pass it as an array of numbers.
+            onDataCallback(Array.from(bytes));
+        });
+        console.log(`Input handling setup for terminal ${terminalId}`);
+        return true;
+    } else {
+        console.warn(`setupTerminalInput: Terminal ${terminalId} not found`);
+        return false;
+    }
+};
+
+window.focusTerminal = function (terminalId) {
+    const term = window.terminals[terminalId];
+    if (term) {
+        term.focus();
+    } else {
+        console.warn(`focusTerminal: Terminal ${terminalId} not found`);
+    }
+};
+
+window.fitTerminal = function (terminalId) {
+    const term = window.terminals[terminalId];
+    if (term && term._fitAddon) {
+        try {
+            term._fitAddon.fit();
+        } catch (e) {
+            console.warn(`fitTerminal: Failed to fit terminal ${terminalId}`, e);
+        }
+    }
+};
+
+// Deprecated: attachWebSocketToTerminal is no longer used with Dioxus use_websocket
+window.attachWebSocketToTerminal = async function (terminalId, websocketUrl, connectToken, onClose) {
+    console.warn("attachWebSocketToTerminal is deprecated and should not be used.");
+    return null;
 }

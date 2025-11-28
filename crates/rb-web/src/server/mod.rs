@@ -1,5 +1,4 @@
 pub mod auth;
-pub mod ssh_websocket;
 
 #[cfg(feature = "server")]
 use axum::Router;
@@ -47,11 +46,7 @@ pub async fn run_web_server(config: rb_types::config::WebServerConfig, app: fn()
 
     // Create router with custom WebSocket route for SSH terminal
     let router = Router::new()
-        .route("/api/ssh/{relay_name}", axum::routing::get(ssh_websocket::ssh_terminal_ws))
-        .route(
-            "/api/ssh/{relay_name}/status",
-            axum::routing::get(ssh_websocket::ssh_terminal_status),
-        )
+        // TODO: Move OIDC routes to standard dioxus [get] handlers
         .route("/api/auth/oidc/login", axum::routing::get(auth::oidc::oidc_login))
         .route("/api/auth/oidc/callback", axum::routing::get(auth::oidc::oidc_callback))
         .route("/api/auth/oidc/link", axum::routing::get(auth::oidc_link::oidc_link_start))
@@ -59,7 +54,6 @@ pub async fn run_web_server(config: rb_types::config::WebServerConfig, app: fn()
             "/api/auth/oidc/callback/link",
             axum::routing::get(auth::oidc_link::oidc_link_callback),
         )
-        //.route("/api/auth/oidc/unlink", axum::routing::post(auth::oidc_unlink::oidc_unlink))
         .serve_dioxus_application(ServeConfig::new(), app)
         .layer(axum::Extension(pool.clone()))
         .layer(auth_layer)
