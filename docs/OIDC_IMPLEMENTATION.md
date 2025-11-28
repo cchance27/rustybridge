@@ -156,6 +156,7 @@ INFO OIDC account unlinked by admin, admin_user=1, target_user=2
 
 ### Medium Priority
 1. **Token Refresh**
+   - Maintain connectivity to OIDC provider to monitor health
    - No refresh token handling
    - Users must re-authenticate when token expires
    - Could implement background refresh
