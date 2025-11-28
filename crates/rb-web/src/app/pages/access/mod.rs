@@ -27,30 +27,23 @@ pub fn AccessPage() -> Element {
             Toast { message: toast }
             Layout {
                 div { class: "grid grid-cols-1 xl:grid-cols-2 gap-6 items-start",
-                    // Left Column: Users
-                    div { class: "flex flex-col gap-6 w-full",
-                        users::UsersSection {
-                            users,
-                            toast,
-                            roles, // Pass roles resource to UsersSection for effective claims calculation
-                            groups, // Pass groups resource to UsersSection for effective claims calculation
-                        }
+                    users::UsersSection {
+                        users,
+                        toast,
+                        roles, // Pass roles resource to UsersSection for effective claims calculation
+                        groups, // Pass groups resource to UsersSection for effective claims calculation
                     }
-
-                    // Right Column: Groups and Roles
-                    div { class: "flex flex-col gap-6 w-full",
-                        groups::GroupsSection {
-                            groups,
-                            users,
-                            roles, // Pass roles resource to GroupsSection
-                            toast,
-                        },
-                        roles::RolesSection {
-                            roles,
-                            users,
-                            groups,
-                            toast,
-                        }
+                    groups::GroupsSection {
+                        groups,
+                        users,
+                        roles, // Pass roles resource to GroupsSection
+                        toast,
+                    },
+                    roles::RolesSection {
+                        roles,
+                        users,
+                        groups,
+                        toast,
                     }
                 }
 
