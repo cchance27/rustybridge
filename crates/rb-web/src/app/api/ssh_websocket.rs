@@ -53,6 +53,7 @@ pub enum SessionStateSummary {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UserSessionSummary {
     pub relay_id: i64,
+    pub relay_name: String,
     pub session_number: u32,
     pub state: SessionStateSummary,
     pub active_connections: u32,
@@ -78,6 +79,7 @@ pub struct SshServerMsg {
     pub eof: bool,
     pub exit_status: Option<i32>,
     pub session_id: Option<u32>, // Session number for this connection
+    pub relay_id: Option<i64>,   // Relay ID for this connection
 }
 
 #[cfg(feature = "server")]
@@ -141,14 +143,16 @@ pub async fn ssh_terminal_ws(
     let registry_inner: SessionRegistry = registry.0.clone();
 
     // If a session_number was provided, try to reattach to an existing session first.
-    if let Some(num) = session_number &&let Some(existing) = registry_inner.get_session(user_id, relay_id, num).await {
+    if let Some(num) = session_number
+        && let Some(existing) = registry_inner.get_session(user_id, relay_id, num).await
+    {
         tracing::info!(
             relay = %relay_for_upgrade,
             user = %username,
             session_number = num,
             "WebSocket SSH reattach requested"
         );
-        
+
         return Ok(options.on_upgrade(move |socket| async move {
             tracing::info!(
                 relay = %relay_for_upgrade,
@@ -187,7 +191,8 @@ pub async fn ssh_terminal_status(relay_name: String) -> Result<SshStatusResponse
 #[get(
     "/api/ssh/sessions",
     auth: WebAuthSession,
-    registry: axum::Extension<SessionRegistry>
+    registry: axum::Extension<SessionRegistry>,
+    pool: axum::Extension<sqlx::SqlitePool>
 )]
 pub async fn ssh_list_sessions() -> Result<Vec<UserSessionSummary>, ServerFnError> {
     let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
@@ -195,6 +200,19 @@ pub async fn ssh_list_sessions() -> Result<Vec<UserSessionSummary>, ServerFnErro
     let sessions = registry.0.list_sessions_for_user(user.id).await;
 
     let mut summaries = Vec::with_capacity(sessions.len());
+
+    // Collect unique relay IDs for batch lookup
+    let relay_ids: Vec<i64> = sessions.iter().map(|s| s.relay_id).collect();
+
+    // Batch fetch relay names to avoid N+1 queries
+    let mut relay_names = std::collections::HashMap::new();
+    for relay_id in relay_ids {
+        if !relay_names.contains_key(&relay_id) 
+            && let Ok(Some(relay)) = state_store::fetch_relay_host_by_id(&pool.0, relay_id).await {
+                relay_names.insert(relay_id, relay.name);
+            
+        }
+    }
 
     for session in sessions {
         let state = session.state.read().await.clone();
@@ -208,8 +226,15 @@ pub async fn ssh_list_sessions() -> Result<Vec<UserSessionSummary>, ServerFnErro
         let last_active_at = *session.last_active_at.read().await;
         let active_connections = session.connection_count();
 
+        // Get relay name from our batch lookup, fallback to "Unknown" if not found
+        let relay_name = relay_names
+            .get(&session.relay_id)
+            .cloned()
+            .unwrap_or_else(|| format!("relay-{}", session.relay_id));
+
         summaries.push(UserSessionSummary {
             relay_id: session.relay_id,
+            relay_name,
             session_number: session.session_number,
             state: state_summary,
             active_connections,
@@ -239,6 +264,7 @@ async fn handle_reattach(
                 eof: false,
                 exit_status: None,
                 session_id: None,
+                relay_id: None,
             })
             .await;
     }
@@ -263,6 +289,7 @@ async fn handle_reattach(
             eof: false,
             exit_status: None,
             session_id: Some(session.session_number),
+            relay_id: Some(session.relay_id),
         })
         .await;
 
@@ -277,6 +304,7 @@ async fn handle_reattach(
                     eof: is_eof,
                     exit_status: None,
                     session_id: None,
+                    relay_id: None,
                 };
                 if socket.send(msg).await.is_err() {
                     break;
@@ -407,6 +435,7 @@ async fn handle_new_session(
                             eof: true,
                             exit_status: None,
                             session_id: None,
+                            relay_id: None,
                         };
                         let _ = socket.send(msg).await;
                         return;
@@ -419,6 +448,7 @@ async fn handle_new_session(
                     eof: false,
                     exit_status: None,
                     session_id: None,
+                    relay_id: None,
                 };
                 let _ = socket.send(msg).await;
                 pending_prompt = Some(PendingPrompt { echo: action.echo, buf: Vec::new() });
@@ -426,7 +456,7 @@ async fn handle_new_session(
             maybe_msg = socket.recv() => {
                 match maybe_msg {
                     Ok(client_msg) => {
-                        if let Some(cmd) = &client_msg.cmd 
+                        if let Some(cmd) = &client_msg.cmd
                             && let SshControl::Close = cmd {
                             return;
                         }
@@ -439,6 +469,7 @@ async fn handle_new_session(
                                     eof: false,
                                     exit_status: None,
                                     session_id: None,
+                                    relay_id: None,
                                 };
                                 let _ = socket.send(echo_msg).await;
                             }
@@ -452,6 +483,7 @@ async fn handle_new_session(
                                         eof: false,
                                         exit_status: None,
                                         session_id: None,
+                                        relay_id: None,
                                     };
                                     let _ = socket.send(msg).await;
                                 }
@@ -548,6 +580,7 @@ async fn handle_new_session(
             eof: false,
             exit_status: None,
             session_id: Some(session.session_number), // Reusing session_id field for session_number
+            relay_id: Some(session.relay_id),
         })
         .await;
 

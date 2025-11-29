@@ -1,12 +1,10 @@
 use dioxus::prelude::*;
-use crate::app::session::provider::use_session;
-use crate::app::api::{
-    relay_list::list_user_relays,
-    ssh_websocket::{ssh_list_sessions, SessionStateSummary},
-};
-use super::session_window::SessionWindow;
 
-#[derive(Clone, Copy, PartialEq)]
+use super::session_window::SessionWindow;
+use crate::app::{
+    api::relay_list::list_user_relays, auth::hooks::use_auth, components::{Toast, ToastMessage}, session::provider::use_session, storage::{BrowserStorage, StorageType}
+};
+#[derive(Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 enum DrawerState {
     Closed,
     SessionsOpen,
@@ -17,51 +15,90 @@ enum DrawerState {
 pub fn SessionGlobalChrome(children: Element) -> Element {
     let session = use_session();
     let sessions = session.sessions();
-    let mut drawer_state = use_signal(|| DrawerState::Closed);
-    let relays = use_resource(|| async move { list_user_relays().await.unwrap_or_default() });
+    let auth = use_auth();
 
-    // Auto-load existing SSH sessions for this user and open windows for them
-    use_resource(move || {
-        let session = session;
-        async move {
-            // Fetch relay list and session summaries
-            let relay_list = relays.read().clone().unwrap_or_default();
-            let sessions_res = ssh_list_sessions().await;
-
-            if let Ok(user_sessions) = sessions_res {
-                // Build relay_id -> relay_name map
-                use std::collections::HashMap;
-
-                let mut relay_map: HashMap<i64, String> = HashMap::new();
-                for r in relay_list {
-                    relay_map.insert(r.id, r.name);
-                }
-
-                for s in user_sessions {
-                    if let SessionStateSummary::Closed = s.state {
-                        continue;
-                    }
-
-                    if let Some(relay_name) = relay_map.get(&s.relay_id) {
-                        session.open_restored(relay_name.clone(), s.session_number);
-                    }
-                }
-            }
+    // Initialize drawer state from storage
+    let mut drawer_state = use_signal(move || {
+        if let Some(user) = auth.read().user.as_ref() {
+            let storage = BrowserStorage::new(StorageType::Local);
+            let key = format!("rb-drawer-{}", user.id);
+            storage.get_json(&key).unwrap_or(DrawerState::Closed)
+        } else {
+            DrawerState::Closed
         }
     });
-    
+
+    // Toast notification state
+    #[allow(unused_mut)]
+    let mut toast = use_signal(|| None::<ToastMessage>);
+
+    // Helper to update drawer state and persist it
+    let mut set_drawer_state = move |new_state: DrawerState| {
+        drawer_state.set(new_state);
+        if let Some(user) = auth.read().user.as_ref() {
+            let storage = BrowserStorage::new(StorageType::Local);
+            let key = format!("rb-drawer-{}", user.id);
+            let _ = storage.set_json(&key, &new_state);
+        }
+    };
+
+    // Setup event listener for toast notifications from SessionContext
+    use_effect(move || {
+        #[cfg(feature = "web")]
+        {
+            spawn(async move {
+                let mut eval = dioxus::document::eval(
+                    r#"
+                    console.log('Setting up rb-toast-notification listener');
+                    window.addEventListener('rb-toast-notification', (event) => {
+                        console.log('Received rb-toast-notification event:', event.detail);
+                        const detail = event.detail;
+                        dioxus.send({
+                            message: detail.message,
+                            type: detail.type || 'info'
+                        });
+                    });
+                    "#,
+                );
+
+                use crate::components::ToastType;
+                while let Ok(notification) = eval.recv::<serde_json::Value>().await {
+                    if let Some(message) = notification.get("message").and_then(|v| v.as_str()) {
+                        let toast_type = match notification.get("type").and_then(|v| v.as_str()).unwrap_or("info") {
+                            "success" => ToastType::Success,
+                            "error" => ToastType::Error,
+                            "warning" => ToastType::Warning,
+                            _ => ToastType::Info,
+                        };
+
+                        toast.set(Some(ToastMessage {
+                            message: message.to_string(),
+                            toast_type,
+                        }));
+                    }
+                }
+            });
+        }
+    });
+
+    let relays = use_resource(|| async move { list_user_relays().await.unwrap_or_default() });
+
+    // Auto-load existing SSH sessions is now handled in app_root via SessionContext::restore_sessions_from_backend
+
     // Setup global mouseup handler to clear drag state
     use_effect(move || {
         #[cfg(feature = "web")]
         {
             let session = session;
             spawn(async move {
-                let mut eval = dioxus::document::eval(r#"
+                let mut eval = dioxus::document::eval(
+                    r#"
                     document.addEventListener('mouseup', () => {
                         dioxus.send(true);
                     });
-                "#);
-                
+                "#,
+                );
+
                 while let Ok(_) = eval.recv::<bool>().await {
                     session.end_drag();
                 }
@@ -87,7 +124,7 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                 #[cfg(feature = "web")]
                 {
                     use web_sys::wasm_bindgen::JsCast;
-                    
+
                     // Get the event target from the web_sys event
                     if let Some(event) = _evt.data.downcast::<web_sys::MouseEvent>() {
                         if let Some(target) = event.target() {
@@ -95,16 +132,16 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                                 // Check if click is inside a drawer or drawer button
                                 let in_drawer = element.closest(".drawer-container").ok().flatten().is_some()
                                     || element.closest(".drawer-tab-button").ok().flatten().is_some();
-                                
+
                                 if !in_drawer && drawer_state() != DrawerState::Closed {
-                                    drawer_state.set(DrawerState::Closed);
+                                    set_drawer_state(DrawerState::Closed);
                                 }
                             }
                         }
                     }
                 }
             },
-            
+
             // Left Drawer - Sessions
             div {
                 class: if drawer_state() == DrawerState::SessionsOpen {
@@ -116,18 +153,18 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                     // Stop propagation so clicks inside drawer don't close it
                     evt.stop_propagation();
                 },
-                
+
                 div { class: "h-full overflow-y-auto p-4",
                     h2 { class: "text-2xl font-bold mb-4", "Open Sessions" }
-                    
+
                     // Session count indicator
                     div { class: "mb-4 text-sm",
-                        span { 
+                        span {
                             class: if session.at_capacity() { "text-warning font-semibold" } else { "text-base-content/70" },
                             "{session.session_count()} / 4 sessions"
                         }
                     }
-                    
+
                     if sessions.read().is_empty() {
                         div { class: "text-center text-gray-500 py-8",
                             "No open sessions"
@@ -145,7 +182,7 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                                             onclick: move |_| {
                                                 if minimized {
                                                     session.restore(&id);
-                                                    
+
                                                     #[cfg(feature = "web")]
                                                     {
                                                         let term_id = format!("term-{}", id);
@@ -168,7 +205,7 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                     }
                 }
             }
-            
+
             // Left Tab Button
             button {
                 class: "fixed left-0 top-1/2 bg-base-200 hover:cursor-pointer shadow-lg z-[54] transition-all duration-300 rounded-r-lg border-r border-t border-b border-base-300 drawer-tab-button",
@@ -178,7 +215,7 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                     "transform: translateX(0) translateY(-50%);"
                 },
                 onclick: move |_| {
-                    drawer_state.set(if drawer_state() == DrawerState::SessionsOpen {
+                    set_drawer_state(if drawer_state() == DrawerState::SessionsOpen {
                         DrawerState::Closed
                     } else {
                         DrawerState::SessionsOpen
@@ -186,14 +223,14 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                 },
                 div { class: "py-6 px-2 flex items-center justify-center",
                     // Vertical text
-                    span { 
+                    span {
                         class: "text-xs font-bold tracking-wider",
                         style: "writing-mode: vertical-rl; text-orientation: mixed;",
                         "OPEN SESSIONS"
                     }
                 }
             }
-            
+
             // Right Drawer - Relays
             div {
                 class: if drawer_state() == DrawerState::RelaysOpen {
@@ -205,10 +242,10 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                     // Stop propagation so clicks inside drawer don't close it
                     evt.stop_propagation();
                 },
-                
+
                 div { class: "h-full overflow-y-auto p-4",
                     h2 { class: "text-2xl font-bold mb-4", "Select Relay" }
-                    
+
                     // Session cap warning banner
                     if session.at_capacity() {
                         div { class: "alert alert-warning mb-4",
@@ -258,7 +295,7 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                                                             onclick: move |_| {
                                                                 if !disabled {
                                                                     session.open(relay_name.clone());
-                                                                    drawer_state.set(DrawerState::Closed);
+                                                                    set_drawer_state(DrawerState::Closed);
                                                                 }
                                                             },
                                                             div { class: "flex flex-col items-start",
@@ -282,7 +319,7 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                     }
                 }
             }
-            
+
             // Right Tab Button
             button {
                 class: "fixed right-0 top-1/2 bg-base-200 hover:cursor-pointer shadow-lg z-[54] transition-all duration-300 rounded-l-lg border-l border-t border-b border-base-300 drawer-tab-button",
@@ -292,7 +329,7 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                     "transform: translateX(0) translateY(-50%);"
                 },
                 onclick: move |_| {
-                    drawer_state.set(if drawer_state() == DrawerState::RelaysOpen {
+                    set_drawer_state(if drawer_state() == DrawerState::RelaysOpen {
                         DrawerState::Closed
                     } else {
                         DrawerState::RelaysOpen
@@ -300,20 +337,20 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                 },
                 div { class: "py-6 px-2 flex items-center justify-center",
                     // Vertical text
-                    span { 
+                    span {
                         class: "text-xs font-bold tracking-wider",
                         style: "writing-mode: vertical-rl; text-orientation: mixed;",
                         "RELAYS"
                     }
                 }
             }
-            
+
             // Main content area
             div {
                 class: "flex-1 flex flex-col min-h-screen",
                 {children}
             }
-            
+
             // Session Windows - rendered with high z-index
             for s in sessions.read().iter() {
                 SessionWindow {
@@ -321,6 +358,9 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                     session_id: s.id.clone()
                 }
             }
+
+            // Toast notifications
+            Toast { message: toast }
         }
     }
 }

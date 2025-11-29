@@ -21,6 +21,7 @@ pub struct WindowGeometry {
 pub struct Session {
     pub id: String,
     pub relay_name: String,
+    pub relay_id: Option<i64>,
     pub title: String,
     pub status: SessionStatus,
     pub minimized: bool,
@@ -42,6 +43,7 @@ impl Session {
             id: uuid::Uuid::new_v4().to_string(),
             title: format!("SSH: {}", relay_name), // Initial title, can be updated later
             relay_name,
+            relay_id: None, // Will be set when session_number is received
             status: SessionStatus::Connecting,
             minimized: false,
             fullscreen: false,

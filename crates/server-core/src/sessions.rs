@@ -114,6 +114,7 @@ impl SshSession {
 // Could definitly be made into a proper struct not random i64/u32 tuples for key, especially when we move to uuid ids.
 #[derive(Clone, Default)]
 pub struct SessionRegistry {
+    #[allow(clippy::type_complexity)]
     sessions: Arc<RwLock<HashMap<(i64, i64, u32), Arc<SshSession>>>>,
 }
 

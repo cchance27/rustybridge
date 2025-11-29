@@ -5,7 +5,7 @@
 
 ## Executive Summary
 
-This document provides a comprehensive overview of the web shell implementation for RustyBridge. It consolidates information from multiple older planning documents ([WEB_SHELL_PLAN.md](file:///Volumes/2TB/rustybridge/docs/WEB_SHELL_PLAN.md), [AUTO_LOAD.md](file:///Volumes/2TB/rustybridge/docs/AUTO_LOAD.md), [WEB_ATTACH.md](file:///Volumes/2TB/rustybridge/docs/WEB_ATTACH.md)) and reflects the current state of uncommitted changes.
+This document provides a comprehensive overview of the web shell implementation for RustyBridge. It consolidates information from multiple older planning documents ([WEB_SHELL_PLAN.md](../docs/WEB_SHELL_PLAN.md), [AUTO_LOAD.md](../docs/AUTO_LOAD.md), [WEB_ATTACH.md](../docs/WEB_ATTACH.md)) and reflects the current state of uncommitted changes.
 
 ### Vision
 
@@ -23,7 +23,7 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
 ### ✅ Phase 1: Baseline Functionality (COMPLETE)
 
 #### Server-Side Session Registry
-**Location**: [crates/server-core/src/sessions.rs](file:///Volumes/2TB/rustybridge/crates/server-core/src/sessions.rs)
+**Location**: [crates/server-core/src/sessions.rs](../crates/server-core/src/sessions.rs)
 
 - ✅ `SessionRegistry` with thread-safe session management
 - ✅ `SshSession` struct with:
@@ -45,7 +45,7 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
   - `get_history()` - Replay on reattach
 
 #### WebSocket API
-**Location**: [crates/rb-web/src/app/api/ssh_websocket.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/api/ssh_websocket.rs)
+**Location**: [crates/rb-web/src/app/api/ssh_websocket.rs](../crates/rb-web/src/app/api/ssh_websocket.rs)
 
 - ✅ `GET /api/ssh/{relay_name}?session_number` - WebSocket endpoint with reattach support
 - ✅ `GET /api/ssh/{relay_name}/status` - Authorization check endpoint
@@ -66,9 +66,9 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
   - Shared input from any client
 
 #### Frontend Session Management
-**Location**: [crates/rb-web/src/app/session/](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/session/)
+**Location**: [crates/rb-web/src/app/session/](../crates/rb-web/src/app/session/)
 
-**Types** ([types.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/session/types.rs)):
+**Types** ([types.rs](../crates/rb-web/src/app/session/types.rs)):
 - ✅ `Session` model with:
   - `id` (UUID for window management)
   - `session_number` (backend session identifier)
@@ -79,7 +79,7 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
 - ✅ `SessionStatus` enum: Connecting, Connected, Closed, Error
 - ✅ `WindowGeometry` struct: x, y, width, height
 
-**Provider** ([provider.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/session/provider.rs)):
+**Provider** ([provider.rs](../crates/rb-web/src/app/session/provider.rs)):
 - ✅ `SessionContext` with 4-session cap enforcement
 - ✅ Session actions:
   - `open()` - Create new session window
@@ -95,22 +95,22 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
   - Z-index recalculation based on focus time
 - ✅ Session cap event: `rb-session-cap-reached` custom event
 
-**Components** ([components/](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/session/components/)):
-- ✅ `SessionGlobalChrome` ([global_chrome.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/session/components/global_chrome.rs)):
+**Components** ([components/](../crates/rb-web/src/app/session/components/)):
+- ✅ `SessionGlobalChrome` ([global_chrome.rs](../crates/rb-web/src/app/session/components/global_chrome.rs)):
   - Dual drawer layout (left: sessions, right: relays)
   - Global mouse handlers for drag/drop
   - Tab-based navigation
-- ✅ `SessionDock` ([session_dock.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/session/components/session_dock.rs)):
+- ✅ `SessionDock` ([session_dock.rs](../crates/rb-web/src/app/session/components/session_dock.rs)):
   - Minimized session chips with status indicators
   - Click to restore
-- ✅ `SessionWindow` ([session_window.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/session/components/session_window.rs)):
+- ✅ `SessionWindow` ([session_window.rs](../crates/rb-web/src/app/session/components/session_window.rs)):
   - Floating, draggable windows
   - Header with title, controls (minimize, fullscreen, close)
   - Fixed positioning with z-index management
   - Fullscreen mode
 
 #### Terminal Component
-**Location**: [crates/rb-web/src/app/components/terminal.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/components/terminal.rs)
+**Location**: [crates/rb-web/src/app/components/terminal.rs](../crates/rb-web/src/app/components/terminal.rs)
 
 - ✅ Dioxus typed WebSocket integration
 - ✅ `on_close` callback for session cleanup
@@ -120,7 +120,7 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
 - ✅ EOF handling with `eof: bool` flag
 
 #### JavaScript Bridge
-**Location**: [crates/rb-web/assets/xterm-init.js](file:///Volumes/2TB/rustybridge/crates/rb-web/assets/xterm-init.js)
+**Location**: [crates/rb-web/assets/xterm-init.js](../crates/rb-web/assets/xterm-init.js)
 
 - ✅ `window.writeToTerminal()` - Write data from Rust to xterm
 - ✅ `window.setupTerminalInput()` - Setup input callback to Rust
@@ -139,23 +139,25 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
 > **Goal**: Persist window geometry and dock state across page refreshes, with cleanup of actually clsed sessions properly.
 
 #### Remaining Work
-- [ ] **LocalStorage helpers** in session provider:
+- [x] **LocalStorage helpers** in session provider:
   - Save/load window geometry per session (x, y, width, height)
   - Save/load dock collapsed state
   - Save/load minimized state per session
-- [ ] **Security considerations**:
+- [x] **Security considerations**:
   - Only store non-sensitive UI state (geometry, dock state, session_number)
   - Clear stale entries when sessions expire
   - Key format: `rb-session-{user_id}-{relay_id}-{session_number}`
-- [ ] **Auto-restore on page load**:
+- [x] **Auto-restore on page load**:
   - Query `/api/ssh/sessions` on mount
   - For each active session, call `open_restored(relay_name, session_number)`
   - Restore geometry from localStorage
   - Restore minimized/dock state
+  - Toast notifications for restored sessions.
+  - Cleanup stale localStorage entries
 
 **Files to Modify**:
-- [crates/rb-web/src/app/session/provider.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/session/provider.rs) - Add localStorage helpers
-- [crates/rb-web/src/app/app_root.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/app_root.rs) - Add auto-restore on mount
+- [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs) - Add localStorage helpers
+- [crates/rb-web/src/app/app_root.rs](../crates/rb-web/src/app/app_root.rs) - Add auto-restore on mount
 
 ---
 
@@ -170,16 +172,16 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
 - ❌ No real-time updates when sessions change
 
 #### Remaining Work
-- [ ] **WebSocket/SSE endpoint** for session events:
+- [ ] **WebSocket/SSE endpoint** for session events: ( should we use SSE or Websockets? )
   - `GET /api/ssh/sessions/ws` or `GET /api/ssh/sessions/events`
-  - Stream events: `SessionAdded`, `SessionUpdated`, `SessionRemoved`
+  - Stream events: `SessionAdded`, `SessionUpdated`, `SessionRemoved`, use an Enum for strong types
   - Include: `relay_id`, `session_number`, `state`, `active_connections`
 - [ ] **Server-side broadcast**:
   - Add broadcast channel to `SessionRegistry`
   - Emit events on `create_next_session()`, `attach()`, `detach()`, `close()`
   - Filter events per user in WebSocket handler
 - [ ] **Frontend integration**:
-  - Subscribe to session events on mount
+  - Subscribe to session events on mount instead of our loop
   - Auto-open minimized windows for new sessions (with toast notification)
   - Update session status/connection count in real-time
   - Handle session removal (close windows)
@@ -193,15 +195,37 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
 
 **Files to Create/Modify**:
 - New: `crates/rb-web/src/app/api/session_events.rs` (or extend existing)
-- Modify: [crates/server-core/src/sessions.rs](file:///Volumes/2TB/rustybridge/crates/server-core/src/sessions.rs) - Add event broadcast
-- Modify: [crates/rb-web/src/app/session/provider.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/session/provider.rs) - Subscribe to events
+- Modify: [crates/server-core/src/sessions.rs](../crates/server-core/src/sessions.rs) - Add event broadcast
+- Modify: [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs) - Subscribe to events
+- Dioxus SSE Docs [DIOXUS_0.7.1/STREAMS_SSE.md](../DIOXUS_0.7.1/STREAMS_SSE.md)
+- Dioxus Websocket Docs [DIOXUS_0.7.1/WEBSOCKETS.md](../DIOXUS_0.7.1/WEBSOCKETS.md)
+
+---
+
+### Priority 2b: Window Management Polish
+
+### Multi-Session Connection Indicators
+
+#### Remaining Work
+- [ ] **Connection count badge**:
+  - Show "2 viewers" or "Shared with 2 others" in session window header
+  - Update in real-time as connections change
+  - Visual indicator (icon + count)
+- [ ] **Yellow banner for multi-session**:
+  - Display at top of xterm window when `active_connections > 1`
+  - Message: "X sessions connected to this relay"
+  - Dismissible or always visible?
+
+**Files to Modify**:
+- [crates/rb-web/src/app/session/components/session_window.rs](../crates/rb-web/src/app/session/components/session_window.rs)
+- [crates/rb-web/src/app/components/terminal.rs](../crates/rb-web/src/app/components/terminal.rs)
 
 ---
 
 ### Priority 3: Window Management Polish
 
 #### Remaining Work
-- [ ] **Bounds checking**: Prevent windows from being dragged off-screen
+- [x] **Bounds checking**: Prevent windows from being dragged off-screen
 - [ ] **Default window geometry**:
   - Cascade windows (offset by 30px x/y)
   - Center first window
@@ -215,8 +239,8 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
   - Escape to minimize focused window
 
 **Files to Modify**:
-- [crates/rb-web/src/app/session/provider.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/session/provider.rs)
-- [crates/rb-web/src/app/session/components/session_window.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/session/components/session_window.rs)
+- [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs)
+- [crates/rb-web/src/app/session/components/session_window.rs](../crates/rb-web/src/app/session/components/session_window.rs)
 
 ---
 
@@ -238,8 +262,8 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
   - Clear error messages for auth failures
 
 **Files to Modify**:
-- [crates/rb-web/src/app/session/provider.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/session/provider.rs)
-- [crates/rb-web/src/app/components/terminal.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/components/terminal.rs)
+- [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs)
+- [crates/rb-web/src/app/components/terminal.rs](../crates/rb-web/src/app/components/terminal.rs)
 - Add toast component (if not already exists)
 
 ---
@@ -293,15 +317,15 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
   - Implement best practices for SSH event handling
 
 **Files to Modify**:
-- [crates/rb-web/src/app/api/ssh_websocket.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/api/ssh_websocket.rs)
-- [crates/rb-web/assets/xterm-init.js](file:///Volumes/2TB/rustybridge/crates/rb-web/assets/xterm-init.js)
+- [crates/rb-web/src/app/api/ssh_websocket.rs](../crates/rb-web/src/app/api/ssh_websocket.rs)
+- [crates/rb-web/assets/xterm-init.js](../crates/rb-web/assets/xterm-init.js)
 
 ---
 
 ### Thumbnail Minimize Animation
 
 > [!NOTE]
-> **Reference**: [wip_genie_effect.html](file:///Volumes/2TB/rustybridge/wip_genie_effect.html)
+> **Reference**: [wip_genie_effect.html](../wip_genie_effect.html)
 
 #### Current State
 - ✅ Proof-of-concept genie effect animation exists
@@ -325,8 +349,8 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
 
 **Files to Create/Modify**:
 - New: `crates/rb-web/assets/genie-effect.js`
-- Modify: [crates/rb-web/src/app/session/provider.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/session/provider.rs)
-- Modify: [crates/rb-web/src/app/session/components/session_window.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/session/components/session_window.rs)
+- Modify: [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs)
+- Modify: [crates/rb-web/src/app/session/components/session_window.rs](../crates/rb-web/src/app/session/components/session_window.rs)
 
 ---
 
@@ -388,24 +412,6 @@ CREATE TABLE session_events (
 
 ---
 
-### Multi-Session Connection Indicators
-
-#### Remaining Work
-- [ ] **Connection count badge**:
-  - Show "2 viewers" or "Shared with 2 others" in session window header
-  - Update in real-time as connections change
-  - Visual indicator (icon + count)
-- [ ] **Yellow banner for multi-session**:
-  - Display at top of xterm window when `active_connections > 1`
-  - Message: "X sessions connected to this relay"
-  - Dismissible or always visible?
-
-**Files to Modify**:
-- [crates/rb-web/src/app/session/components/session_window.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/session/components/session_window.rs)
-- [crates/rb-web/src/app/components/terminal.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/components/terminal.rs)
-
----
-
 ### Server-Enforced Session Limits
 
 > [!NOTE]
@@ -426,7 +432,7 @@ CREATE TABLE session_events (
   - Admin can set custom limits for specific users
 
 **Files to Modify**:
-- [crates/rb-web/src/app/api/ssh_websocket.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/api/ssh_websocket.rs)
+- [crates/rb-web/src/app/api/ssh_websocket.rs](../crates/rb-web/src/app/api/ssh_websocket.rs)
 - Add server options management (if not exists)
 
 ---
@@ -454,8 +460,8 @@ CREATE TABLE session_events (
   - Include in session key if per-device mode enabled
 
 **Files to Modify**:
-- [crates/server-core/src/sessions.rs](file:///Volumes/2TB/rustybridge/crates/server-core/src/sessions.rs)
-- [crates/rb-web/src/app/session/provider.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/session/provider.rs)
+- [crates/server-core/src/sessions.rs](../crates/server-core/src/sessions.rs)
+- [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs)
 - Add user preferences page (if not exists)
 
 ---
@@ -619,11 +625,11 @@ stateDiagram-v2
 
 | Constant | Value | Location | Notes |
 |----------|-------|----------|-------|
-| `MAX_SESSIONS` | 4 | [provider.rs:6](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/session/provider.rs#L6) | Client-side cap |
-| History buffer size | 64KB | [sessions.rs:52](file:///Volumes/2TB/rustybridge/crates/server-core/src/sessions.rs#L52) | Per-session scrollback |
-| Detach timeout | 120s | [ssh_websocket.rs:356](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/api/ssh_websocket.rs#L356) | Unexpected disconnect |
-| Broadcast channel capacity | 1024 | [ssh_websocket.rs:472](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/api/ssh_websocket.rs#L472) | Output messages |
-| Input channel capacity | 1024 | [ssh_websocket.rs:471](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/api/ssh_websocket.rs#L471) | Input messages |
+| `MAX_SESSIONS` | 4 | [provider.rs:6](../crates/rb-web/src/app/session/provider.rs#L6) | Client-side cap |
+| History buffer size | 64KB | [sessions.rs:52](../crates/server-core/src/sessions.rs#L52) | Per-session scrollback |
+| Detach timeout | 120s | [ssh_websocket.rs:356](../crates/rb-web/src/app/api/ssh_websocket.rs#L356) | Unexpected disconnect |
+| Broadcast channel capacity | 1024 | [ssh_websocket.rs:472](../crates/rb-web/src/app/api/ssh_websocket.rs#L472) | Output messages |
+| Input channel capacity | 1024 | [ssh_websocket.rs:471](../crates/rb-web/src/app/api/ssh_websocket.rs#L471) | Input messages |
 
 ### Future Configuration (Planned)
 
@@ -670,17 +676,17 @@ These should be moved to server admin panel:
 ## References
 
 ### Related Documents
-- [WEB_SHELL_PLAN.md](file:///Volumes/2TB/rustybridge/docs/WEB_SHELL_PLAN.md) - Original implementation plan (deprecated, no longer updated)
-- [AUTO_LOAD.md](file:///Volumes/2TB/rustybridge/docs/AUTO_LOAD.md) - Auto-restore design (deprecated, no longer updated)
-- [WEB_ATTACH.md](file:///Volumes/2TB/rustybridge/docs/WEB_ATTACH.md) - Detach/reattach architecture (deprecated, no longer updated)
-- [wip_genie_effect.html](file:///Volumes/2TB/rustybridge/wip_genie_effect.html) - Minimize animation prototype, example of genie effect
+- [WEB_SHELL_PLAN.md](../docs/WEB_SHELL_PLAN.md) - Original implementation plan (deprecated, no longer updated)
+- [AUTO_LOAD.md](../docs/AUTO_LOAD.md) - Auto-restore design (deprecated, no longer updated)
+- [WEB_ATTACH.md](../docs/WEB_ATTACH.md) - Detach/reattach architecture (deprecated, no longer updated)
+- [wip_genie_effect.html](../wip_genie_effect.html) - Minimize animation prototype, example of genie effect
 
 ### Key Files
-- [crates/server-core/src/sessions.rs](file:///Volumes/2TB/rustybridge/crates/server-core/src/sessions.rs) - Session registry
-- [crates/rb-web/src/app/api/ssh_websocket.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/api/ssh_websocket.rs) - WebSocket API
-- [crates/rb-web/src/app/session/provider.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/session/provider.rs) - Frontend session management
-- [crates/rb-web/src/app/components/terminal.rs](file:///Volumes/2TB/rustybridge/crates/rb-web/src/app/components/terminal.rs) - Terminal component
-- [crates/rb-web/assets/xterm-init.js](file:///Volumes/2TB/rustybridge/crates/rb-web/assets/xterm-init.js) - Terminal JavaScript bridge
+- [crates/server-core/src/sessions.rs](../crates/server-core/src/sessions.rs) - Session registry
+- [crates/rb-web/src/app/api/ssh_websocket.rs](../crates/rb-web/src/app/api/ssh_websocket.rs) - WebSocket API
+- [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs) - Frontend session management
+- [crates/rb-web/src/app/components/terminal.rs](../crates/rb-web/src/app/components/terminal.rs) - Terminal component
+- [crates/rb-web/assets/xterm-init.js](../crates/rb-web/assets/xterm-init.js) - Terminal JavaScript bridge
 
 ---
 

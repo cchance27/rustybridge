@@ -81,26 +81,33 @@ pub fn Terminal(props: TerminalProps) -> Element {
 
                     // Serialize terminal_id to JSON to prevent XSS
                     let terminal_id_json = serde_json::to_string(&terminal_id).unwrap_or_else(|_| "\"\"".to_string());
-
+                    web_sys::console::log_1(&format!("Terminal script starting for {terminal_id_json}").into());
                     spawn(async move {
                         let script = format!(
                             r#"
                     (async () => {{
-                        if (!window.initRustyBridgeTerminal) {{
-                            await new Promise((resolve, reject) => {{
-                                const s = document.createElement('script');
-                                s.src = '/xterm/xterm-init.js';
-                                s.onload = resolve;
-                                s.onerror = reject;
-                                document.head.appendChild(s);
-                            }});
+                        const termId = {terminal_id_json};
+                        console.log("Terminal script started for " + termId);
+                        try {{
+                            if (!window.initRustyBridgeTerminal) {{
+                                console.error("Terminal init failed for " + termId + ": xterm-init.js not loaded");
+                                dioxus.send(false);
+                            }}
+                            await window.initRustyBridgeTerminal(termId, {options_json});
+                            dioxus.send(true);
+                        }} catch (e) {{
+                            console.error("Terminal init failed for " + termId + ":", e);
+                            dioxus.send(false);
                         }}
-                        await window.initRustyBridgeTerminal({terminal_id_json}, {options_json});
                     }})();
                     "#
                         );
 
-                        let _ = dioxus::document::eval(&script).await;
+                        match dioxus::document::eval(&script).recv::<bool>().await {
+                            Ok(true) => web_sys::console::log_1(&format!("Terminal init success: {}", terminal_id).into()),
+                            Ok(false) => web_sys::console::error_1(&format!("Terminal init failed: {}", terminal_id).into()),
+                            Err(e) => web_sys::console::error_1(&format!("Terminal init recv error: {}", e).into()),
+                        }
                     });
                 }
             }
@@ -115,8 +122,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
         }
 
         impl Drop for TerminalDrop {
-            fn drop(&mut self) {
-            }
+            fn drop(&mut self) {}
         }
 
         let mut socket = use_signal(|| None::<std::rc::Rc<SshWebSocket>>);
@@ -149,7 +155,9 @@ pub fn Terminal(props: TerminalProps) -> Element {
                         if let Some(detail) = detail {
                             if let Ok(term_id_value) = Reflect::get(&detail, &JsValue::from_str("termId")) {
                                 if term_id_value == JsValue::from_str(&id) {
-                                    web_sys::console::log_1(&format!("Terminal: close request matched for term {} - sending SshControl::Close", id).into());
+                                    web_sys::console::log_1(
+                                        &format!("Terminal: close request matched for term {} - sending SshControl::Close", id).into(),
+                                    );
                                     spawn({
                                         let socket = socket.clone();
                                         async move {
@@ -164,7 +172,9 @@ pub fn Terminal(props: TerminalProps) -> Element {
                                                         web_sys::console::log_1(&"Terminal: explicit close command sent to server".into());
                                                     }
                                                     Err(err) => {
-                                                        web_sys::console::error_1(&format!("Terminal: error sending explicit close command: {}", err).into());
+                                                        web_sys::console::error_1(
+                                                            &format!("Terminal: error sending explicit close command: {}", err).into(),
+                                                        );
                                                     }
                                                 }
                                             }
@@ -389,8 +399,12 @@ pub fn Terminal(props: TerminalProps) -> Element {
                                 if !session_number_set {
                                     // Inform SessionContext which backend session number this window is bound to
                                     let term_id = terminal_id.clone();
-                                    crate::app::session::provider::use_session()
-                                        .set_session_number_from_term_id(&term_id, session_num);
+                                    let relay_id = msg.relay_id;
+                                    crate::app::session::provider::use_session().set_session_number_from_term_id(
+                                        &term_id,
+                                        session_num,
+                                        relay_id,
+                                    );
                                     session_number_set = true;
                                 }
                             }
