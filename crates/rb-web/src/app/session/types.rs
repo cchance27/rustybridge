@@ -32,6 +32,8 @@ pub struct Session {
     pub last_focused_at: DateTime<Utc>,
     // Cached z-index to avoid recalculation on every render
     pub z_index: usize,
+    // Optional backend SSH session number used for detach/reattach across browsers
+    pub session_number: Option<u32>,
 }
 
 impl Session {
@@ -53,6 +55,7 @@ impl Session {
             thumbnail_data_url: None,
             last_focused_at: Utc::now(),
             z_index: 60, // Default base z-index
+            session_number: None,
         }
     }
 }

@@ -2383,6 +2383,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
+name = "gloo-events"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27c26fb45f7c385ba980f5fa87ac677e363949e065a083722697ef1b2cc91e41"
+dependencies = [
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "gloo-net"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4359,6 +4369,7 @@ dependencies = [
  "chrono",
  "dioxus",
  "futures",
+ "gloo-events",
  "gloo-timers",
  "js-sys",
  "openidconnect",
@@ -5160,6 +5171,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chacha20poly1305",
+ "chrono",
  "futures",
  "hkdf",
  "once_cell",
@@ -5185,6 +5197,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tui-core",
+ "uuid",
 ]
 
 [[package]]

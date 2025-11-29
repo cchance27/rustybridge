@@ -1,0 +1,462 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Genie Effect – Minimized Previews</title>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js"></script>
+
+  <style>
+    :root { --bg: #101118; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background: radial-gradient(circle at top, #1a1c2b, #05060b);
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      overflow: hidden;
+      color: #f7f8ff;
+    }
+
+    .stage {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+
+    /* THE WINDOW */
+    .window {
+      width: 440px;
+      /* We let height be auto so it fits content, but min-height ensures shape */
+      min-height: 240px;
+      border-radius: 12px;
+      background: linear-gradient(145deg, #21263a, #181a26);
+      position: relative;
+      box-shadow:
+        0 24px 50px rgba(0,0,0,0.5),
+        0 0 0 1px rgba(255,255,255,0.05);
+      /* Hardware acceleration hint */
+      transform: translateZ(0); 
+    }
+
+    .window-header {
+      height: 36px;
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      background: linear-gradient(180deg, #303549, #161823);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      border-radius: 12px 12px 0 0;
+      user-select: none;
+    }
+
+    .traffic-lights { display: flex; gap: 8px; }
+    .dot { width: 12px; height: 12px; border-radius: 50%; position: relative; }
+    .dot.red { background: #ff5f57; border: 1px solid #ce3b32; }
+    
+    /* Yellow Minimize Button */
+    .dot.yellow { 
+      background: #febc2e; 
+      border: 1px solid #d69e18; 
+      cursor: pointer; 
+    }
+    .dot.yellow:hover { filter: brightness(0.9); }
+    
+    .dot.green { background: #28c840; border: 1px solid #1f9d2d; }
+    
+    .window-title { margin-left: 16px; font-size: 13px; opacity: 0.7; font-weight: 500; }
+
+    .window-body { padding: 30px; line-height: 1.6; color: #dbe8ff; }
+    h1 { margin: 0 0 10px 0; font-weight: 600; font-size: 22px; letter-spacing: -0.5px; }
+    p { margin: 0; opacity: 0.8; font-size: 15px; }
+
+    /* WEBGL CANVAS OVERLAY */
+    #genie-canvas {
+      position: fixed; inset: 0; width: 100%; height: 100%;
+      display: none;
+      z-index: 999; /* Above everything while animating */
+      pointer-events: none;
+    }
+
+    /* MINIMIZED AREA (The "Taskbar" Strip) */
+    .minimized-strip {
+      height: 100px;
+      width: 100%;
+      display: flex;
+      align-items: flex-end;
+      padding: 0 20px 20px;
+      gap: 20px;
+      /* Visual guide for the strip area, optional */
+      /* border-top: 1px solid rgba(255,255,255,0.05); */
+    }
+
+    /* THE GENERATED THUMBNAIL */
+    .minimized-preview {
+      cursor: pointer;
+      border-radius: 6px;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+      transition: transform 0.2s, filter 0.2s;
+      transform-origin: bottom center;
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+    .minimized-preview:hover {
+      transform: scale(1.05);
+      filter: brightness(1.2);
+      border-color: rgba(255,255,255,0.4);
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="genie-canvas"></canvas>
+
+<div class="stage">
+  <div class="window" id="genie-window">
+    <div class="window-header">
+      <div class="traffic-lights">
+        <div class="dot red"></div>
+        <div class="dot yellow" id="btn-minimize" title="Minimize"></div>
+        <div class="dot green"></div>
+      </div>
+      <div class="window-title">My Application</div>
+    </div>
+
+    <div class="window-body">
+      <h1>Hello World</h1>
+      <p>
+        Click the yellow button to minimize me.
+        I will shrink into a preview thumbnail at the bottom-left.
+      </p>
+    </div>
+  </div>
+</div>
+
+<div class="minimized-strip" id="minimized-strip">
+  <!-- Minimized windows will appear here as images -->
+</div>
+
+<script>
+/* ------------------------------------------------------------------
+   EASING
+------------------------------------------------------------------ */
+const clamp = (v,min,max)=>v<min?min:v>max?max:v;
+const ease = t => t < .5 ? 4 * t * t * t : (t - 1) * (2 * t - 2) * (2 * t - 2) + 1;
+
+/* ------------------------------------------------------------------
+   WEBGL SETUP
+------------------------------------------------------------------ */
+const canvas = document.getElementById("genie-canvas");
+const gl = canvas.getContext("webgl", { premultipliedAlpha:true });
+
+let program, aPos, aUV, uImage;
+let posBuf, uvBuf, idxBuf, tex;
+
+const ROWS = 50;                
+const VERTS = (ROWS+1)*2;
+const IDX_COUNT = ROWS*6;
+let dpr = window.devicePixelRatio || 1;
+
+function initGL() {
+  if (program) return;
+
+  dpr = window.devicePixelRatio || 1;
+  canvas.width = innerWidth * dpr;
+  canvas.height = innerHeight * dpr;
+
+  const vs = `
+    attribute vec2 a_position;
+    attribute vec2 a_uv;
+    varying vec2 v_uv;
+    void main() {
+      gl_Position = vec4(a_position,0.0,1.0);
+      v_uv = a_uv;
+    }
+  `;
+  const fs = `
+    precision mediump float;
+    varying vec2 v_uv;
+    uniform sampler2D u_image;
+    void main() {
+      gl_FragColor = texture2D(u_image,v_uv);
+    }
+  `;
+
+  const shader = (type,src)=>{
+    const s = gl.createShader(type);
+    gl.shaderSource(s,src);
+    gl.compileShader(s);
+    return s;
+  };
+  program = gl.createProgram();
+  gl.attachShader(program, shader(gl.VERTEX_SHADER,vs));
+  gl.attachShader(program, shader(gl.FRAGMENT_SHADER,fs));
+  gl.linkProgram(program);
+  gl.useProgram(program);
+
+  aPos = gl.getAttribLocation(program,"a_position");
+  aUV  = gl.getAttribLocation(program,"a_uv");
+  uImage = gl.getUniformLocation(program,"u_image");
+
+  posBuf = gl.createBuffer();
+  uvBuf  = gl.createBuffer();
+  idxBuf = gl.createBuffer();
+
+  const idx = new Uint16Array(IDX_COUNT);
+  let p=0;
+  for (let r=0;r<ROWS;r++){
+    const t = r*2, b=(r+1)*2;
+    idx[p++]=t; idx[p++]=t+1; idx[p++]=b;
+    idx[p++]=t+1; idx[p++]=b+1; idx[p++]=b;
+  }
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,idxBuf);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,idx,gl.STATIC_DRAW);
+
+  tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D,tex);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+}
+
+/* ------------------------------------------------------------------
+   SNAPSHOT & GEOMETRY CALCULATION
+------------------------------------------------------------------ */
+let initial = {}, final = {};
+let currentSnapshotUrl = null; // Store for the thumbnail
+const winEl = document.getElementById("genie-window");
+const stripEl = document.getElementById("minimized-strip");
+
+// Config for minimized size
+const THUMB_WIDTH = 200; 
+
+async function prepareAnimation() {
+  const rect = winEl.getBoundingClientRect();
+  
+  // 1. Capture Image
+  const dataUrl = await htmlToImage.toPng(winEl, {
+    pixelRatio: dpr,
+    backgroundColor: null 
+  });
+  currentSnapshotUrl = dataUrl;
+
+  const img = new Image();
+  await new Promise(resolve => {
+    img.onload = resolve;
+    img.src = dataUrl;
+  });
+
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+
+  // 2. Calculate Initial Coordinates (Window)
+  const H = canvas.height; // Physical pixels
+  initial = {
+    minX: rect.left * dpr,
+    maxX: rect.right * dpr,
+    minY: H - (rect.bottom * dpr), 
+    maxY: H - (rect.top * dpr)
+  };
+
+  // 3. Calculate Final Coordinates (Thumbnail Position)
+  // We determine where the thumbnail *will* be in the strip.
+  // Since we don't have the element yet, we calculate based on strip padding.
+  
+  // Get strip position in CSS pixels
+  const stripRect = stripEl.getBoundingClientRect();
+  
+  // Calculate aspect ratio to determine height
+  const aspect = rect.height / rect.width;
+  const thumbH = THUMB_WIDTH * aspect;
+
+  // Position: Bottom left of the strip + padding
+  // In a real multi-window app, you'd calculate offset based on existing children.
+  const targetX = stripRect.left + 20; // 20px padding left
+  const targetY = stripRect.bottom - 20 - thumbH; // 20px padding bottom
+
+  // Convert to GL Coordinates (Physical Pixels)
+  final = {
+    minX: targetX * dpr,
+    maxX: (targetX + THUMB_WIDTH) * dpr,
+    minY: H - (targetY + thumbH) * dpr, // GL Y grows up, DOM Y grows down
+    maxY: H - (targetY) * dpr
+  };
+
+  return { width: THUMB_WIDTH, height: thumbH };
+}
+  
+/* ------------------------------------------------------------------
+   MESH GENERATION
+------------------------------------------------------------------ */
+function computeMesh(t) {
+  const W = canvas.width, H = canvas.height;
+
+  const slideEnd = 0.5;
+  const moveStart = 0.35;
+
+  const slideT = clamp(t/slideEnd,0,1);
+  const moveT  = clamp((t-moveStart)/(1-moveStart),0,1);
+
+  const dy     = (final.maxY - initial.maxY);
+  const transY = dy * moveT;
+
+  const topY = initial.maxY + transY;
+  const botY = Math.max(initial.minY + transY, final.minY);
+
+  const leftX1  = initial.minX;
+  const rightX1 = initial.maxX;
+  const leftX2  = initial.minX + (final.minX - initial.minX)*slideT;
+  const rightX2 = initial.maxX + (final.maxX - initial.maxX)*slideT;
+
+  const bezTopY = initial.maxY;
+  const bezBotY = final.maxY;
+  const bezH    = bezTopY - bezBotY;
+
+  function edgeX(isLeft, y) {
+    const topX  = isLeft?leftX1:rightX1;
+    const botX  = isLeft?leftX2:rightX2;
+    if (y <= bezBotY) return botX;
+    if (y >= bezTopY) return topX;
+    
+    const n = (y - bezBotY)/bezH;
+    const e = ease(n);
+    return botX + (topX - botX)*e;
+  }
+
+  const pos = new Float32Array(VERTS*2);
+  const uv  = new Float32Array(VERTS*2);
+
+  let pi=0, ui=0;
+  for (let r=0;r<=ROWS;r++) {
+    const rowT = r/ROWS;
+    const y = botY + (topY - botY)*rowT;
+    const yGL = (y/H)*2 - 1; 
+
+    const lx = edgeX(true, y);
+    const rx = edgeX(false,y);
+
+    const lxGL = (lx/W)*2 - 1;
+    const rxGL = (rx/W)*2 - 1;
+
+    pos[pi++] = lxGL; pos[pi++] = yGL;
+    pos[pi++] = rxGL; pos[pi++] = yGL;
+
+    const texV = 1 - rowT;
+    uv[ui++] = 0;   uv[ui++] = texV;
+    uv[ui++] = 1;   uv[ui++] = texV;
+  }
+  return {pos,uv};
+}
+
+function draw(t) {
+  const {pos,uv} = computeMesh(t);
+  gl.viewport(0,0,canvas.width,canvas.height);
+  gl.clearColor(0,0,0,0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+
+  gl.useProgram(program);
+  gl.bindBuffer(gl.ARRAY_BUFFER,posBuf);
+  gl.bufferData(gl.ARRAY_BUFFER,pos,gl.DYNAMIC_DRAW);
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos,2,gl.FLOAT,false,0,0);
+
+  gl.bindBuffer(gl.ARRAY_BUFFER,uvBuf);
+  gl.bufferData(gl.ARRAY_BUFFER,uv,gl.DYNAMIC_DRAW);
+  gl.enableVertexAttribArray(aUV);
+  gl.vertexAttribPointer(aUV,2,gl.FLOAT,false,0,0);
+
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,idxBuf);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D,tex);
+  gl.uniform1i(uImage,0);
+
+  gl.drawElements(gl.TRIANGLES,IDX_COUNT,gl.UNSIGNED_SHORT,0);
+}
+
+function animate(reverse,done) {
+  const D = 600;
+  const start = performance.now();
+
+  function tick(now) {
+    let t = (now-start)/D;
+    t = clamp(t,0,1);
+    const f = reverse?1-t:t;
+    draw(f);
+    if (t<1) requestAnimationFrame(tick);
+    else done&&done();
+  }
+  requestAnimationFrame(tick);
+}
+
+/* ------------------------------------------------------------------
+   INTERACTION LOGIC
+------------------------------------------------------------------ */
+let isAnimating = false;
+const btnMinimize = document.getElementById("btn-minimize");
+
+btnMinimize.onclick = async () => {
+  if (isAnimating) return;
+  isAnimating = true;
+  document.body.style.cursor = 'wait';
+  
+  initGL();
+  
+  // 1. Prepare (Snapshot + Calc Geometry)
+  const thumbDims = await prepareAnimation();
+  
+  // 2. Switch from DOM Window to Canvas
+  winEl.style.visibility = "hidden";
+  canvas.style.display = "block";
+  document.body.style.cursor = 'default';
+
+  // 3. Animate Down
+  animate(false, () => {
+    // 4. Animation Done: Create Persistent Thumbnail
+    createThumbnail(thumbDims);
+    
+    // Hide Canvas (It's done its job)
+    canvas.style.display = "none";
+    isAnimating = false;
+  });
+};
+
+function createThumbnail(dims) {
+  const img = document.createElement("img");
+  img.src = currentSnapshotUrl;
+  img.className = "minimized-preview";
+  img.style.width = dims.width + "px";
+  img.style.height = dims.height + "px";
+  
+  // Add restore Logic
+  img.onclick = () => restoreWindow(img);
+  
+  stripEl.appendChild(img);
+}
+
+function restoreWindow(thumbEl) {
+  if (isAnimating) return;
+  isAnimating = true;
+
+  // 1. Remove thumbnail (visual swap)
+  thumbEl.remove();
+
+  // 2. Show Canvas (it remembers the last state, which is minimized)
+  canvas.style.display = "block";
+
+  // 3. Animate Up
+  animate(true, () => {
+    // 4. Animation Done: Show original DOM Window
+    canvas.style.display = "none";
+    winEl.style.visibility = "visible";
+    isAnimating = false;
+  });
+}
+
+</script>
+</body>
+</html>

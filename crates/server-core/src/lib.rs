@@ -16,6 +16,7 @@ pub mod credential;
 pub mod group;
 pub mod relay_host;
 pub mod role;
+pub mod sessions;
 pub mod ssh_server;
 pub mod tui;
 pub mod user;

@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "server")]
 use server_core::relay::connect_to_relay_channel;
 #[cfg(feature = "server")]
+use server_core::sessions::{SessionRegistry, SessionState, SshSession};
+#[cfg(feature = "server")]
 use state_store::{fetch_relay_host_by_name, user_has_relay_access};
 
 #[cfg(feature = "server")]
@@ -42,6 +44,23 @@ struct SshStatusResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum SessionStateSummary {
+    Attached,
+    Detached,
+    Closed,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct UserSessionSummary {
+    pub relay_id: i64,
+    pub session_number: u32,
+    pub state: SessionStateSummary,
+    pub active_connections: u32,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub last_active_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum SshControl {
     Close,
     Resize { cols: u32, rows: u32 },
@@ -58,6 +77,7 @@ pub struct SshServerMsg {
     pub data: Vec<u8>,
     pub eof: bool,
     pub exit_status: Option<i32>,
+    pub session_id: Option<u32>, // Session number for this connection
 }
 
 #[cfg(feature = "server")]
@@ -65,9 +85,7 @@ async fn ensure_relay_websocket_permissions(
     relay_name: &str,
     auth: &WebAuthSession,
     pool: &sqlx::SqlitePool,
-) -> Result<String, SshAccessError> {
-    // Today any authenticated user may open relays they have been explicitly granted via ACLs.
-    // If we decide to add a dedicated "relay access" claim in the future, this is the choke point.
+) -> Result<(String, i64, i64), SshAccessError> {
     let user = ensure_authenticated(auth).map_err(|err| {
         tracing::warn!(relay = %relay_name, "Unauthenticated SSH WebSocket attempt: {err}");
         SshAccessError::Unauthorized
@@ -94,24 +112,25 @@ async fn ensure_relay_websocket_permissions(
         return Err(SshAccessError::RelayAccessDenied);
     }
 
-    Ok(user.username.clone())
+    Ok((user.username.clone(), user.id, relay.id))
 }
 
 pub type SshWebSocket = Websocket<SshClientMsg, SshServerMsg, JsonEncoding>;
 
-// For attach addon, we use raw binary WebSocket (not Dioxus typed WebSocket)
-// This is a plain axum handler, not a Dioxus server function
-// Dioxus Server Function for SSH WebSocket
-#[get("/api/ssh/{relay_name}")]
-pub async fn ssh_terminal_ws(relay_name: String, options: WebSocketOptions) -> Result<SshWebSocket, ServerFnError> {
+#[get(
+    "/api/ssh/{relay_name}?session_number",
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>,
+    registry: axum::Extension<SessionRegistry>
+)]
+pub async fn ssh_terminal_ws(
+    relay_name: String,
+    session_number: Option<u32>,
+    options: WebSocketOptions,
+) -> Result<SshWebSocket, ServerFnError> {
     // Extract state and auth
-    let (auth, axum::Extension(pool)): (WebAuthSession, axum::Extension<sqlx::SqlitePool>) =
-        FullstackContext::extract().await.map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    tracing::info!("WebSocket SSH connection requested for relay: {}", relay_name);
-
-    let username = match ensure_relay_websocket_permissions(&relay_name, &auth, &pool).await {
-        Ok(username) => username,
+    let (username, user_id, relay_id) = match ensure_relay_websocket_permissions(&relay_name, &auth, &pool.0).await {
+        Ok(res) => res,
         Err(err) => {
             tracing::error!("SSH Access Error: {:?}", err);
             return Err(ServerFnError::new(format!("Access denied: {:?}", err)));
@@ -119,10 +138,35 @@ pub async fn ssh_terminal_ws(relay_name: String, options: WebSocketOptions) -> R
     };
 
     let relay_for_upgrade = relay_name.clone();
+    let registry_inner: SessionRegistry = registry.0.clone();
 
+    // If a session_number was provided, try to reattach to an existing session first.
+    if let Some(num) = session_number &&let Some(existing) = registry_inner.get_session(user_id, relay_id, num).await {
+        tracing::info!(
+            relay = %relay_for_upgrade,
+            user = %username,
+            session_number = num,
+            "WebSocket SSH reattach requested"
+        );
+        
+        return Ok(options.on_upgrade(move |socket| async move {
+            tracing::info!(
+                relay = %relay_for_upgrade,
+                user = %username,
+                session_number = num,
+                "WebSocket upgrade callback started (reattach)"
+            );
+            let registry_for_upgrade = registry_inner.clone();
+            handle_reattach(socket, existing, registry_for_upgrade).await;
+        }));
+    }
+
+    // Fallback: create a new session
     Ok(options.on_upgrade(move |socket| async move {
-        tracing::info!(relay = %relay_for_upgrade, user = %username, "WebSocket upgrade callback started");
-        handle_typed_socket(socket, relay_for_upgrade, username).await
+        tracing::info!(relay = %relay_for_upgrade, user = %username, "WebSocket upgrade callback started (new session)");
+
+        let registry_for_new = registry_inner.clone();
+        handle_new_session(socket, registry_for_new, relay_for_upgrade, username, user_id, relay_id).await;
     }))
 }
 
@@ -132,7 +176,7 @@ pub async fn ssh_terminal_ws(relay_name: String, options: WebSocketOptions) -> R
     pool: axum::Extension<sqlx::SqlitePool>
 )]
 pub async fn ssh_terminal_status(relay_name: String) -> Result<SshStatusResponse, ServerFnError> {
-    let _ = ensure_relay_websocket_permissions(&relay_name, &auth, &pool).await?;
+    let _ = ensure_relay_websocket_permissions(&relay_name, &auth, &pool.0).await?;
 
     Ok(SshStatusResponse {
         ok: true,
@@ -140,17 +184,193 @@ pub async fn ssh_terminal_status(relay_name: String) -> Result<SshStatusResponse
     })
 }
 
+#[get(
+    "/api/ssh/sessions",
+    auth: WebAuthSession,
+    registry: axum::Extension<SessionRegistry>
+)]
+pub async fn ssh_list_sessions() -> Result<Vec<UserSessionSummary>, ServerFnError> {
+    let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let sessions = registry.0.list_sessions_for_user(user.id).await;
+
+    let mut summaries = Vec::with_capacity(sessions.len());
+
+    for session in sessions {
+        let state = session.state.read().await.clone();
+        let state_summary = match state {
+            SessionState::Attached => SessionStateSummary::Attached,
+            SessionState::Detached { .. } => SessionStateSummary::Detached,
+            SessionState::Closed => SessionStateSummary::Closed,
+        };
+
+        let created_at = session.created_at;
+        let last_active_at = *session.last_active_at.read().await;
+        let active_connections = session.connection_count();
+
+        summaries.push(UserSessionSummary {
+            relay_id: session.relay_id,
+            session_number: session.session_number,
+            state: state_summary,
+            active_connections,
+            created_at,
+            last_active_at,
+        });
+    }
+
+    Ok(summaries)
+}
+
 #[cfg(feature = "server")]
-async fn handle_typed_socket(
+async fn handle_reattach(
     mut socket: TypedWebsocket<SshClientMsg, SshServerMsg, JsonEncoding>,
+    session: std::sync::Arc<SshSession>,
+    registry: SessionRegistry,
+) {
+    session.attach().await;
+
+    // Replay scrollback history so a reattached client sees the existing shell state
+    let history = session.get_history().await;
+    if !history.is_empty() {
+        info!("Replaying scrollback history for session {}", session.session_number);
+        let _ = socket
+            .send(SshServerMsg {
+                data: history,
+                eof: false,
+                exit_status: None,
+                session_id: None,
+            })
+            .await;
+    }
+
+    // Subscribe to output
+    let mut output_rx = session.output_tx.subscribe();
+    let input_tx = session.input_tx.clone();
+    let mut close_rx = session.close_tx.subscribe();
+
+    // Increment connection count
+    let conn_count = session.increment_connections();
+    tracing::info!(
+        session_number = session.session_number,
+        connections = conn_count,
+        "Client attached to session"
+    );
+
+    // Send initial session ID confirmation
+    let _ = socket
+        .send(SshServerMsg {
+            data: Vec::new(),
+            eof: false,
+            exit_status: None,
+            session_id: Some(session.session_number),
+        })
+        .await;
+
+    let mut explicit_close = false;
+
+    loop {
+        tokio::select! {
+            Ok(data) = output_rx.recv() => {
+                let is_eof = data.is_empty();
+                let msg = SshServerMsg {
+                    data,
+                    eof: is_eof,
+                    exit_status: None,
+                    session_id: None,
+                };
+                if socket.send(msg).await.is_err() {
+                    break;
+                }
+                if is_eof {
+                    // SSH closed, mark as explicit close
+                    explicit_close = true;
+                    break;
+                }
+            }
+            ws_msg = socket.recv() => {
+                match ws_msg {
+                    Ok(client_msg) => {
+                        if let Some(cmd) = &client_msg.cmd {
+                            match cmd {
+                                SshControl::Close => {
+                                    // User explicitly closed the shell
+                                    explicit_close = true;
+                                    session.close().await;
+                                    break;
+                                }
+                                SshControl::Resize { .. } => {
+                                    // TODO: implement resize
+                                }
+                            }
+                        }
+                        if !client_msg.data.is_empty() {
+                            let _ = input_tx.send(client_msg.data).await;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            Ok(_) = close_rx.recv() => {
+                // Session closed remotely (SSH EOF)
+                explicit_close = true;
+                break;
+            }
+        }
+    }
+
+    // Decrement connection count
+    let remaining = session.decrement_connections();
+    tracing::info!(
+        session_number = session.session_number,
+        remaining_connections = remaining,
+        explicit_close = explicit_close,
+        "Client detached from session"
+    );
+
+    if explicit_close {
+        // Explicit close (user clicked X or SSH closed)
+        if remaining == 0 {
+            // Last client with explicit close - clean up immediately
+            tracing::info!(
+                session_number = session.session_number,
+                "Cleaning up session (explicit close, last client)"
+            );
+            registry
+                .remove_session(session.user_id, session.relay_id, session.session_number)
+                .await;
+        } else {
+            // Other clients still attached, they'll see the EOF
+            tracing::info!(
+                session_number = session.session_number,
+                "Session closed but other clients still attached"
+            );
+        }
+    } else {
+        // Unexpected disconnect (refresh, network drop)
+        if remaining == 0 {
+            // No more clients - detach with timeout for reattachment
+            tracing::info!(
+                session_number = session.session_number,
+                "All clients disconnected unexpectedly, detaching with timeout"
+            );
+            session.detach(std::time::Duration::from_secs(120)).await;
+        } else {
+            // Other clients still attached
+            tracing::info!(session_number = session.session_number, "Client disconnected but others remain");
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+async fn handle_new_session(
+    mut socket: TypedWebsocket<SshClientMsg, SshServerMsg, JsonEncoding>,
+    registry: SessionRegistry,
     relay_name: String,
     username: String,
+    user_id: i64,
+    relay_id: i64,
 ) {
-    use tokio::sync::{
-        Mutex, mpsc::{self, unbounded_channel}
-    };
-
-    tracing::info!("handle_typed_socket started for relay: {} user: {}", relay_name, username);
+    use tokio::sync::{Mutex, broadcast, mpsc, mpsc::unbounded_channel};
 
     // Channels for interactive auth prompts
     let (prompt_tx, mut prompt_rx) = unbounded_channel::<AuthPromptEvent>();
@@ -186,19 +406,19 @@ async fn handle_typed_socket(
                             data: format!("Authentication failed: {}", e).into_bytes(),
                             eof: true,
                             exit_status: None,
+                            session_id: None,
                         };
                         let _ = socket.send(msg).await;
-                        // Socket will close when dropped
                         return;
                     }
                 }
             }
             Some(action) = prompt_rx.recv() => {
-                // Send prompt to the web terminal as server message
                 let msg = SshServerMsg {
                     data: action.prompt.into_bytes(),
                     eof: false,
                     exit_status: None,
+                    session_id: None,
                 };
                 let _ = socket.send(msg).await;
                 pending_prompt = Some(PendingPrompt { echo: action.echo, buf: Vec::new() });
@@ -206,33 +426,22 @@ async fn handle_typed_socket(
             maybe_msg = socket.recv() => {
                 match maybe_msg {
                     Ok(client_msg) => {
-                        // Handle control messages during auth (e.g. Close)
-                        if let Some(cmd) = &client_msg.cmd {
-                            match cmd {
-                                SshControl::Close => {
-                                    tracing::info!("Client requested close during auth");
-                                    return;
-                                }
-                                SshControl::Resize { .. } => {
-                                    // No-op during auth phase
-                                }
-                            }
+                        if let Some(cmd) = &client_msg.cmd 
+                            && let SshControl::Close = cmd {
+                            return;
                         }
-
                         if let Some(mut pending) = pending_prompt.take() {
                             let data = &client_msg.data;
                             pending.buf.extend_from_slice(data);
-
-                            // Echo back if needed
                             if pending.echo && !data.is_empty() {
                                 let echo_msg = SshServerMsg {
                                     data: data.clone(),
                                     eof: false,
                                     exit_status: None,
+                                    session_id: None,
                                 };
                                 let _ = socket.send(echo_msg).await;
                             }
-
                             if let Some(pos) = pending.buf.iter().position(|b| *b == b'\n' || *b == b'\r') {
                                 let line = pending.buf[..pos].to_vec();
                                 let resp = String::from_utf8_lossy(&line).to_string();
@@ -242,6 +451,7 @@ async fn handle_typed_socket(
                                         data: b"\r\n\r\n".to_vec(),
                                         eof: false,
                                         exit_status: None,
+                                        session_id: None,
                                     };
                                     let _ = socket.send(msg).await;
                                 }
@@ -250,122 +460,97 @@ async fn handle_typed_socket(
                             }
                         }
                     }
-                    Err(_) => {
-                        tracing::warn!("WebSocket closed before relay authentication completed");
-                        return;
-                    }
+                    Err(_) => return,
                 }
             }
         }
     };
 
-    // Use bounded channels to prevent OOM if one side is faster than the other
+    // Connected! Create session channels
     let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(1024);
-    let (output_tx, mut output_rx) = mpsc::channel::<Vec<u8>>(1024);
+    let (output_tx, _) = broadcast::channel::<Vec<u8>>(1024);
+    let (close_tx, _) = broadcast::channel::<()>(1);
 
-    // Task to handle SSH channel I/O
+    // Spawn SSH loop
     let relay_name_for_ssh = relay_name.clone();
+    let close_tx_clone = close_tx.clone();
+
+    // Register session and get session number
+    let (session_number, session) = registry
+        .create_next_session(user_id, relay_id, input_tx.clone(), output_tx.clone(), close_tx)
+        .await;
+
+    tracing::info!(session_number = session_number, relay = %relay_name, "Created new session");
+
+    // Clone session for history appending
+    let session_for_history = session.clone();
+
+    // Update SSH loop to append to history
+    let output_tx_for_history = output_tx.clone();
     tokio::spawn(async move {
+        let mut close_rx = close_tx_clone.subscribe();
         loop {
             tokio::select! {
-                // Read from SSH channel
                 Some(msg) = channel.wait() => {
                     match msg {
                         ChannelMsg::Data { ref data } => {
-                            if output_tx.send(data.to_vec()).await.is_err() {
-                                break;
-                            }
+                            // Append to history
+                            session_for_history.append_to_history(data).await;
+                            if output_tx_for_history.send(data.to_vec()).is_err() { break; }
                         }
                         ChannelMsg::ExtendedData { ref data, .. } => {
-                            if output_tx.send(data.to_vec()).await.is_err() {
-                                break;
-                            }
+                            // Append to history
+                            session_for_history.append_to_history(data).await;
+                            if output_tx_for_history.send(data.to_vec()).is_err() { break; }
                         }
                         ChannelMsg::ExitStatus { exit_status } => {
-                            tracing::info!("SSH session exit status: {}", exit_status);
-                            let _ = output_tx.send(Vec::new()).await; // marker; handled below
-                            // We log and break; websocket loop will see EOF when channel closes
+                            tracing::info!("SSH exit status: {}", exit_status);
+                            session_for_history.close().await; // Mark session as closed
+                            let _ = output_tx_for_history.send(Vec::new()); // EOF marker
                             break;
                         }
                         ChannelMsg::Eof | ChannelMsg::Close => {
-                            tracing::info!("SSH session closed");
-                            // Send EOF marker to websocket loop
-                            let _ = output_tx.send(Vec::new()).await;
+                            tracing::info!("SSH closed");
+                            session_for_history.close().await; // Mark session as closed
+                            let _ = output_tx_for_history.send(Vec::new()); // EOF marker
                             break;
                         }
                         _ => {}
                     }
                 }
-                // Write input to SSH channel
                 msg = input_rx.recv() => {
                     match msg {
                         Some(data) => {
                             let mut cursor = std::io::Cursor::new(data);
-                            if channel.data(&mut cursor).await.is_err() {
-                                break;
-                            }
+                            if channel.data(&mut cursor).await.is_err() { break; }
                         }
                         None => {
-                            tracing::info!("Input channel closed (WebSocket disconnected), closing SSH channel");
+                            // Input closed (session closed)
                             let _ = channel.close().await;
                             break;
                         }
                     }
                 }
+                Ok(_) = close_rx.recv() => {
+                    // Explicit close signal
+                    let _ = channel.close().await;
+                    break;
+                }
             }
         }
-        tracing::info!("SSH channel task exiting for relay: {}", relay_name_for_ssh);
+        tracing::info!("SSH loop exiting for {}", relay_name_for_ssh);
     });
 
-    // Task to send SSH output to WebSocket
-    let _relay_name_for_sender = relay_name.clone();
+    // Send initial message with session number
+    let _ = socket
+        .send(SshServerMsg {
+            data: Vec::new(),
+            eof: false,
+            exit_status: None,
+            session_id: Some(session.session_number), // Reusing session_id field for session_number
+        })
+        .await;
 
-    loop {
-        tokio::select! {
-            // Receive from SSH output -> Send to WebSocket
-            Some(data) = output_rx.recv() => {
-                let is_eof = data.is_empty();
-                let msg = SshServerMsg {
-                    data,
-                    eof: is_eof,
-                    exit_status: None,
-                };
-                if socket.send(msg).await.is_err() {
-                    break;
-                }
-                if is_eof {
-                    break;
-                }
-            }
-            // Receive from WebSocket -> Send to SSH input
-            ws_msg = socket.recv() => {
-                match ws_msg {
-                    Ok(client_msg) => {
-                        // Handle control commands
-                        if let Some(cmd) = &client_msg.cmd {
-                            match cmd {
-                                SshControl::Close => {
-                                    tracing::info!("Client requested SSH close");
-                                    break;
-                                }
-                                SshControl::Resize { .. } => {
-                                    // TODO: implement terminal resize
-                                }
-                            }
-                        }
-
-                        if !client_msg.data.is_empty() 
-                            && input_tx.send(client_msg.data).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(_) => {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    tracing::info!("WebSocket handler exiting for relay: {}", relay_name);
+    // Hand off to reattach logic (which handles the WS loop)
+    handle_reattach(socket, session, registry).await;
 }

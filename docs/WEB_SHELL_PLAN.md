@@ -139,18 +139,27 @@ Provide persistent, user-friendly SSH terminals in the web UI that survive page 
 
 ### 🚧 PHASE 2 IN PROGRESS (Polish & Complete MVP)
 7) [ ] **NEXT PRIORITY**: Detached Session management and LocalStorage Integration for sizes/locations of sessions
-   - [ ] Need to support handling multi-session connected to the same ssh relay, user might have multiple browsers open, and they should see all their same terminals so they can all work properly
+   - [ ] Admin panel that can show all sessions and all users and their current ssh session relays, right now i think we're only registering the web-shell sessions, but eventually we should also show ssh->relay->ssh sessions as well. Maybe we should also have this with ip info for the sessions, and other connection details. 
+   - [ ] Profile page for our user should also show all their own active sessions. 
+   - [ ] Need to support handling multi-session connected to the same ssh relay
    - [ ] Support for detaching sessions reattaching our webui.
-   - [ ] Save/load window geometry per session (x, y, width, height)
-   - [ ] Save/load dock collapsed state
-   - [ ] Key format: `rb_session_geometry_{relay_name}` or by session ID
-   - [ ] Security: Only store non-sensitive UI state (no credentials)
+   - [ ] Save/load window geometry per session (x, y, width, height) on local storage to handle if we refresh the page things end up where they were, also if they were in drawer or not.
+   - [ ] Save/load dock collapsed state on local storage to handle if we refresh the page things end up where they were.
+   - [ ] Security: Only store non-sensitive UI state, like geometry, dock state, and the id from the relay session as this is only needed for refresh reattach locations, and we should have this clear itself if the sessions aren't in our session registry.
 
-8) [ ] Handle missing resize and other shell events we need to handle. (see `SshClientMsg` and `SshServerMsg` for what we need to handle and maybe additionals we need to add for best practices).
+8) [ ] **NEXT PRIORITY**: Session Sync for Registry improvements.
+   - [ ] Transition from polling /api/ssh/sessions to a websocket or sse or something push based? so that we can handle sessione events, like if 1 connection of the user opens a new relay connection, the other connections should get that relay as well joined, and maybe minimized by default, but with a toast. 
+   - [ ] do we have this as it's own ws endpoint, or should we finally spin up a server-client messaging endpoint to handle more than just ssh events, like server connection monitoring, server version change notices, and other things that we might want to handle with events from server->webui, we also would like to be able to track and see how many webui or ssh sessions a user has active at any time so that can be reported in their profile page, and in the admin session panels.
 
-9)  [ ] Thumbnail Minimizing actions add JS helper to extract xterm canvas to data URL on minimize; store in session. (this will be based on genie, but we need to plan clean it up and improve first, check with designer.)
-   
-10)  [ ] UX polish: 
+9) [ ] Handle missing resize and other shell events, like maybe adding click events so we can use TUI's remotely that accept the ssh mouse events? and others? we may want to handle. (see `SshClientMsg` and `SshServerMsg` for what we need to handle and maybe additionals we need to add for best practices).
+
+10) [ ] Thumbnail Minimizing actions add JS helper to extract xterm canvas to data URL on minimize; store in session. (this will be based on our wip_genie_effect, but needs testing and modularization to make it easier to reuse, but we need to plan clean it up and improve first, check with designer.)
+
+11) [ ] AUDITING: 
+   - [ ] Right now we're only storing the recordings for sessions to replay them on reconnect, but all ssh sessions that are relayed should be actively stored so they can be replayed and reviewed but admins and users (with proper claims). 
+   - [ ] Session connections should also record metadata for the connections, time, ip, duration, reconnect events, how the relay was initiated (ssh, web, etc), and any other metadata that we might want to record.
+
+12) [ ] FUTURE CHANGES AND IMPROVEMENTS: 
    - [ ] **Support shell window resizing** with handles at edges, saved to local storage or something temporary for the specific session window temporarily for restoring from dock etc.
    - [ ] **New Shell Offsets**: Shells with no saved preferred location thats already in use.
    - [ ] **Toast notifications**: Show toast when session cap (4) is reached
@@ -160,18 +169,16 @@ Provide persistent, user-friendly SSH terminals in the web UI that survive page 
    - [ ] **Default window geometry**: Cascade windows (offset by 30px x/y), center first window
    - [ ] **Bounds checking**: Prevent windows from being dragged off-screen
    - [ ] **Empty states**: ✅ Already done for drawers
-   
+   - [ ] **Session Counts**: Show counts as a small yellow banner at the top of the xterm window when more than 1 session is connected to the same relay by that user that says something like "x sessions connected to this relay session" or something like that.
+   - [ ] **Session Sharing**: Add the ability to share a session with a onetime link that can be used to join a session, maybe with a password, and also read/type access or watch only access, ability to revoke and disconnect the user. 
+   - [ ] **Settings for Session Restoration**: Server config and UX/UI for setting if sessions should be restored by user or by session, right now we use relay:user:# but we should allow for the server to override that and make it so its relay:user:#:sessionid so that users can either have the same sessions restored across all their browsers and computers, or if each one gets their own set based on localstorage or sessionstorage, also selectable for flexibiltiy, server config should allow this to be selected/enabled/disabled, but if multiple options are allowed, maybe each user in their profile (and edit for that user in access page) can have an override at the user level.
 
 #### 🔧 REMAINING ISSUES
 - **Bounds**: Windows can be dragged off-screen
-  - *Solution*: Clamp geometry in `set_geometry()` method (add viewport bounds checking)
-  - *Priority*: Medium
 - **LocalStorage**: Window geometry not persisted across page refreshes
-  - *Solution*: Implement `storage.rs` module with save/load functions
-  - *Priority*: High (best UX impact)
 
 ## Risks & mitigations
 - Drag/resize jank: throttle pointer events; store only on mouseup.
 
 ## Config knobs (initial)
-- `MAX_SESSIONS_CLIENT` = 4 (const, provider-level).
+- `MAX_SESSIONS_CLIENT` = 4 (const, provider-level), this should be moved to a config that can be edited at the server admin panel level that doesn't exist yet.

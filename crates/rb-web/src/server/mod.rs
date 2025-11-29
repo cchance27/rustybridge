@@ -56,6 +56,7 @@ pub async fn run_web_server(config: rb_types::config::WebServerConfig, app: fn()
         )
         .serve_dioxus_application(ServeConfig::new(), app)
         .layer(axum::Extension(pool.clone()))
+        .layer(axum::Extension(server_core::sessions::SessionRegistry::new()))
         .layer(auth_layer)
         .layer(session_layer)
         .into_make_service();

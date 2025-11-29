@@ -1,5 +1,11 @@
 use dioxus::prelude::*;
+#[cfg(feature = "web")]
+use gloo_events::EventListener;
+#[cfg(feature = "web")]
+use js_sys::Reflect;
 use serde::Serialize;
+#[cfg(feature = "web")]
+use web_sys::wasm_bindgen::{JsCast, JsValue};
 
 #[derive(Clone, Props, PartialEq, Serialize)]
 pub struct TerminalProps {
@@ -24,10 +30,20 @@ pub struct TerminalProps {
     #[props(default = None)]
     pub relay_name: Option<String>,
 
+    /// Optional backend SSH session number for reattach
+    #[serde(skip)]
+    #[props(default = None)]
+    pub session_number: Option<u32>,
+
     /// Optional callback when session closes
     #[serde(skip)]
     #[props(default)]
     pub on_close: Option<EventHandler<()>>,
+
+    /// Optional callback when window is explicitly closed by user
+    #[serde(skip)]
+    #[props(default)]
+    pub on_window_close: Option<EventHandler<()>>,
 }
 
 #[component]
@@ -39,7 +55,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
     // Component logic
     #[cfg(feature = "web")]
     {
-        use dioxus::fullstack::use_websocket;
+        use crate::app::api::ssh_websocket::SshWebSocket;
 
         //web_sys::console::log_1(&format!("Terminal component rendering. Relay prop: {:?}", props.relay_name).into());
 
@@ -90,90 +106,150 @@ pub fn Terminal(props: TerminalProps) -> Element {
             }
         });
 
-        // Create signals to track the relay name prop and a connection token
-        let mut relay_signal = use_signal(|| props.relay_name.clone());
-        let mut _connect_token = use_signal(|| 0u64);
-        #[allow(unused_mut)]
-        let mut last_connected_relay = use_signal(|| None::<String>);
-        let connected = use_signal(|| false);
+        let ws_id = id_for_ws.clone();
+        let initial_session_number = props.session_number;
 
-        // Sync prop to signal (runs every render)
-        if *relay_signal.peek() != props.relay_name {
+        #[derive(Clone)]
+        struct TerminalDrop {
+            socket: Signal<Option<std::rc::Rc<SshWebSocket>>>,
+        }
+
+        impl Drop for TerminalDrop {
+            fn drop(&mut self) {
+            }
+        }
+
+        let mut socket = use_signal(|| None::<std::rc::Rc<SshWebSocket>>);
+        let mut connected = use_signal(|| false);
+        let mut relay_signal = use_signal(|| props.relay_name.clone());
+        let mut last_connected_relay = use_signal(|| None::<String>);
+
+        // Keep relay signal in sync with props so effects react to latest value
+        if relay_signal.peek().as_ref() != props.relay_name.as_ref() {
             relay_signal.set(props.relay_name.clone());
         }
 
-        // WebSocket connection for SSH - reactive to relay_name prop changes via signal
+        // Listen for close requests initiated from session provider
+        let close_listener = use_signal(|| None::<EventListener>);
+        {
+            let socket = socket.clone();
+            let term_id = id.clone();
+            let mut close_listener = close_listener.clone();
+
+            use_effect(move || {
+                #[cfg(feature = "web")]
+                {
+                    let window = web_sys::window().expect("window available");
+                    let id = term_id.clone();
+                    let listener = EventListener::new(&window, "terminal-close-requested", move |event| {
+                        web_sys::console::log_1(&format!("Terminal: close request event received for id {}", id).into());
+                        let detail = event
+                            .dyn_ref::<web_sys::CustomEvent>()
+                            .and_then(|evt| evt.detail().dyn_into::<JsValue>().ok());
+                        if let Some(detail) = detail {
+                            if let Ok(term_id_value) = Reflect::get(&detail, &JsValue::from_str("termId")) {
+                                if term_id_value == JsValue::from_str(&id) {
+                                    web_sys::console::log_1(&format!("Terminal: close request matched for term {} - sending SshControl::Close", id).into());
+                                    spawn({
+                                        let socket = socket.clone();
+                                        async move {
+                                            if let Some(ws) = socket.read().as_ref() {
+                                                use crate::app::api::ssh_websocket::{SshClientMsg, SshControl};
+                                                let msg = SshClientMsg {
+                                                    cmd: Some(SshControl::Close),
+                                                    data: Vec::new(),
+                                                };
+                                                match ws.send(msg).await {
+                                                    Ok(_) => {
+                                                        web_sys::console::log_1(&"Terminal: explicit close command sent to server".into());
+                                                    }
+                                                    Err(err) => {
+                                                        web_sys::console::error_1(&format!("Terminal: error sending explicit close command: {}", err).into());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                    });
+                    close_listener.set(Some(listener));
+                }
+            });
+        }
+
+        // Effect to send close command when component unmounts
+        let socket_for_drop = socket.clone();
+        use_hook(move || TerminalDrop { socket: socket_for_drop });
+
+        // Effect to establish WebSocket connection when relay changes
         let ws_id = id_for_ws.clone();
+        use_effect(move || {
+            let relay = relay_signal.read().clone();
 
-        // Use the use_websocket hook
-        // We need to pass the URL. Since relay_name is dynamic, we need to handle that.
-        // Dioxus 0.7.1 use_websocket takes a closure that returns the server function call.
-        // But here we need to call it with arguments.
-        // The doc says: let mut socket = use_websocket(|| uppercase_ws("John Doe".into(), 30, WebSocketOptions::new()));
+            if relay.is_none() {
+                return;
+            }
 
-        let socket = use_websocket(move || async move { Err(ServerFnError::new("SSH relay not selected yet".to_string())) });
+            if last_connected_relay() == relay {
+                return;
+            }
 
-        // Connect or reconnect when the relay signal changes
-        use_effect({
-            let relay_signal = relay_signal.clone();
-            let mut last_connected_relay = last_connected_relay.clone();
-            let socket = socket; // Re-add mut here
-            let mut connected = connected.clone();
+            last_connected_relay.set(relay.clone());
 
-            move || {
-                let relay = relay_signal();
+            if let Some(relay_name) = relay {
+                let value = id_for_ws.clone();
+                spawn({
+                    let mut socket = socket;
+                    let mut connected = connected;
+                    let value = value.clone();
+                    async move {
+                        use std::rc::Rc;
 
-                if last_connected_relay() == relay {
-                    return;
-                }
+                        use dioxus::fullstack::WebSocketOptions;
 
-                last_connected_relay.set(relay.clone());
+                        use crate::app::api::ssh_websocket::ssh_terminal_ws;
 
-                if let Some(relay_name) = relay {
-                    spawn({
-                        let mut socket = socket; // Re-add mut here
-                        let mut connected = connected;
-                        async move {
-                            use dioxus::fullstack::WebSocketOptions;
+                        web_sys::console::log_1(&format!("Terminal: attempting to connect relay {relay_name}").into());
+                        let result = ssh_terminal_ws(relay_name, initial_session_number, WebSocketOptions::new()).await;
 
-                            use crate::app::api::ssh_websocket::ssh_terminal_ws;
+                        match &result {
+                            Ok(_) => {
+                                web_sys::console::log_1(&"Terminal: websocket handle acquired".into());
+                                connected.set(true);
 
-                            web_sys::console::log_1(&format!("Terminal: attempting to connect relay {relay_name}").into());
-                            let result = ssh_terminal_ws(relay_name, WebSocketOptions::new()).await;
-
-                            match &result {
-                                Ok(_) => {
-                                    web_sys::console::log_1(&"Terminal: websocket handle acquired".into());
-                                    connected.set(true);
-                                }
-                                Err(err) => {
-                                    web_sys::console::error_1(&format!("Terminal: websocket connect failed: {err}").into());
-                                    connected.set(false);
-                                }
+                                // Expose WebSocket to window object for close helper
+                                let term_id = value.clone();
+                                spawn(async move {
+                                    let _ = dioxus::document::eval(&format!(
+                                        r#"
+                                        if (!window.terminalSockets) window.terminalSockets = {{}};
+                                        // Store a reference that can send messages
+                                        // We'll need to hook into the actual WS send later
+                                        window.terminalSockets['{}'] = {{ termId: '{}' }};
+                                        "#,
+                                        term_id, term_id
+                                    ))
+                                    .await;
+                                });
                             }
-
-                            socket.set(result);
-                        }
-                    });
-                } else {
-                    connected.set(false);
-
-                    spawn({
-                        let socket = socket;
-                        async move {
-                            use crate::app::api::ssh_websocket::{SshClientMsg, SshControl};
-
-                            let msg = SshClientMsg {
-                                cmd: Some(SshControl::Close),
-                                data: Vec::new(),
-                            };
-
-                            if let Err(err) = socket.send(msg).await {
-                                web_sys::console::error_1(&format!("Terminal: failed to send close command: {err}").into());
+                            Err(err) => {
+                                web_sys::console::error_1(&format!("Terminal: websocket connect failed: {err}").into());
+                                connected.set(false);
                             }
                         }
-                    });
-                }
+
+                        if let Some(result) = result.ok() {
+                            web_sys::console::log_1(&"Terminal: websocket connected".into());
+                            socket.set(Some(Rc::new(result)));
+                        } else {
+                            web_sys::console::error_1(&"Terminal: websocket connect failed.".into());
+                        }
+                    }
+                });
+            } else {
+                connected.set(false);
             }
         });
 
@@ -181,20 +257,32 @@ pub fn Terminal(props: TerminalProps) -> Element {
         let on_close = props.on_close.clone();
 
         // Effect to handle incoming data from WebSocket and write to terminal
+        let value = ws_id.clone();
         use_effect(move || {
             // Only start the IO bridge once we have an active websocket connection
             if !connected_read() {
                 return;
             }
 
-            let terminal_id = ws_id.clone();
-            let socket_for_send = socket;
-            let mut socket_for_recv = socket;
+            let terminal_id = value.clone();
+            let socket_for_send = socket.clone();
+            let socket_for_recv = socket;
             let on_close = on_close.clone();
+            let _relay_name_for_storage = relay_signal.peek().clone();
 
             spawn(async move {
+                let Some(socket_tx_handle) = socket_for_send.read().as_ref().cloned() else {
+                    web_sys::console::warn_1(&"Terminal: websocket send handle missing".into());
+                    return;
+                };
+
+                let Some(socket_rx_handle) = socket_for_recv.read().as_ref().cloned() else {
+                    web_sys::console::warn_1(&"Terminal: websocket recv handle missing".into());
+                    return;
+                };
+
                 // Spawn input setup and handling in a separate task so it doesn't block receiving
-                let socket_tx = socket_for_send;
+                let socket_tx = socket_tx_handle.clone();
                 let terminal_id_input = terminal_id.clone();
 
                 spawn(async move {
@@ -257,9 +345,56 @@ pub fn Terminal(props: TerminalProps) -> Element {
                     }
                 });
 
+                // Ensure the terminal instance is created before we start processing
+                // any incoming data (especially replayed scrollback history).
+                // Otherwise, writeToTerminal would run before window.terminals[terminalId]
+                // exists and the replay would be lost.
                 loop {
-                    match socket_for_recv.recv().await {
+                    let mut ready_eval = dioxus::document::eval(&format!(
+                        r#"
+                        (function() {{
+                            if (window.terminals && window.terminals["{0}"]) {{
+                                dioxus.send(true);
+                            }} else {{
+                                dioxus.send(false);
+                            }}
+                        }})();
+                        "#,
+                        terminal_id
+                    ));
+
+                    match ready_eval.recv::<bool>().await {
+                        Ok(true) => {
+                            web_sys::console::log_1(&format!("Terminal: instance ready for {}", terminal_id).into());
+                            break;
+                        }
+                        Ok(false) => {}
+                        Err(e) => {
+                            web_sys::console::warn_1(&format!("Terminal: readiness check error for {}: {}", terminal_id, e).into());
+                        }
+                    }
+
+                    gloo_timers::future::TimeoutFuture::new(200).await;
+                }
+
+                let mut session_number_set = false;
+
+                loop {
+                    match socket_rx_handle.recv().await {
                         Ok(msg) => {
+                            // Server sends session_id in first message
+                            if let Some(session_num) = msg.session_id {
+                                web_sys::console::log_1(&format!("Terminal: connected to session #{}", session_num).into());
+
+                                if !session_number_set {
+                                    // Inform SessionContext which backend session number this window is bound to
+                                    let term_id = terminal_id.clone();
+                                    crate::app::session::provider::use_session()
+                                        .set_session_number_from_term_id(&term_id, session_num);
+                                    session_number_set = true;
+                                }
+                            }
+
                             if msg.eof {
                                 web_sys::console::log_1(&"Terminal: received EOF from SSH session".into());
 
@@ -280,16 +415,18 @@ pub fn Terminal(props: TerminalProps) -> Element {
                             }
 
                             let data = msg.data;
-                            let script = if let Ok(s) = String::from_utf8(data.clone()) {
-                                // Escape backticks and backslashes for JS template string
-                                let escaped = s.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${");
-                                format!("window.writeToTerminal(\"{}\", `{}`);", terminal_id, escaped)
-                            } else {
-                                let json_data = serde_json::to_string(&data).unwrap_or_else(|_| "[]".to_string());
-                                format!("window.writeToTerminal(\"{}\", new Uint8Array({}));", terminal_id, json_data)
-                            };
+                            if !data.is_empty() {
+                                let script = if let Ok(s) = String::from_utf8(data.clone()) {
+                                    // Escape backticks and backslashes for JS template string
+                                    let escaped = s.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${");
+                                    format!("window.writeToTerminal(\"{}\", `{}`);", terminal_id, escaped)
+                                } else {
+                                    let json_data = serde_json::to_string(&data).unwrap_or_else(|_| "[]".to_string());
+                                    format!("window.writeToTerminal(\"{}\", new Uint8Array({}));", terminal_id, json_data)
+                                };
 
-                            let _ = dioxus::document::eval(&script).await;
+                                let _ = dioxus::document::eval(&script).await;
+                            }
                         }
                         Err(e) => {
                             let msg = format!("WebSocket error: {}", e);

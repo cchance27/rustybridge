@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
-use crate::app::session::provider::use_session;
-use crate::app::components::Terminal;
+
+use crate::app::{components::Terminal, session::provider::use_session};
 
 #[component]
 pub fn SessionWindow(session_id: String) -> Element {
@@ -16,7 +16,7 @@ pub fn SessionWindow(session_id: String) -> Element {
         } else {
             s.z_index
         };
-        
+
         // Position and Size - compute style based on fullscreen state
         let container_style = if s.fullscreen {
             // When fullscreen, use fixed positioning
@@ -31,7 +31,7 @@ pub fn SessionWindow(session_id: String) -> Element {
                 s.geometry.y, s.geometry.x, s.geometry.width, s.geometry.height, z_index
             )
         };
-        
+
         let container_class = if s.minimized {
             "hidden"
         } else if s.fullscreen {
@@ -39,7 +39,7 @@ pub fn SessionWindow(session_id: String) -> Element {
         } else {
             "fixed bg-[#1e1e1e] shadow-xl rounded-lg border border-gray-700 flex flex-col overflow-hidden"
         };
-        
+
         // Clone session_id multiple times for different closures
         let session_id = s.id.clone();
         let session_id_header = s.id.clone();
@@ -65,13 +65,13 @@ pub fn SessionWindow(session_id: String) -> Element {
                     },
                     onmousedown: move |evt| {
                         session.focus(&session_id_header);
-                        
+
                         // Only start dragging if not fullscreen
                         if !s.fullscreen {
                             let coords = evt.data.client_coordinates();
                             session.start_drag(session_id_header.to_owned(), coords.x as i32, coords.y as i32);
                         }
-                        
+
                         // Also trigger focus on the terminal window itself
                         #[cfg(feature = "web")]
                         {
@@ -81,11 +81,11 @@ pub fn SessionWindow(session_id: String) -> Element {
                             });
                         }
                     },
-                    
+
                     div { class: "flex items-center gap-2",
                         span { class: "text-xs font-bold text-gray-300", "{s.title}" }
                     }
-                    
+
                     div { class: "flex gap-1",
                         button {
                             class: "btn btn-xs btn-ghost text-gray-400 hover:text-white",
@@ -97,7 +97,7 @@ pub fn SessionWindow(session_id: String) -> Element {
                             onclick: move |_| {
                                 // If toggling fullscreen, trigger fit
                                 session.toggle_fullscreen(&session_id_fullscreen);
-                                
+
                                 #[cfg(feature = "web")]
                                 {
                                     let term_id = format!("term-{}", session_id_fullscreen);
@@ -113,7 +113,9 @@ pub fn SessionWindow(session_id: String) -> Element {
                         }
                         button {
                             class: "btn btn-xs btn-ghost text-error hover:bg-red-900",
-                            onclick: move |_| session.close(&session_id_close),
+                            onclick: move |_| {
+                                session.close_with_command(&session_id_close);
+                            },
                             "X"
                         }
                     }
@@ -123,9 +125,13 @@ pub fn SessionWindow(session_id: String) -> Element {
                     Terminal {
                         id: format!("term-{}", s.id),
                         relay_name: Some(s.relay_name.clone()),
+                        session_number: s.session_number,
                         on_close: move |_| {
                             // When the SSH session ends, close the window
                             session.close(&session_id_terminal);
+                        },
+                        on_window_close: move |_| {
+                            // User clicked X - Terminal will send close command
                         },
                     }
                 }

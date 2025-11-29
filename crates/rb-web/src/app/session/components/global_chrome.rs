@@ -1,6 +1,9 @@
 use dioxus::prelude::*;
 use crate::app::session::provider::use_session;
-use crate::app::api::relay_list::list_user_relays;
+use crate::app::api::{
+    relay_list::list_user_relays,
+    ssh_websocket::{ssh_list_sessions, SessionStateSummary},
+};
 use super::session_window::SessionWindow;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -16,6 +19,36 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
     let sessions = session.sessions();
     let mut drawer_state = use_signal(|| DrawerState::Closed);
     let relays = use_resource(|| async move { list_user_relays().await.unwrap_or_default() });
+
+    // Auto-load existing SSH sessions for this user and open windows for them
+    use_resource(move || {
+        let session = session;
+        async move {
+            // Fetch relay list and session summaries
+            let relay_list = relays.read().clone().unwrap_or_default();
+            let sessions_res = ssh_list_sessions().await;
+
+            if let Ok(user_sessions) = sessions_res {
+                // Build relay_id -> relay_name map
+                use std::collections::HashMap;
+
+                let mut relay_map: HashMap<i64, String> = HashMap::new();
+                for r in relay_list {
+                    relay_map.insert(r.id, r.name);
+                }
+
+                for s in user_sessions {
+                    if let SessionStateSummary::Closed = s.state {
+                        continue;
+                    }
+
+                    if let Some(relay_name) = relay_map.get(&s.relay_id) {
+                        session.open_restored(relay_name.clone(), s.session_number);
+                    }
+                }
+            }
+        }
+    });
     
     // Setup global mouseup handler to clear drag state
     use_effect(move || {
