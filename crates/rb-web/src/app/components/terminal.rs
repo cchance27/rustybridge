@@ -44,6 +44,10 @@ pub struct TerminalProps {
     #[serde(skip)]
     #[props(default)]
     pub on_window_close: Option<EventHandler<()>>,
+
+    /// Current minimized state of the parent window
+    #[props(default = false)]
+    pub minimized: bool,
 }
 
 #[component]
@@ -55,9 +59,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
     // Component logic
     #[cfg(feature = "web")]
     {
-        use crate::app::api::ssh_websocket::SshWebSocket;
-
-        //web_sys::console::log_1(&format!("Terminal component rendering. Relay prop: {:?}", props.relay_name).into());
+        use crate::app::api::ws::ssh::SshWebSocket;
 
         let id = props.id.clone();
         let id_for_ws = props.id.clone();
@@ -113,11 +115,12 @@ pub fn Terminal(props: TerminalProps) -> Element {
             }
         });
 
-        let ws_id = id_for_ws.clone();
+        let _ws_id = id_for_ws.clone();
         let initial_session_number = props.session_number;
 
         #[derive(Clone)]
         struct TerminalDrop {
+            #[allow(dead_code)]
             socket: Signal<Option<std::rc::Rc<SshWebSocket>>>,
         }
 
@@ -125,10 +128,34 @@ pub fn Terminal(props: TerminalProps) -> Element {
             fn drop(&mut self) {}
         }
 
-        let mut socket = use_signal(|| None::<std::rc::Rc<SshWebSocket>>);
+        let socket = use_signal(|| None::<std::rc::Rc<SshWebSocket>>);
         let mut connected = use_signal(|| false);
         let mut relay_signal = use_signal(|| props.relay_name.clone());
         let mut last_connected_relay = use_signal(|| None::<String>);
+
+        // Sync minimized state with server
+        let mut prev_minimized = use_signal(|| props.minimized);
+        if *prev_minimized.read() != props.minimized {
+            let val = props.minimized;
+            *prev_minimized.write() = val;
+            
+            if connected() {
+                spawn({
+                    let socket = socket.clone();
+                    async move {
+                        if let Some(ws) = socket.read().as_ref() {
+                            use rb_types::ssh::{SshClientMsg, SshControl};
+                            web_sys::console::log_1(&format!("Terminal: sending minimize state: {}", val).into());
+                            let msg = SshClientMsg {
+                                cmd: Some(SshControl::Minimize(val)),
+                                data: Vec::new(),
+                            };
+                            let _ = ws.send(msg).await;
+                        }
+                    }
+                });
+            }
+        }
 
         // Keep relay signal in sync with props so effects react to latest value
         if relay_signal.peek().as_ref() != props.relay_name.as_ref() {
@@ -162,7 +189,8 @@ pub fn Terminal(props: TerminalProps) -> Element {
                                         let socket = socket.clone();
                                         async move {
                                             if let Some(ws) = socket.read().as_ref() {
-                                                use crate::app::api::ssh_websocket::{SshClientMsg, SshControl};
+                                                use rb_types::ssh::{SshClientMsg, SshControl};
+
                                                 let msg = SshClientMsg {
                                                     cmd: Some(SshControl::Close),
                                                     data: Vec::new(),
@@ -219,7 +247,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
 
                         use dioxus::fullstack::WebSocketOptions;
 
-                        use crate::app::api::ssh_websocket::ssh_terminal_ws;
+                        use crate::app::api::ws::ssh::ssh_terminal_ws;
 
                         web_sys::console::log_1(&format!("Terminal: attempting to connect relay {relay_name}").into());
                         let result = ssh_terminal_ws(relay_name, initial_session_number, WebSocketOptions::new()).await;
@@ -260,6 +288,29 @@ pub fn Terminal(props: TerminalProps) -> Element {
                 });
             } else {
                 connected.set(false);
+            }
+        });
+
+        // Effect to send initial minimize state when connected
+        use_effect(move || {
+            if connected() {
+                let is_minimized = props.minimized;
+                spawn({
+                    let socket = socket.clone();
+                    async move {
+                        if let Some(ws) = socket.read().as_ref() {
+                            if is_minimized {
+                                use rb_types::ssh::{SshClientMsg, SshControl};
+                                web_sys::console::log_1(&format!("Terminal: sending initial minimize state: {}", is_minimized).into());
+                                let msg = SshClientMsg {
+                                    cmd: Some(SshControl::Minimize(true)),
+                                    data: Vec::new(),
+                                };
+                                let _ = ws.send(msg).await;
+                            }
+                        }
+                    }
+                });
             }
         });
 
@@ -343,7 +394,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
                     while let Ok(json_val) = eval.recv().await {
                         // data is Array<number> (bytes)
                         if let Ok(bytes) = serde_json::from_value::<Vec<u8>>(json_val) {
-                            use crate::app::api::ssh_websocket::SshClientMsg;
+                            use rb_types::ssh::SshClientMsg;
 
                             let msg = SshClientMsg { cmd: None, data: bytes };
 

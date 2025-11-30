@@ -11,7 +11,9 @@ async fn test_session_creation_and_retrieval() {
     let (output_tx, _) = broadcast::channel(1);
     let (close_tx, _) = broadcast::channel(1);
 
-    let (session_number, session) = registry.create_next_session(1, 1, input_tx, output_tx, close_tx).await;
+    let (session_number, session) = registry
+        .create_next_session(1, 1, "test-relay".to_string(), input_tx, output_tx, close_tx)
+        .await;
 
     assert_eq!(session_number, 1);
     assert_eq!(session.session_number, 1);
@@ -32,8 +34,12 @@ async fn test_next_session_number() {
     let (output_tx2, _) = broadcast::channel(1);
     let (close_tx2, _) = broadcast::channel(1);
 
-    let (num1, _) = registry.create_next_session(1, 1, input_tx1, output_tx1, close_tx1).await;
-    let (num2, _) = registry.create_next_session(1, 1, input_tx2, output_tx2, close_tx2).await;
+    let (num1, _) = registry
+        .create_next_session(1, 1, "test-relay".to_string(), input_tx1, output_tx1, close_tx1)
+        .await;
+    let (num2, _) = registry
+        .create_next_session(1, 1, "test-relay".to_string(), input_tx2, output_tx2, close_tx2)
+        .await;
 
     assert_eq!(num1, 1);
     assert_eq!(num2, 2);
@@ -46,7 +52,9 @@ async fn test_session_cleanup() {
     let (output_tx, _) = broadcast::channel(1);
     let (close_tx, _) = broadcast::channel(1);
 
-    let (session_number, session) = registry.create_next_session(1, 1, input_tx, output_tx, close_tx).await;
+    let (session_number, session) = registry
+        .create_next_session(1, 1, "test-relay".to_string(), input_tx, output_tx, close_tx)
+        .await;
 
     // Detach with 0 timeout (should expire immediately)
     session.detach(Duration::from_secs(0)).await;
@@ -67,7 +75,9 @@ async fn test_history_buffer() {
     let (output_tx, _) = broadcast::channel(1);
     let (close_tx, _) = broadcast::channel(1);
 
-    let (_, session) = registry.create_next_session(1, 1, input_tx, output_tx, close_tx).await;
+    let (_, session) = registry
+        .create_next_session(1, 1, "test-relay".to_string(), input_tx, output_tx, close_tx)
+        .await;
 
     // Append some data
     session.append_to_history(b"hello ").await;

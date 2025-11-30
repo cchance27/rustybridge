@@ -16,22 +16,9 @@ pub fn app_root() -> Element {
     use_context_provider(|| auth);
 
     // Initialize session provider
-    let session = use_session_provider();
+    let _session = use_session_provider();
 
-    // Auto-restore sessions on mount if authenticated
-    use_effect(move || {
-        // Read auth here to subscribe to changes
-        let user_present = auth.read().user.is_some();
-
-        if user_present {
-            #[cfg(feature = "web")]
-            web_sys::console::log_1(&"Auth user present, restoring sessions...".into());
-
-            spawn(async move {
-                session.restore_sessions_from_backend().await;
-            });
-        }
-    });
+    // Auto-restore sessions is now handled by the SessionProvider WebSocket connection
 
     rsx! {
         document::Title { "RustyBridge Web UI" }

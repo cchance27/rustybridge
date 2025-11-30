@@ -1,6 +1,6 @@
 # Web Shell Implementation Status
 
-> **Last Updated**: 2025-11-28  
+> **Last Updated**: 2025-11-28
 > **Branch**: `webshell-refactor`
 
 ## Executive Summary
@@ -45,11 +45,11 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
   - `get_history()` - Replay on reattach
 
 #### WebSocket API
-**Location**: [crates/rb-web/src/app/api/ssh_websocket.rs](../crates/rb-web/src/app/api/ssh_websocket.rs)
+**Location**: [crates/rb-web/src/app/api/ws/ssh.rs](../crates/rb-web/src/app/api/ws/ssh.rs)
 
-- ✅ `GET /api/ssh/{relay_name}?session_number` - WebSocket endpoint with reattach support
+- ✅ `GET /api/ws/ssh_connection/{relay_name}?session_number` - WebSocket endpoint with reattach support
 - ✅ `GET /api/ssh/{relay_name}/status` - Authorization check endpoint
-- ✅ `GET /api/ssh/sessions` - List active sessions for current user
+- ❌ `GET /api/ssh/sessions` - List active sessions for current user (REPLACED by real-time events WebSocket)
 - ✅ Typed WebSocket messages:
   - `SshClientMsg` - Client→Server (data + control commands)
   - `SshServerMsg` - Server→Client (data + EOF + exit_status + session_id)
@@ -64,6 +64,20 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
   - Connection counting with atomic operations
   - Broadcast output to all attached clients
   - Shared input from any client
+
+#### Session Events WebSocket
+**Location**: [crates/rb-web/src/app/api/ws/session_events.rs](../crates/rb-web/src/app/api/ws/session_events.rs)
+
+- ✅ `GET /api/ws/ssh_web_events` - User-authenticated WebSocket for real-time session updates
+- ✅ `SessionEvent` enum with variants:
+  - `Created(user_id, UserSessionSummary)` - New session created
+  - `Updated(user_id, UserSessionSummary)` - Session state changed
+  - `Removed { user_id, relay_id, session_number }` - Session removed
+  - `List(Vec<UserSessionSummary>)` - Initial list of active sessions
+- ✅ `UserSessionSummary` struct:
+  - Contains: `relay_id`, `relay_name`, `session_number`, `state`, `active_connections`, `created_at`, `last_active_at`
+- ✅ Real-time updates for all session lifecycle events
+- ✅ Initial sync of existing sessions on connection
 
 #### Frontend Session Management
 **Location**: [crates/rb-web/src/app/session/](../crates/rb-web/src/app/session/)
@@ -94,6 +108,12 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
   - `start_drag()`, `update_drag()`, `end_drag()`
   - Z-index recalculation based on focus time
 - ✅ Session cap event: `rb-session-cap-reached` custom event
+- ✅ **Real-time session synchronization** via WebSocket:
+  - Automatic subscription to session events
+  - Auto-restore all active sessions on page load
+  - Auto-open new sessions as minimized windows
+  - Automatic cleanup when sessions are closed on server
+  - Stale localStorage cleanup
 
 **Components** ([components/](../crates/rb-web/src/app/session/components/)):
 - ✅ `SessionGlobalChrome` ([global_chrome.rs](../crates/rb-web/src/app/session/components/global_chrome.rs)):
@@ -120,7 +140,7 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
 - ✅ EOF handling with `eof: bool` flag
 
 #### JavaScript Bridge
-**Location**: [crates/rb-web/assets/xterm-init.js](../crates/rb-web/assets/xterm-init.js)
+**Location**: [crates/rb-web/public/xterm-init.js](../crates/rb-web/public/xterm-init.js)
 
 - ✅ `window.writeToTerminal()` - Write data from Rust to xterm
 - ✅ `window.setupTerminalInput()` - Setup input callback to Rust
@@ -128,6 +148,13 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
 - ✅ `window.fitTerminal()` - Trigger fit addon
 - ✅ ResizeObserver with visibility checks
 - ✅ Removed legacy `attachWebSocketToTerminal()` (now handled in Rust)
+
+---
+
+## TESTING NOTES FOR CHECKING BUILD SUCCESS FAILURE
+
+Check Client side code with `cargo check -p rb-web --features web --no-default-features --target wasm32-unknown-unknown`
+Check Server side code with `cargo check -p rb-web --features server`
 
 ---
 
@@ -148,7 +175,7 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
   - Clear stale entries when sessions expire
   - Key format: `rb-session-{user_id}-{relay_id}-{session_number}`
 - [x] **Auto-restore on page load**:
-  - Query `/api/ssh/sessions` on mount
+  - **CHANGED**: Real-time WebSocket events handle session restoration instead of polling /api/ssh/sessions
   - For each active session, call `open_restored(relay_name, session_number)`
   - Restore geometry from localStorage
   - Restore minimized/dock state
@@ -156,8 +183,8 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
   - Cleanup stale localStorage entries
 
 **Files to Modify**:
-- [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs) - Add localStorage helpers
-- [crates/rb-web/src/app/app_root.rs](../crates/rb-web/src/app/app_root.rs) - Add auto-restore on mount
+- [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs) - Add localStorage helpers and real-time WebSocket integration
+- [crates/rb-web/src/app/app_root.rs](../crates/rb-web/src/app/app_root.rs) - Removed polling logic (now handled by SessionProvider)
 
 ---
 
@@ -168,98 +195,183 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
 
 #### Current State
 - ✅ HTTP endpoint `/api/ssh/sessions` exists
-- ❌ Frontend polls this endpoint (inefficient)
-- ❌ No real-time updates when sessions change
+- ✅ **Real-time session events WebSocket implemented**: `/api/ws/ssh_web_events`
+- ✅ **Server-side broadcast channel**: Added to `SessionRegistry` with events for `create_next_session()`, `attach()`, `detach()`, `close()`
+- ✅ **Frontend integration**: SessionProvider subscribes to real-time events
+- ✅ **Auto-open new sessions**: New sessions automatically open as minimized windows with toast notifications
+- ✅ **Session state updates**: Real-time updates for session status and connection count
+- ✅ **Session removal handling**: Windows automatically close when sessions are removed on server
+- ✅ **Auto-restore on connect**: All active sessions are restored when WebSocket connects
 
-#### Remaining Work
-- [ ] **WebSocket/SSE endpoint** for session events: ( should we use SSE or Websockets? )
-  - `GET /api/ssh/sessions/ws` or `GET /api/ssh/sessions/events`
-  - Stream events: `SessionAdded`, `SessionUpdated`, `SessionRemoved`, use an Enum for strong types
-  - Include: `relay_id`, `session_number`, `state`, `active_connections`
-- [ ] **Server-side broadcast**:
-  - Add broadcast channel to `SessionRegistry`
-  - Emit events on `create_next_session()`, `attach()`, `detach()`, `close()`
+#### Completed Work
+- [x] **WebSocket endpoint** for session events:
+  - `GET /api/ws/ssh_web_events` - User-authenticated WebSocket for session events
+  - Stream events: `SessionCreated`, `SessionUpdated`, `SessionRemoved`, `SessionList` using `SessionEvent` enum
+  - Include: `relay_id`, `session_number`, `state`, `active_connections`, timestamps
+- [x] **Server-side broadcast**:
+  - Added broadcast channel to `SessionRegistry`
+  - Emit events on `create_next_session()`, `attach()`, `detach()`, `close()`, `remove_session()`
   - Filter events per user in WebSocket handler
-- [ ] **Frontend integration**:
-  - Subscribe to session events on mount instead of our loop
+  - Session events include comprehensive session summary data
+- [x] **Frontend integration**:
+  - Subscribe to session events on mount instead of polling
   - Auto-open minimized windows for new sessions (with toast notification)
   - Update session status/connection count in real-time
-  - Handle session removal (close windows)
-
-**Design Decision Needed**:
-- Dedicated session events WebSocket vs. general server→client messaging channel?
-- General channel could also handle:
-  - Server connection monitoring
-  - Server version change notices
-  - Other real-time notifications
+  - Handle session removal (close windows and clean up localStorage)
+  - Restore all active sessions on WebSocket connection
+  - Clean up stale localStorage entries
 
 **Files to Create/Modify**:
-- New: `crates/rb-web/src/app/api/session_events.rs` (or extend existing)
-- Modify: [crates/server-core/src/sessions.rs](../crates/server-core/src/sessions.rs) - Add event broadcast
-- Modify: [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs) - Subscribe to events
-- Dioxus SSE Docs [DIOXUS_0.7.1/STREAMS_SSE.md](../DIOXUS_0.7.1/STREAMS_SSE.md)
-- Dioxus Websocket Docs [DIOXUS_0.7.1/WEBSOCKETS.md](../DIOXUS_0.7.1/WEBSOCKETS.md)
+- Created: `crates/rb-web/src/app/api/ws/session_events.rs` - Session events WebSocket endpoint
+- Created: `crates/rb-web/src/app/api/ws/mod.rs` - WebSocket module structure
+- Modified: [crates/server-core/src/sessions.rs](../crates/server-core/src/sessions.rs) - Add event broadcast and session summary
+- Modified: [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs) - Subscribe to events and handle all session lifecycle
+- Modified: [crates/rb-web/src/app/api/ws/ssh.rs](../crates/rb-web/src/app/api/ws/ssh.rs) - Renamed from ssh_websocket.rs and updated imports
+- Modified: [crates/rb-types/src/ssh.rs](../crates/rb-types/src/ssh.rs) - Added SessionEvent enum and related types
 
 ---
 
-### Priority 2b: Window Management Polish
+### Priority 2b: Multi-Session Connection Indicators (PARTIAL - Polish Pending)
 
-### Multi-Session Connection Indicators
+> [!IMPORTANT]
+> **Goal**: Provide clear visual feedback when multiple viewers are connected to the same SSH session
 
-#### Remaining Work
-- [ ] **Connection count badge**:
-  - Show "2 viewers" or "Shared with 2 others" in session window header
-  - Update in real-time as connections change
-  - Visual indicator (icon + count)
-- [ ] **Yellow banner for multi-session**:
-  - Display at top of xterm window when `active_connections > 1`
-  - Message: "X sessions connected to this relay"
-  - Dismissible or always visible?
+#### Completed Work (Core Functionality)
+- [x] **Connection count badge**:
+  - Shows "{N} viewers" badge in session window header when `active_connections > 1`
+  - Updates in real-time via WebSocket SessionEvent::Updated events
+  - Yellow badge with white text for visibility
+- [x] **Confirm dialog on close when multi-session**:
+  - Prompts user to confirm when closing a session with `active_connections > 1`
+  - Dialog explains that closing will disconnect all viewers
+  - User can choose to: close for everyone (OK) or minimize instead (Cancel)
+- [x] **Yellow warning bar at top of terminal**:
+  - Displays when `active_connections > 1`
+  - Shows warning icon and message: "{N} sessions connected to this shell"
+  - Positioned at top of terminal content area
+- [x] **Real-time connection count tracking**:
+  - Added `active_connections` field to Session type
+  - Updated from SessionEvent::Updated events
+  - Passed through on session restoration
+- [x] **Bug fixes**:
+  - Fixed session deduplication (no more duplicate windows)
+  - Fixed race condition on session creation
+  - Fixed connection count broadcasts from server
 
-**Files to Modify**:
+#### Completed Work (Polish & UX Refinements)
+- [x] **Global session indicator in header**:
+  - Added "Active Web Sessions" indicator in top-right corner
+  - Shows count of total connected web sessions (tabs/browsers) for the user
+  - Tooltip breaks down active web sessions vs shared SSH sessions
+  - **Purpose**: Global awareness of presence across multiple devices/tabs
+
+- [x] **Window-level active viewer tracking**:
+  - Tracking minimize state per viewer (not just per session)
+  - Server tracks which connections have window minimized vs open
+  - Added `active_viewers` field (separate from `active_connections`)
+  - **Purpose**: Distinguish between "2 connections" vs "2 people actually viewing this terminal"
+
+- [x] **Refined yellow warning bar behavior**:
+  - Removed the viewer count badge from the xterm header
+  - Change logic: Show yellow bar only when `active_viewers > 1`
+  - **Purpose**: Only warn for closing when multiple people are ACTIVELY viewing the same terminal
+
+- [x] **Refined close confirmation**:
+  - Change logic: Only confirm when `active_viewers > 1`
+  - If only this window is open, close immediately (no confirmation)
+  - If others are actively viewing, confirm before closing
+  - **Purpose**: Don't annoy user with confirmation when no one else is watching
+
+- [x] **Session dock & drawer viewer indicators**:
+  - Added viewer count badge on each session chip in the dock
+  - Added viewer count badge on session list items in the side drawer
+  - Shows number of browsers with window OPEN (not just connected)
+  - **Purpose**: Quick visibility of which sessions have active viewers
+
+- [x] **Replace browser confirm with modal**:
+  - Created custom confirmation modal component inside SessionWindow
+  - Better styling and branding consistency
+  - Shows "Minimize (Just Me)" vs "Close (For Everyone)" options
+  - **Purpose**: Professional UX that matches the rest of the app
+
+**Implementation Notes**:
+- **Server changes**: 
+  - Added `active_viewers` to `SshSession`
+  - Added `web_connections` tracking to `SessionRegistry`
+  - Added `SessionEvent::Presence` for active web session tracking
+- **Frontend state**: 
+  - Added `active_viewers` to Session type
+  - Added `active_web_sessions` to SessionContext
+- **Terminal**: Added `minimized` prop and logic to send minimize state to server
+
+**Files Modified**:
+- [crates/server-core/src/sessions.rs](../crates/server-core/src/sessions.rs)
+- [crates/rb-types/src/ssh.rs](../crates/rb-types/src/ssh.rs)
+- [crates/rb-web/src/app/api/ws/ssh.rs](../crates/rb-web/src/app/api/ws/ssh.rs)
+- [crates/rb-web/src/app/api/ws/session_events.rs](../crates/rb-web/src/app/api/ws/session_events.rs)
+- [crates/rb-web/src/app/session/types.rs](../crates/rb-web/src/app/session/types.rs)
+- [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs)
 - [crates/rb-web/src/app/session/components/session_window.rs](../crates/rb-web/src/app/session/components/session_window.rs)
+- [crates/rb-web/src/app/session/components/session_dock.rs](../crates/rb-web/src/app/session/components/session_dock.rs)
+- [crates/rb-web/src/app/session/components/global_chrome.rs](../crates/rb-web/src/app/session/components/global_chrome.rs)
+- [crates/rb-web/src/app/components/navbar.rs](../crates/rb-web/src/app/components/navbar.rs)
 - [crates/rb-web/src/app/components/terminal.rs](../crates/rb-web/src/app/components/terminal.rs)
 
 ---
 
 ### Priority 3: Window Management Polish
 
-#### Remaining Work
+#### Completed Work
 - [x] **Bounds checking**: Prevent windows from being dragged off-screen
-- [ ] **Default window geometry**:
-  - Cascade windows (offset by 30px x/y)
-  - Center first window
+- [x] **Default window geometry**:
+  - Cascade windows (offset by 30px x/y per window)
+  - Base position at (100, 100) for first window
+  - Implemented `calculate_default_geometry()` in SessionContext
+
+#### Remaining Work
+- [ ] **Session numbers**
+  - Make sesion number visibile in xterm chrome along with name if we have multiple of same session connected. 
+  - Make session number visible in sidebar if theirs more than 1 of the same session (pve alone shows as pve, if we have 2 pve windows show PVE #1 PVE #2)
+- [ ] **Focus Fix**
+  - When connecting to a new session, the new terminal xterm should become focused and xterm should get cursor focus
+  - Restoring a window from minimized should be focused, and have typing focus so we can start working without clicking
 - [ ] **Window resizing**:
-  - Add resize handles at edges
+  - Add resize handles at edges and corners
   - Save resized dimensions to localStorage
   - Trigger terminal fit on resize
-- [ ] **New shell offsets**: Smart positioning for shells with no saved location
 - [ ] **Keyboard navigation**:
-  - Tab order for window focus
-  - Escape to minimize focused window
+  - Tab order for window focus so we can switch from focus betweenn windows, and maybe expanding the drawers and minimized cards to open them
+- [ ] **Window tiling**
+  - Ability to drag windows to side to snap to 1/2 screen
+  - Ability to drag windows to corner to snap to 1/4 screen
+  - Ability to drag windows to top to snap to full width half height on top
+  - Ability to drag windows to bottom to snap to full width half height on bottom
+  - Make sure we don't overlap nav bar for snapping (maximize still goes full screen but snapping should behave better)
 
-**Files to Modify**:
-- [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs)
+**Files Modified**:
+- [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs) - Added cascade positioning
 - [crates/rb-web/src/app/session/components/session_window.rs](../crates/rb-web/src/app/session/components/session_window.rs)
 
 ---
 
 ### Priority 4: User Feedback & Error Handling
+> **Reminder**: Reuse components where possible to avoid code duplication, plan ahead and check for components and how we store svg components and other items that we reuse, make components as needed.
 
 #### Remaining Work
 - [ ] **Toast notifications**:
-  - Session cap reached (currently only console warning)
+  - We should refactor toast to a proper system with its own components and sytem, where we can broadcast to maybe using dioxus context or some form of messaging?
+  - Enable our new toast system to stack toasts and maybe group with count if they are identical?, to support multiple toasts (for instance right now we have to group restored sessions into 1 toast because spawning 4 toasts overlap one another).
+  - Session cap reached 
   - Connection failures
   - Authentication errors
   - Session disconnected/reconnected
+  - ensure any other areas of rb-web that use toats are moved over to the new system
+  - any additional toast messages to bubble up things that users should be aware assess by page.
 - [ ] **Disconnection handling**:
-  - Visual indicator when WebSocket connection lost
-  - Reconnection attempts with backoff
-  - Show when server tells us a session was lost
-- [ ] **Error states**:
-  - Display connection errors in session window
-  - Retry button for failed connections
-  - Clear error messages for auth failures
+  - Reconnection attempts with backoff (dioxus 0.7.1 should support this in websocketoptions? maybe?)
+  - Visual indicator when WebSocket connection lost on ssh sessions overlay over xterm with watermark that it's disconencted and attempting to reconnect
+  - Show when server tells us a session was lost toast
+  - we should gray out the screen with a spinning reconnector as we're trying to reconnect websockets. 
 
 **Files to Modify**:
 - [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs)
@@ -274,6 +386,7 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
 
 > [!NOTE]
 > **Goal**: Provide visibility into all active sessions for admins and users
+> **Reminder**: Reuse components where possible to avoid code duplication, plan ahead and check for components and how we store svg components and other items that we reuse, make components as needed.
 
 #### Planned Features
 - [ ] **Admin panel**:
@@ -281,9 +394,9 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
   - Display: user, relay, session_number, state, connection count, duration
   - Show both web-shell sessions and SSH→relay→SSH sessions
   - Include IP info and connection metadata
-  - Ability to forcefully close sessions
+  - Ability to forcefully close sessions to brek a relay connection from admin.
 - [ ] **User profile page**:
-  - Show user's own active sessions
+  - Show user's own active sessions web, ssh, and relays so we can visually see people logged into our TUI, into our web, or that have active relays.
   - Display connection details
   - Allow user to close their own sessions remotely
 - [ ] **Session metadata tracking**:
@@ -302,6 +415,7 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
 ---
 
 ### Advanced Terminal Features
+> **Reminder**: Reuse components where possible to avoid code duplication, plan ahead and check for components and how we store svg components and other items that we reuse, make components as needed.
 
 #### Remaining Work
 - [ ] **Terminal resize support**:
@@ -317,8 +431,8 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
   - Implement best practices for SSH event handling
 
 **Files to Modify**:
-- [crates/rb-web/src/app/api/ssh_websocket.rs](../crates/rb-web/src/app/api/ssh_websocket.rs)
-- [crates/rb-web/assets/xterm-init.js](../crates/rb-web/assets/xterm-init.js)
+- [crates/rb-web/src/app/api/ws/ssh.rs](../crates/rb-web/src/app/api/ws/ssh.rs)
+- [crates/rb-web/public/xterm-init.js](../crates/rb-web/public/xterm-init.js)
 
 ---
 
@@ -357,7 +471,7 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
 ### Session Auditing & Replay
 
 > [!IMPORTANT]
-> **Goal**: Record all SSH sessions for compliance and debugging
+> **Goal**: Record all SSH sessions for compliance and debugging, should these maybe have their own database file to not bloat the relay/authdb, should each relay have its own db?
 
 #### Current State
 - ✅ History buffer stores last 64KB for reconnect
@@ -367,42 +481,20 @@ Provide persistent, user-friendly SSH terminals in the web UI with:
 #### Remaining Work
 - [ ] **Persistent session recording**:
   - Store all SSH I/O to database or file
-  - Include timestamps for each chunk
-  - Metadata: user, relay, session_number, start/end time
+  - Include timestamps for each chunk, and where it came from we need to handle if it came from relay, from ssh, from webssh, and from what ip at least on client side it could come from different webshells per chunk.
+  - active sessions stored so we don't lose them, once closed maybe we gzip or zstd compress the actual data to minimize size?
+  - Metadata: user, relay, session_number, start/end time, ip's (support many since they could be connected and sending commands from multiple webshells or possibly webshell+ssh at same time eventually (we dont support mixing webshell+ssh yet but may in future.))
 - [ ] **Replay UI**:
-  - Admin view: Replay any session
-  - User view: Replay own sessions (with proper claims)
-  - Playback controls (play, pause, seek, speed)
-  - Search/filter sessions by user, relay, date range
+  - Admin view: Replay any session (with right claims, we should probably add a replay:view,delete)
+  - User view: Replay own sessions 
 - [ ] **Retention policy**:
   - Configurable retention period
   - Automatic cleanup of old recordings
-  - Export functionality for archival
-
-**Database Schema**:
-```sql
-CREATE TABLE session_recordings (
-    id INTEGER PRIMARY KEY,
-    user_id INTEGER NOT NULL,
-    relay_id INTEGER NOT NULL,
-    session_number INTEGER NOT NULL,
-    started_at TIMESTAMP NOT NULL,
-    ended_at TIMESTAMP,
-    recording_path TEXT NOT NULL,
-    metadata JSON,
-    FOREIGN KEY (user_id) REFERENCES users(id),
-    FOREIGN KEY (relay_id) REFERENCES relay_hosts(id)
-);
-
-CREATE TABLE session_events (
-    id INTEGER PRIMARY KEY,
-    recording_id INTEGER NOT NULL,
-    timestamp TIMESTAMP NOT NULL,
-    event_type TEXT NOT NULL, -- 'data', 'resize', 'connect', 'disconnect'
-    data BLOB,
-    FOREIGN KEY (recording_id) REFERENCES session_recordings(id)
-);
-```
+  - Export functionality for archival, perhaps export from webui to asciicinema?
+- [ ] **Performance considerations**:
+  - Efficient storage format
+  - Indexing for fast search
+  - Compression options
 
 **New Files**:
 - `crates/state-core/src/session_recorder.rs` - database accessors
@@ -420,19 +512,22 @@ CREATE TABLE session_events (
 #### Remaining Work
 - [ ] **Server configuration**:
   - Add `server_options` table entries:
-    - `max_active_ssh_sessions_per_user` (default: 4)
-    - `max_active_ssh_sessions_global` (default: unlimited)
+    - `max_active_ssh_sessions_per_user` (default: 4) (web+ssh relays)
+    - `max_active_ssh_sessions_global` (default: unlimited) (web+ssh relays)
+    - `max_webssh_sessions_per_user` (default: 4)
+    - `max_webssh_sessions_global` (default: unlimited)
+    - `max_ssh_sessions_per_user` (default: 4)
+    - `max_ssh_sessions_global` (default: unlimited)
   - Admin UI to configure limits
 - [ ] **Server-side enforcement**:
-  - Check limits in `ssh_terminal_ws` before upgrade
+  - Check limits in `ssh websocket` before upgrade, check on relay establishement to handle ssh->ssh and web->ssh
   - Return clear error message when limit exceeded
   - Mirror limits to frontend for better UX
 - [ ] **User-level overrides**:
-  - Allow per-user session limits in user settings
-  - Admin can set custom limits for specific users
+  - Allow per-user session limit overrides in user settings so admins can set certain users to more or less than server defaults.
 
 **Files to Modify**:
-- [crates/rb-web/src/app/api/ssh_websocket.rs](../crates/rb-web/src/app/api/ssh_websocket.rs)
+- [crates/rb-web/src/app/api/ws/ssh.rs](../crates/rb-web/src/app/api/ws/ssh.rs)
 - Add server options management (if not exists)
 
 ---
@@ -447,17 +542,15 @@ CREATE TABLE session_events (
 - Same session accessible from any browser/device
 
 #### Planned Options
+- [ ] **Session stability improvement?**
+  - Refreshing a screen causes a full new session id on our server side right now which feels wrong? Is it possible to have same window refreshes to have same sessionid, not localstorage as thats browser wide, this isn't a requirement but something to research as it would give us some stability to our logging.
 - [ ] **Server-level config**:
-  - Mode 1: Shared sessions (current) - `relay:user:session_number`
-  - Mode 2: Per-device sessions - `relay:user:device_id:session_number`
-  - Mode 3: Hybrid - Allow users to choose
-- [ ] **User-level preference**:
-  - Profile setting: "Restore sessions across devices" (on/off)
-  - If off, use localStorage/sessionStorage for device-specific sessions
-  - If on, use server-side session registry
+  - Mode 1: Shared sessions per-user (current) - `relay:user:session_number`
+  - Mode 2: Shared sessions per-device sessions - `relay:user:device_id:session_number` (local storage id) (per-browser actually?)
+  - Mode 3: Hybrid - Allow users to choose in their profile, default to mode 1 or 2 based on admin.
 - [ ] **Device identification**:
-  - Generate stable device ID (stored in localStorage)
-  - Include in session key if per-device mode enabled
+  - Generate stable device ID (stored in localStorage) this would be per-browser really... unless we can find a way to generate a DEVICE id from like macaddress or ip or something, then we could have a mode for per-device generating the device and a per-browser version.
+  - Include in session key the mode?
 
 **Files to Modify**:
 - [crates/server-core/src/sessions.rs](../crates/server-core/src/sessions.rs)
@@ -470,11 +563,15 @@ CREATE TABLE session_events (
 
 > [!CAUTION]
 > **Security Implications**: Shared sessions require careful permission management and audit logging
+> ** We should look to reuse existing UI/UX infrastcuture where possible to keep things clean.
 
 #### Planned Features
+- [ ] **Optional Admin Controlled*
+  - As this is a critical complex feature it should be opt-in from the admin area to enable for the server, maybe even a opt-in per relay and require a specific claim for users to be able to invite others.
+  - When disabled for server / relay they don't even get the option to use it no share button, and backend will reject onetime generation for non allowed relays or server disabled, or you don't have a claim to join. 
 - [ ] **One-time share links**:
-  - Generate time-limited, single-use link to join session
-  - Optional password protection
+  - Generate time-limited, single-use link to join session, via web or via a specialy key'd user to connect via ssh?
+  - Password protection required to access the link or the ssh onetime link.
   - Access modes: Read-only (watch) vs Read-write (type)
 - [ ] **Permission management**:
   - Owner can invite/kick collaborators
@@ -484,6 +581,7 @@ CREATE TABLE session_events (
   - Session header shows: Owner, Collaborators, Invite button
   - Permission badges: "Owner", "Collaborator", "Viewer"
   - Real-time presence indicators
+  - Maybe as simple as adding a sidebar next to our xterm window that shows the user list thats shown/started via a share icon in the chrome.
 - [ ] **Conflict resolution**:
   - Last writer wins for terminal input
   - Visual indicators for concurrent typing
@@ -492,32 +590,9 @@ CREATE TABLE session_events (
   - Log all join/leave events
   - Log invitation generation
   - Rate limiting on invitations
-
-**Database Schema**:
-```sql
-CREATE TABLE session_shares (
-    id INTEGER PRIMARY KEY,
-    session_id TEXT NOT NULL, -- (user_id, relay_id, session_number)
-    share_code TEXT UNIQUE NOT NULL,
-    created_by INTEGER NOT NULL,
-    access_mode TEXT NOT NULL, -- 'read' or 'write'
-    password_hash TEXT,
-    expires_at TIMESTAMP NOT NULL,
-    max_uses INTEGER DEFAULT 1,
-    uses INTEGER DEFAULT 0,
-    FOREIGN KEY (created_by) REFERENCES users(id)
-);
-
-CREATE TABLE session_collaborators (
-    id INTEGER PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    user_id INTEGER,
-    connection_id TEXT NOT NULL,
-    access_mode TEXT NOT NULL,
-    joined_at TIMESTAMP NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-```
+- [ ] **Direct SSH Joined Sessions**
+  - joinable similar to a onetime link but via ssh to a onetime join key like visitor:special-key-here@myip:2222 and when they join they get asked their name, and the password-key for the onetime access
+  - Consider visual indicator or area of screen that we fill from server side via the relay engine to show # of users connected, ro/rw access, etc.
 
 **New Files**:
 - `crates/server-core/src/session_sharing.rs`
@@ -532,14 +607,11 @@ CREATE TABLE session_collaborators (
 1. **No persistent recording**: Sessions are only buffered in memory (64KB)
 2. **No resize support**: Terminal resize commands not implemented
 3. **No mouse events**: TUI applications with mouse support won't work
-4. **Client-side session cap**: 4-session limit not enforced server-side
-5. **No bounds checking**: Windows can be dragged off-screen
-6. **No localStorage**: Window geometry not persisted across refreshes
-7. **Polling for session list**: No real-time session updates
+4. **Client-side session cap**: 4-session limit not enforced server-side (client enforces it)
+5. **No window resizing**: Cannot resize windows with mouse, only drag to move
 
 ### Known Bugs
-- **Windows can be dragged off-screen**: Need bounds checking
-- **No toast for session cap**: Only console warning (event exists but no UI)
+- None currently reported for Phase 2 features
 
 ---
 
@@ -561,20 +633,20 @@ sequenceDiagram
     WS->>SSH: Spawn SSH connection loop
     SSH->>Registry: Append to history
     WS->>Client: Send session_number
-    
+
     Note over Client,SSH: Reattachment
     Client->>WS: Connect to /api/ssh/{relay}?session_number=X
     WS->>Registry: get_session(user_id, relay_id, X)
     Registry-->>WS: Existing session
     WS->>Client: Replay history
     WS->>Client: Subscribe to output
-    
+
     Note over Client,SSH: Explicit Close
     Client->>WS: SshControl::Close
     WS->>SSH: Close signal
     SSH->>Registry: Mark as Closed
     WS->>Registry: remove_session() (if last client)
-    
+
     Note over Client,SSH: Unexpected Disconnect
     Client--xWS: Connection lost
     WS->>Registry: Decrement connections
@@ -593,12 +665,12 @@ graph TD
     B --> C[Client 1 WebSocket]
     B --> D[Client 2 WebSocket]
     B --> E[Client N WebSocket]
-    
+
     C -->|input| F[input_tx]
     D -->|input| F
     E -->|input| F
     F --> A
-    
+
     A -->|append| G[History Buffer 64KB]
     G -->|replay on attach| C
     G -->|replay on attach| D
@@ -627,9 +699,9 @@ stateDiagram-v2
 |----------|-------|----------|-------|
 | `MAX_SESSIONS` | 4 | [provider.rs:6](../crates/rb-web/src/app/session/provider.rs#L6) | Client-side cap |
 | History buffer size | 64KB | [sessions.rs:52](../crates/server-core/src/sessions.rs#L52) | Per-session scrollback |
-| Detach timeout | 120s | [ssh_websocket.rs:356](../crates/rb-web/src/app/api/ssh_websocket.rs#L356) | Unexpected disconnect |
-| Broadcast channel capacity | 1024 | [ssh_websocket.rs:472](../crates/rb-web/src/app/api/ssh_websocket.rs#L472) | Output messages |
-| Input channel capacity | 1024 | [ssh_websocket.rs:471](../crates/rb-web/src/app/api/ssh_websocket.rs#L471) | Input messages |
+| Detach timeout | 120s | [ssh.rs:356](../crates/rb-web/src/app/api/ws/ssh.rs#L356) | Unexpected disconnect |
+| Broadcast channel capacity | 1024 | [ssh.rs:472](../crates/rb-web/src/app/api/ws/ssh.rs#L472) | Output messages |
+| Input channel capacity | 1024 | [ssh.rs:471](../crates/rb-web/src/app/api/ws/ssh.rs#L471) | Input messages |
 
 ### Future Configuration (Planned)
 
@@ -683,18 +755,19 @@ These should be moved to server admin panel:
 
 ### Key Files
 - [crates/server-core/src/sessions.rs](../crates/server-core/src/sessions.rs) - Session registry
-- [crates/rb-web/src/app/api/ssh_websocket.rs](../crates/rb-web/src/app/api/ssh_websocket.rs) - WebSocket API
+- [crates/rb-web/src/app/api/ws/ssh.rs](../crates/rb-web/src/app/api/ws/ssh.rs) - SSH WebSocket API
+- [crates/rb-web/src/app/api/ws/session_events.rs](../crates/rb-web/src/app/api/ws/session_events.rs) - Session events WebSocket
 - [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs) - Frontend session management
 - [crates/rb-web/src/app/components/terminal.rs](../crates/rb-web/src/app/components/terminal.rs) - Terminal component
-- [crates/rb-web/assets/xterm-init.js](../crates/rb-web/assets/xterm-init.js) - Terminal JavaScript bridge
+- [crates/rb-web/public/xterm-init.js](../crates/rb-web/public/xterm-init.js) - Terminal JavaScript bridge
 
 ---
 
 ## Next Steps
 
 ### Immediate Priorities (Phase 2 Completion)
-1. **LocalStorage integration** - Persist window geometry and restore sessions on page load
-2. **Real-time session sync** - Replace polling with WebSocket/SSE for session events
+1. **LocalStorage integration** - Persist window geometry and restore sessions on page load (COMPLETED)
+2. **Real-time session sync** - Replace polling with WebSocket/SSE for session events (COMPLETED)
 3. **Window management polish** - Bounds checking, default positioning, resize support
 4. **User feedback** - Toast notifications and error handling
 

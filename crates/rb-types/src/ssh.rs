@@ -164,3 +164,61 @@ pub struct SshKey {
     pub comment: Option<String>,
     pub created_at: i64,
 }
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub enum SessionStateSummary {
+    Attached,
+    Detached,
+    Closed,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct UserSessionSummary {
+    pub relay_id: i64,
+    pub relay_name: String,
+    pub session_number: u32,
+    pub state: SessionStateSummary,
+    pub active_connections: u32,
+    pub active_viewers: u32,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub last_active_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub enum SshControl {
+    Close,
+    Resize { cols: u32, rows: u32 },
+    Minimize(bool),
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct SshClientMsg {
+    pub cmd: Option<SshControl>,
+    pub data: Vec<u8>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct SshServerMsg {
+    pub data: Vec<u8>,
+    pub eof: bool,
+    pub exit_status: Option<i32>,
+    pub session_id: Option<u32>, // Session number for this connection
+    pub relay_id: Option<i64>,   // Relay ID for this connection
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct WebSessionMeta {
+    pub id: String, // Unique ID for the connection
+    pub ip: String,
+    pub user_agent: Option<String>,
+    pub connected_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub enum SessionEvent {
+    Created(i64, UserSessionSummary),
+    Updated(i64, UserSessionSummary),
+    Removed { user_id: i64, relay_id: i64, session_number: u32 },
+    List(Vec<UserSessionSummary>),
+    Presence(i64, Vec<WebSessionMeta>),
+}

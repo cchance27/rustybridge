@@ -9,5 +9,5 @@ pub mod relay_list;
 pub mod relays;
 pub mod roles;
 pub mod ssh_keys;
-pub mod ssh_websocket;
 pub mod users;
+pub mod ws;

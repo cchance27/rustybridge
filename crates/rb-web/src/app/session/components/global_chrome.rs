@@ -176,9 +176,10 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                                     let id = s.id.clone();
                                     let title = s.title.clone();
                                     let minimized = s.minimized;
+                                    let active_viewers = s.active_viewers;
                                     rsx! {
                                         button {
-                                            class: format!("btn btn-ghost w-full justify-start text-left {}", if minimized { "" } else { "btn-active" }),
+                                            class: format!("btn btn-ghost w-full justify-start text-left relative {}", if minimized { "" } else { "btn-active" }),
                                             onclick: move |_| {
                                                 if minimized {
                                                     session.restore(&id);
@@ -197,6 +198,12 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                                                 }
                                             },
                                             span { class: "font-semibold", "{title}" }
+                                            if active_viewers > 1 {
+                                                span {
+                                                    class: "absolute right-2 top-1/2 transform -translate-y-1/2 badge badge-warning badge-xs",
+                                                    "{active_viewers}"
+                                                }
+                                            }
                                         }
                                     }
                                 }

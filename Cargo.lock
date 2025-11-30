@@ -4348,6 +4348,7 @@ dependencies = [
 name = "rb-types"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "clap",
  "openidconnect",
  "secrecy",

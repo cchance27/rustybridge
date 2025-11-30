@@ -5,13 +5,14 @@ use dioxus::{
 };
 #[cfg(feature = "server")]
 use rb_types::auth::AuthPromptEvent;
+use rb_types::ssh::{SshClientMsg, SshServerMsg};
 #[cfg(feature = "server")]
 use russh::ChannelMsg;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "server")]
 use server_core::relay::connect_to_relay_channel;
 #[cfg(feature = "server")]
-use server_core::sessions::{SessionRegistry, SessionState, SshSession};
+use server_core::sessions::{SessionRegistry, SshSession};
 #[cfg(feature = "server")]
 use state_store::{fetch_relay_host_by_name, user_has_relay_access};
 
@@ -41,45 +42,6 @@ impl From<SshAccessError> for ServerFnError {
 struct SshStatusResponse {
     ok: bool,
     message: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum SessionStateSummary {
-    Attached,
-    Detached,
-    Closed,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct UserSessionSummary {
-    pub relay_id: i64,
-    pub relay_name: String,
-    pub session_number: u32,
-    pub state: SessionStateSummary,
-    pub active_connections: u32,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub last_active_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum SshControl {
-    Close,
-    Resize { cols: u32, rows: u32 },
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SshClientMsg {
-    pub cmd: Option<SshControl>,
-    pub data: Vec<u8>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SshServerMsg {
-    pub data: Vec<u8>,
-    pub eof: bool,
-    pub exit_status: Option<i32>,
-    pub session_id: Option<u32>, // Session number for this connection
-    pub relay_id: Option<i64>,   // Relay ID for this connection
 }
 
 #[cfg(feature = "server")]
@@ -120,7 +82,7 @@ async fn ensure_relay_websocket_permissions(
 pub type SshWebSocket = Websocket<SshClientMsg, SshServerMsg, JsonEncoding>;
 
 #[get(
-    "/api/ssh/{relay_name}?session_number",
+    "/api/ws/ssh_connection/{relay_name}?session_number",
     auth: WebAuthSession,
     pool: axum::Extension<sqlx::SqlitePool>,
     registry: axum::Extension<SessionRegistry>
@@ -188,64 +150,6 @@ pub async fn ssh_terminal_status(relay_name: String) -> Result<SshStatusResponse
     })
 }
 
-#[get(
-    "/api/ssh/sessions",
-    auth: WebAuthSession,
-    registry: axum::Extension<SessionRegistry>,
-    pool: axum::Extension<sqlx::SqlitePool>
-)]
-pub async fn ssh_list_sessions() -> Result<Vec<UserSessionSummary>, ServerFnError> {
-    let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    let sessions = registry.0.list_sessions_for_user(user.id).await;
-
-    let mut summaries = Vec::with_capacity(sessions.len());
-
-    // Collect unique relay IDs for batch lookup
-    let relay_ids: Vec<i64> = sessions.iter().map(|s| s.relay_id).collect();
-
-    // Batch fetch relay names to avoid N+1 queries
-    let mut relay_names = std::collections::HashMap::new();
-    for relay_id in relay_ids {
-        if !relay_names.contains_key(&relay_id) 
-            && let Ok(Some(relay)) = state_store::fetch_relay_host_by_id(&pool.0, relay_id).await {
-                relay_names.insert(relay_id, relay.name);
-            
-        }
-    }
-
-    for session in sessions {
-        let state = session.state.read().await.clone();
-        let state_summary = match state {
-            SessionState::Attached => SessionStateSummary::Attached,
-            SessionState::Detached { .. } => SessionStateSummary::Detached,
-            SessionState::Closed => SessionStateSummary::Closed,
-        };
-
-        let created_at = session.created_at;
-        let last_active_at = *session.last_active_at.read().await;
-        let active_connections = session.connection_count();
-
-        // Get relay name from our batch lookup, fallback to "Unknown" if not found
-        let relay_name = relay_names
-            .get(&session.relay_id)
-            .cloned()
-            .unwrap_or_else(|| format!("relay-{}", session.relay_id));
-
-        summaries.push(UserSessionSummary {
-            relay_id: session.relay_id,
-            relay_name,
-            session_number: session.session_number,
-            state: state_summary,
-            active_connections,
-            created_at,
-            last_active_at,
-        });
-    }
-
-    Ok(summaries)
-}
-
 #[cfg(feature = "server")]
 async fn handle_reattach(
     mut socket: TypedWebsocket<SshClientMsg, SshServerMsg, JsonEncoding>,
@@ -275,7 +179,12 @@ async fn handle_reattach(
     let mut close_rx = session.close_tx.subscribe();
 
     // Increment connection count
-    let conn_count = session.increment_connections();
+    let conn_count = session.increment_connections().await;
+    // Assume new connections start as active viewers (not minimized)
+    session.increment_viewers().await;
+    // Track minimize state for this connection
+    let mut is_minimized = false;
+
     tracing::info!(
         session_number = session.session_number,
         connections = conn_count,
@@ -296,6 +205,8 @@ async fn handle_reattach(
     let mut explicit_close = false;
 
     loop {
+        use rb_types::ssh::SshControl;
+
         tokio::select! {
             Ok(data) = output_rx.recv() => {
                 let is_eof = data.is_empty();
@@ -329,6 +240,16 @@ async fn handle_reattach(
                                 SshControl::Resize { .. } => {
                                     // TODO: implement resize
                                 }
+                                SshControl::Minimize(minimized) => {
+                                    if *minimized != is_minimized {
+                                        is_minimized = *minimized;
+                                        if is_minimized {
+                                            session.decrement_viewers().await;
+                                        } else {
+                                            session.increment_viewers().await;
+                                        }
+                                    }
+                                }
                             }
                         }
                         if !client_msg.data.is_empty() {
@@ -347,7 +268,11 @@ async fn handle_reattach(
     }
 
     // Decrement connection count
-    let remaining = session.decrement_connections();
+    let remaining = session.decrement_connections().await;
+    if !is_minimized {
+        session.decrement_viewers().await;
+    }
+
     tracing::info!(
         session_number = session.session_number,
         remaining_connections = remaining,
@@ -421,6 +346,8 @@ async fn handle_new_session(
     }
     let mut pending_prompt: Option<PendingPrompt> = None;
     let mut channel = loop {
+        use rb_types::ssh::SshControl;
+
         tokio::select! {
             res = &mut connect_fut => {
                 match res {
@@ -509,7 +436,7 @@ async fn handle_new_session(
 
     // Register session and get session number
     let (session_number, session) = registry
-        .create_next_session(user_id, relay_id, input_tx.clone(), output_tx.clone(), close_tx)
+        .create_next_session(user_id, relay_id, relay_name.clone(), input_tx.clone(), output_tx.clone(), close_tx)
         .await;
 
     tracing::info!(session_number = session_number, relay = %relay_name, "Created new session");
@@ -570,7 +497,7 @@ async fn handle_new_session(
                 }
             }
         }
-        tracing::info!("SSH loop exiting for {}", relay_name_for_ssh);
+        tracing::info!(relay = %relay_name_for_ssh, "ssh output history loop terminated");
     });
 
     // Send initial message with session number
