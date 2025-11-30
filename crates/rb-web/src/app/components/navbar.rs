@@ -13,11 +13,9 @@ pub fn NavBar() -> Element {
     let active_web_sessions = session.active_web_sessions.read();
     let current_client_id = session.current_client_id.read();
     let time_fmt = "%H:%M:%S %Y-%m-%d";
-    
+
     // Count sessions with multiple viewers (for tooltip context)
-    let shared_ssh_count = session.sessions().read().iter()
-        .filter(|s| s.active_viewers > 1)
-        .count();
+    let shared_ssh_count = session.sessions().read().iter().filter(|s| s.active_viewers > 1).count();
 
     rsx! {
         div { class: "navbar bg-base-200 shadow-sm",
@@ -63,7 +61,7 @@ pub fn NavBar() -> Element {
                         }
                         div {
                             tabindex: "0",
-                            class: "dropdown-content z-[1] card card-compact w-80 p-2 shadow bg-base-300 text-base-content",
+                            class: "dropdown-content z-[202] card card-compact w-80 p-2 shadow bg-base-300 text-base-content",
                             div { class: "card-body",
                                 h3 { class: "card-title text-sm", "Active Web Sessions" }
                                 ul { class: "space-y-2 overflow-x-scroll max-h-[300px]",
@@ -76,8 +74,8 @@ pub fn NavBar() -> Element {
                                                 }
                                             }
                                             div { class: "text-gray-500 truncate", "{ws.user_agent.as_deref().unwrap_or(\"Unknown\")}" }
-                                            div { class: "text-gray-500", 
-                                                "Connected: {ws.connected_at.format(time_fmt)}" 
+                                            div { class: "text-gray-500",
+                                                "Connected: {ws.connected_at.format(time_fmt)}"
                                             }
                                         }
                                     }
@@ -102,7 +100,7 @@ pub fn NavBar() -> Element {
                         "{shared_ssh_count} Shared"
                     }
                 }
-                
+
                 ThemeToggle {}
                 if logged_in {
                     AvatarDropDown {}

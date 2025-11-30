@@ -1,6 +1,8 @@
 use dioxus::prelude::*;
 
-use crate::app::{components::Terminal, session::provider::use_session};
+use crate::app::{
+    components::Terminal, session::provider::{ResizeDirection, use_session}
+};
 
 #[component]
 pub fn SessionWindow(session_id: String) -> Element {
@@ -49,7 +51,7 @@ pub fn SessionWindow(session_id: String) -> Element {
         let session_id_fullscreen = s.id.clone();
         let session_id_close = s.id.clone();
         let session_id_terminal = s.id.clone();
-        
+
         // Confirmation modal state
         let mut show_close_confirm = use_signal(|| false);
         let minimize_session_id = s.id.clone();
@@ -62,32 +64,32 @@ pub fn SessionWindow(session_id: String) -> Element {
                     class: "modal modal-open z-[100]",
                     div { class: "modal-box bg-[#1e1e1e] border border-gray-700 text-gray-200",
                         h3 { class: "font-bold text-lg text-warning", "Close Shared Session?" }
-                        p { class: "py-4", 
+                        p { class: "py-4",
                             "This session has "
                             span { class: "font-bold text-white", "{s.active_viewers}" }
-                            " active viewers. Closing it will disconnect everyone." 
+                            " active viewers. Closing it will disconnect everyone."
                         }
                         div { class: "modal-action flex-wrap",
-                            button { 
-                                class: "btn btn-sm btn-ghost", 
-                                onclick: move |_| show_close_confirm.set(false), 
-                                "Cancel" 
+                            button {
+                                class: "btn btn-sm btn-ghost",
+                                onclick: move |_| show_close_confirm.set(false),
+                                "Cancel"
                             }
-                            button { 
-                                class: "btn btn-sm btn-primary", 
+                            button {
+                                class: "btn btn-sm btn-primary",
                                 onclick: move |_| {
                                     show_close_confirm.set(false);
                                     session.minimize(&minimize_session_id);
-                                }, 
-                                "Minimize (Just Me)" 
+                                },
+                                "Minimize (Just Me)"
                             }
-                            button { 
-                                class: "btn btn-sm btn-error", 
+                            button {
+                                class: "btn btn-sm btn-error",
                                 onclick: move |_| {
                                     show_close_confirm.set(false);
                                     session.close_with_command(&close_session_id);
-                                }, 
-                                "Close (For Everyone)" 
+                                },
+                                "Close (For Everyone)"
                             }
                         }
                     }
@@ -99,10 +101,126 @@ pub fn SessionWindow(session_id: String) -> Element {
             div {
                 class: "{container_class}",
                 style: "{container_style}",
-                // Focus the window when clicking anywhere in it
-                onmousedown: move |_| {
-                    session.focus(&session_id);
+                tabindex: "0",
+                // Focus the window when clicking anywhere in it or tabbing to it
+                onfocus: {
+                    let session_id = session_id.clone();
+                    move |_| {
+                        session.focus(&session_id);
+                        // Also focus the terminal for immediate typing
+                        #[cfg(feature = "web")]
+                        {
+                            let term_id = format!("term-{}", session_id);
+                            spawn(async move {
+                                let _ = dioxus::document::eval(&format!("if (window.focusTerminal) window.focusTerminal('{}')", term_id)).await;
+                            });
+                        }
+                    }
                 },
+                onmousedown: {
+                    let session_id = session_id.clone();
+                    move |_| {
+                        session.focus(&session_id);
+                        // Also focus the terminal for immediate typing
+                        #[cfg(feature = "web")]
+                        {
+                            let term_id = format!("term-{}", session_id);
+                            spawn(async move {
+                                let _ = dioxus::document::eval(&format!("if (window.focusTerminal) window.focusTerminal('{}')", term_id)).await;
+                            });
+                        }
+                    }
+                },
+
+                // Resize Handles
+                if !s.fullscreen && !s.minimized {
+                    {
+                        let id_top = s.id.clone();
+                        let id_bottom = s.id.clone();
+                        let id_left = s.id.clone();
+                        let id_right = s.id.clone();
+                        let id_tl = s.id.clone();
+                        let id_tr = s.id.clone();
+                        let id_bl = s.id.clone();
+                        let id_br = s.id.clone();
+
+                        rsx! {
+                            // Top
+                            div {
+                                class: "absolute top-0 left-2 right-2 h-1 cursor-ns-resize z-10",
+                                onmousedown: move |evt| {
+                                    evt.stop_propagation();
+                                    let coords = evt.data.client_coordinates();
+                                    session.start_resize(id_top.clone(), coords.x as i32, coords.y as i32, ResizeDirection::Top);
+                                }
+                            }
+                            // Bottom
+                            div {
+                                class: "absolute bottom-0 left-2 right-2 h-1 cursor-ns-resize z-10",
+                                onmousedown: move |evt| {
+                                    evt.stop_propagation();
+                                    let coords = evt.data.client_coordinates();
+                                    session.start_resize(id_bottom.clone(), coords.x as i32, coords.y as i32, ResizeDirection::Bottom);
+                                }
+                            }
+                            // Left
+                            div {
+                                class: "absolute top-2 bottom-2 left-0 w-1 cursor-ew-resize z-10",
+                                onmousedown: move |evt| {
+                                    evt.stop_propagation();
+                                    let coords = evt.data.client_coordinates();
+                                    session.start_resize(id_left.clone(), coords.x as i32, coords.y as i32, ResizeDirection::Left);
+                                }
+                            }
+                            // Right
+                            div {
+                                class: "absolute top-2 bottom-2 right-0 w-1 cursor-ew-resize z-10",
+                                onmousedown: move |evt| {
+                                    evt.stop_propagation();
+                                    let coords = evt.data.client_coordinates();
+                                    session.start_resize(id_right.clone(), coords.x as i32, coords.y as i32, ResizeDirection::Right);
+                                }
+                            }
+                            // Top-Left
+                            div {
+                                class: "absolute top-0 left-0 w-3 h-3 cursor-nwse-resize z-20",
+                                onmousedown: move |evt| {
+                                    evt.stop_propagation();
+                                    let coords = evt.data.client_coordinates();
+                                    session.start_resize(id_tl.clone(), coords.x as i32, coords.y as i32, ResizeDirection::TopLeft);
+                                }
+                            }
+                            // Top-Right
+                            div {
+                                class: "absolute top-0 right-0 w-3 h-3 cursor-nesw-resize z-20",
+                                onmousedown: move |evt| {
+                                    evt.stop_propagation();
+                                    let coords = evt.data.client_coordinates();
+                                    session.start_resize(id_tr.clone(), coords.x as i32, coords.y as i32, ResizeDirection::TopRight);
+                                }
+                            }
+                            // Bottom-Left
+                            div {
+                                class: "absolute bottom-0 left-0 w-3 h-3 cursor-nesw-resize z-20",
+                                onmousedown: move |evt| {
+                                    evt.stop_propagation();
+                                    let coords = evt.data.client_coordinates();
+                                    session.start_resize(id_bl.clone(), coords.x as i32, coords.y as i32, ResizeDirection::BottomLeft);
+                                }
+                            }
+                            // Bottom-Right
+                            div {
+                                class: "absolute bottom-0 right-0 w-3 h-3 cursor-nwse-resize z-20",
+                                onmousedown: move |evt| {
+                                    evt.stop_propagation();
+                                    let coords = evt.data.client_coordinates();
+                                    session.start_resize(id_br.clone(), coords.x as i32, coords.y as i32, ResizeDirection::BottomRight);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Header
                 div {
                     class: if s.fullscreen {
@@ -130,7 +248,27 @@ pub fn SessionWindow(session_id: String) -> Element {
                     },
 
                     div { class: "flex items-center gap-2",
-                        span { class: "text-xs font-bold text-gray-300", "{s.title}" }
+                        {
+                            let sessions_read = sessions.read();
+                            let relay_name = s.relay_name.clone();
+                            let same_relay_count = sessions_read.iter().filter(|sess| sess.relay_name == relay_name).count();
+
+                            let title = if same_relay_count > 1 {
+                                // Find our index among sessions with same relay name
+                                let index = sessions_read.iter()
+                                    .filter(|sess| sess.relay_name == relay_name)
+                                    .position(|sess| sess.id == s.id)
+                                    .map(|i| i + 1)
+                                    .unwrap_or(1);
+                                format!("{} #{}", s.title, index)
+                            } else {
+                                s.title.clone()
+                            };
+
+                            rsx! {
+                                span { class: "text-xs font-bold text-gray-300", "{title}" }
+                            }
+                        }
                     }
 
                     div { class: "flex gap-1",

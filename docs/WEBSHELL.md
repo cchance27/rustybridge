@@ -1,6 +1,6 @@
 # Web Shell Implementation Status
 
-> **Last Updated**: 2025-11-28
+> **Last Updated**: 2025-11-30
 > **Branch**: `webshell-refactor`
 
 ## Executive Summary
@@ -319,7 +319,9 @@ Check Server side code with `cargo check -p rb-web --features server`
 
 ---
 
-### Priority 3: Window Management Polish
+### ✅ Priority 3: Window Management Polish (COMPLETE)
+
+> **Goal**: Enhance window management with resizing, keyboard navigation, and tiling capabilities
 
 #### Completed Work
 - [x] **Bounds checking**: Prevent windows from being dragged off-screen
@@ -327,30 +329,82 @@ Check Server side code with `cargo check -p rb-web --features server`
   - Cascade windows (offset by 30px x/y per window)
   - Base position at (100, 100) for first window
   - Implemented `calculate_default_geometry()` in SessionContext
+- [x] **Session numbers**:
+  - Session numbers visible in xterm chrome when multiple sessions of same relay are connected
+  - Session numbers visible in sidebar (e.g., "pve #1", "pve #2") when multiple sessions exist
+  - Implemented in `SessionWindow` and `SessionGlobalChrome` components
+- [x] **Focus Fix**:
+  - New terminal windows automatically gain cursor focus after 300ms delay
+  - Restored windows from minimized state automatically gain focus
+  - Implemented via `window.focusTerminal()` JavaScript bridge
+- [x] **Window resizing**:
+  - Resize handles at all 8 positions (4 edges + 4 corners)
+  - Minimum window size enforced (200x150px)
+  - Resized dimensions saved to localStorage
+  - Terminal fit triggered automatically on resize
+  - Implemented `ResizeState` and `ResizeDirection` in SessionContext
+- [x] **Keyboard navigation**:
+  - Tab order for window focus (`tabindex="0"` on SessionWindow)
+  - Focus handler updates z-index to bring window to front
+  - Keyboard-accessible window management
+- [x] **Window tiling**:
+  - Snap to left/right half (drag to left/right edge)
+  - Snap to corners for 1/4 screen (drag to corners)
+  - Snap to top/bottom half (drag to top/bottom edge)
+  - Visual snap preview with blue outline
+  - Configurable snap behavior (snap below navbar vs screen edge)
+  - Snap preview respects navbar height setting
+  - Implemented in `update_drag()` and `end_drag()` methods
 
-#### Remaining Work
-- [ ] **Session numbers**
-  - Make sesion number visibile in xterm chrome along with name if we have multiple of same session connected. 
-  - Make session number visible in sidebar if theirs more than 1 of the same session (pve alone shows as pve, if we have 2 pve windows show PVE #1 PVE #2)
-- [ ] **Focus Fix**
-  - When connecting to a new session, the new terminal xterm should become focused and xterm should get cursor focus
-  - Restoring a window from minimized should be focused, and have typing focus so we can start working without clicking
-- [ ] **Window resizing**:
-  - Add resize handles at edges and corners
-  - Save resized dimensions to localStorage
-  - Trigger terminal fit on resize
-- [ ] **Keyboard navigation**:
-  - Tab order for window focus so we can switch from focus betweenn windows, and maybe expanding the drawers and minimized cards to open them
-- [ ] **Window tiling**
-  - Ability to drag windows to side to snap to 1/2 screen
-  - Ability to drag windows to corner to snap to 1/4 screen
-  - Ability to drag windows to top to snap to full width half height on top
-  - Ability to drag windows to bottom to snap to full width half height on bottom
-  - Make sure we don't overlap nav bar for snapping (maximize still goes full screen but snapping should behave better)
+**Implementation Details**:
+- **Resize State**: Added `resize_state: Signal<Option<ResizeState>>` to SessionContext
+- **Snap Preview**: Added `snap_preview: Signal<Option<WindowGeometry>>` to SessionContext
+- **Snap Settings**: Added `snap_to_navbar: Signal<bool>` with localStorage persistence
+- **Resize Handles**: 8 resize handles rendered in SessionWindow component
+- **Global Mouse Handlers**: Updated in SessionGlobalChrome for drag/resize/snap
+- **Geometry Validation**: `validate_geometry_on_screen()` ensures windows stay within bounds
+- **Focus Management**: `focus()` method updates z-index and calls `recalculate_z_indexes()`
 
 **Files Modified**:
-- [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs) - Added cascade positioning
-- [crates/rb-web/src/app/session/components/session_window.rs](../crates/rb-web/src/app/session/components/session_window.rs)
+- [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs) - Resize/snap state and logic
+- [crates/rb-web/src/app/session/components/session_window.rs](../crates/rb-web/src/app/session/components/session_window.rs) - Resize handles, focus, session numbers
+- [crates/rb-web/src/app/session/components/global_chrome.rs](../crates/rb-web/src/app/session/components/global_chrome.rs) - Global handlers, snap preview, session numbers
+
+---
+
+### ✅ Bug Fixes and Polish (COMPLETE)
+
+#### Completed Work
+- [x] **Window Restoration Bug**:
+  - Fixed race condition where `user_id` was `None` during session restoration
+  - Modified `open_restored()` to accept `user_id` as parameter
+  - Implemented deferred restoration with auth polling (100ms intervals, 5s timeout)
+  - Windows now consistently restore to saved positions from localStorage
+- [x] **Z-Index Issues**:
+  - Increased drawer z-index from 54/55 to 200/201
+  - Increased active users dropdown z-index from 1 to 202
+  - Drawers and dropdowns now properly layer above terminal windows
+- [x] **Unused Variable Warnings**:
+  - Added `#[cfg(feature = "web")]` to `new_session_id` variables
+  - Suppressed false-positive warnings for web-only code
+- [x] **Broadcast Warnings**:
+  - Added `receiver_count()` check before logging broadcast errors
+  - Eliminated spurious warnings when no WebSocket subscribers exist
+  - Applied to `increment_connections()`, `decrement_connections()`, `increment_viewers()`, `decrement_viewers()`
+- [x] **Snap Behavior Settings**:
+  - Added "Web Settings" section to Profile page
+  - Implemented DaisyUI toggle for snap behavior preference
+  - Setting stored in localStorage as `rb-snap-to-navbar` (default: true)
+  - Dynamic description shows current behavior
+  - Asterisk indicator for localStorage-only settings
+  - Footer note explains localStorage vs server-synced settings
+
+**Files Modified**:
+- [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs) - Window restoration fix, snap settings
+- [crates/rb-web/src/app/components/navbar.rs](../crates/rb-web/src/app/components/navbar.rs) - Dropdown z-index
+- [crates/rb-web/src/app/session/components/global_chrome.rs](../crates/rb-web/src/app/session/components/global_chrome.rs) - Drawer z-index
+- [crates/server-core/src/sessions.rs](../crates/server-core/src/sessions.rs) - Broadcast warning suppression
+- [crates/rb-web/src/app/pages/profile.rs](../crates/rb-web/src/app/pages/profile.rs) - Web Settings section
 
 ---
 
@@ -371,7 +425,7 @@ Check Server side code with `cargo check -p rb-web --features server`
   - Reconnection attempts with backoff (dioxus 0.7.1 should support this in websocketoptions? maybe?)
   - Visual indicator when WebSocket connection lost on ssh sessions overlay over xterm with watermark that it's disconencted and attempting to reconnect
   - Show when server tells us a session was lost toast
-  - we should gray out the screen with a spinning reconnector as we're trying to reconnect websockets. 
+  - we should gray out the screen with a spinning reconnector as we're trying to reconnect websockets so we know we need to wait for reconnecting to our backend to continue.
 
 **Files to Modify**:
 - [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs)

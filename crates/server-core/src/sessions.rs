@@ -91,11 +91,14 @@ impl SshSession {
         let count = self.active_connections.fetch_add(1, Ordering::SeqCst) + 1;
         // Broadcast the updated connection count to all listeners
         if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
-            tracing::warn!(
-                session_number = self.session_number,
-                error = ?e,
-                "Failed to broadcast connection count increment"
-            );
+            // Only warn if there are subscribers (otherwise it's expected)
+            if self.event_tx.receiver_count() > 0 {
+                tracing::warn!(
+                    session_number = self.session_number,
+                    error = ?e,
+                    "Failed to broadcast connection count increment"
+                );
+            }
         }
         count
     }
@@ -104,11 +107,14 @@ impl SshSession {
         let count = self.active_connections.fetch_sub(1, Ordering::SeqCst).saturating_sub(1);
         // Broadcast the updated connection count to all listeners
         if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
-            tracing::warn!(
-                session_number = self.session_number,
-                error = ?e,
-                "Failed to broadcast connection count decrement"
-            );
+            // Only warn if there are subscribers (otherwise it's expected)
+            if self.event_tx.receiver_count() > 0 {
+                tracing::warn!(
+                    session_number = self.session_number,
+                    error = ?e,
+                    "Failed to broadcast connection count decrement"
+                );
+            }
         }
         count
     }
@@ -117,11 +123,14 @@ impl SshSession {
         let count = self.active_viewers.fetch_add(1, Ordering::SeqCst) + 1;
         // Broadcast updates
         if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
-            tracing::warn!(
-                session_number = self.session_number,
-                error = ?e,
-                "Failed to broadcast viewer count increment"
-            );
+            // Only warn if there are subscribers (otherwise it's expected)
+            if self.event_tx.receiver_count() > 0 {
+                tracing::warn!(
+                    session_number = self.session_number,
+                    error = ?e,
+                    "Failed to broadcast viewer count increment"
+                );
+            }
         }
         count
     }
@@ -130,11 +139,14 @@ impl SshSession {
         let count = self.active_viewers.fetch_sub(1, Ordering::SeqCst).saturating_sub(1);
         // Broadcast updates
         if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
-            tracing::warn!(
-                session_number = self.session_number,
-                error = ?e,
-                "Failed to broadcast viewer count decrement"
-            );
+            // Only warn if there are subscribers (otherwise it's expected)
+            if self.event_tx.receiver_count() > 0 {
+                tracing::warn!(
+                    session_number = self.session_number,
+                    error = ?e,
+                    "Failed to broadcast viewer count decrement"
+                );
+            }
         }
         count
     }
@@ -221,7 +233,7 @@ impl SessionRegistry {
         list.push(meta);
         let current_list = list.clone();
         drop(conns);
-        
+
         let _ = self.event_tx.send(SessionEvent::Presence(user_id, current_list));
     }
 

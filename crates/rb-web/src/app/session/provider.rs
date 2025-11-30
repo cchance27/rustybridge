@@ -12,6 +12,9 @@ const MAX_SESSIONS: usize = 4;
 pub struct SessionContext {
     sessions: Signal<Vec<Session>>,
     drag_state: Signal<Option<DragState>>,
+    resize_state: Signal<Option<ResizeState>>,
+    pub snap_preview: Signal<Option<WindowGeometry>>,
+    pub snap_to_navbar: Signal<bool>, // true = snap below navbar, false = snap to screen edge
     pub active_web_sessions: Signal<Vec<WebSessionMeta>>,
     pub current_client_id: Signal<String>,
 }
@@ -25,6 +28,27 @@ pub struct DragState {
     pub initial_y: i32,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResizeState {
+    pub session_id: String,
+    pub start_x: i32,
+    pub start_y: i32,
+    pub initial_geometry: WindowGeometry,
+    pub direction: ResizeDirection,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ResizeDirection {
+    TopLeft,
+    Top,
+    TopRight,
+    Right,
+    BottomRight,
+    Bottom,
+    BottomLeft,
+    Left,
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SessionStorageData {
     geometry: WindowGeometry,
@@ -34,12 +58,28 @@ struct SessionStorageData {
 pub fn use_session_provider() -> SessionContext {
     let sessions = use_signal(Vec::new);
     let drag_state = use_signal(|| None);
+    let resize_state = use_signal(|| None);
+    let snap_preview = use_signal(|| None);
     let active_web_sessions = use_signal(Vec::new);
-    
+
     // Generate a unique client ID for this browser tab session
     let current_client_id = use_signal(|| uuid::Uuid::new_v4().to_string());
-    
-    let context = SessionContext { sessions, drag_state, active_web_sessions, current_client_id };
+
+    // Load snap_to_navbar preference from localStorage (default: true = snap below navbar)
+    let snap_to_navbar = use_signal(|| {
+        let storage = BrowserStorage::new(StorageType::Local);
+        storage.get_json::<bool>("rb-snap-to-navbar").unwrap_or(true)
+    });
+
+    let context = SessionContext {
+        sessions,
+        drag_state,
+        resize_state,
+        snap_preview,
+        snap_to_navbar,
+        active_web_sessions,
+        current_client_id,
+    };
     use_context_provider(|| context);
 
     // WebSocket for real-time session events
@@ -49,9 +89,7 @@ pub fn use_session_provider() -> SessionContext {
     let client_id_val = current_client_id.peek().clone();
     let mut ws = use_websocket(move || {
         let client_id = client_id_val.clone();
-        async move { 
-            ssh_web_events(client_id, WebSocketOptions::new()).await 
-        }
+        async move { ssh_web_events(client_id, WebSocketOptions::new()).await }
     });
     let mut context_clone = context.clone();
     let auth = use_auth();
@@ -107,15 +145,19 @@ pub fn use_session_provider() -> SessionContext {
                                     // Drop the write lock before calling open_restored
                                     drop(sessions);
 
-                                    // This is a new session created elsewhere - open minimized
-                                    context_clone.open_restored(
-                                        summary.relay_name.clone(),
-                                        summary.relay_id,
-                                        summary.session_number,
-                                        true,
-                                        summary.active_connections,
-                                        summary.active_viewers,
-                                    );
+                                    // Get user_id from auth context
+                                    if let Some(user) = auth.read().user.as_ref() {
+                                        // This is a new session created elsewhere - open minimized
+                                        context_clone.open_restored(
+                                            user.id,
+                                            summary.relay_name.clone(),
+                                            summary.relay_id,
+                                            summary.session_number,
+                                            true,
+                                            summary.active_connections,
+                                            summary.active_viewers,
+                                        );
+                                    }
 
                                     // Show toast
                                     #[cfg(feature = "web")]
@@ -170,30 +212,100 @@ pub fn use_session_provider() -> SessionContext {
                                 context_clone.remove_session_storage(user.id, relay_id, session_number);
                             }
                         }
-                        SessionEvent::List(sessions) => {
+                        SessionEvent::List(summaries) => {
                             #[cfg(feature = "web")]
-                            web_sys::console::log_1(&format!("Received {} sessions from WebSocket", sessions.len()).into());
+                            web_sys::console::log_1(&format!("Received {} sessions from WebSocket", summaries.len()).into());
 
-                            let mut active_session_keys = std::collections::HashSet::new();
                             let mut restored_relay_names = Vec::new();
+                            let mut active_session_keys = std::collections::HashSet::new();
 
-                            for session_summary in sessions {
+                            // Check if auth is ready
+                            let user_id = auth.read().user.as_ref().map(|u| u.id);
+
+                            if user_id.is_none() {
+                                #[cfg(feature = "web")]
+                                {
+                                    web_sys::console::log_1(&"Auth not ready yet, deferring session restoration".into());
+                                }
+
+                                // Store summaries for later restoration
+                                // We'll restore them when auth becomes available
+                                let summaries_clone = summaries.clone();
+                                let context_clone2 = context_clone.clone();
+                                let auth_clone = auth.clone();
+
+                                dioxus::prelude::spawn(async move {
+                                    // Wait for auth to be ready (poll every 100ms, max 5 seconds)
+                                    for _ in 0..50 {
+                                        if auth_clone.read().user.is_some() {
+                                            #[cfg(feature = "web")]
+                                            {
+                                                web_sys::console::log_1(&"Auth ready, restoring deferred sessions".into());
+                                            }
+
+                                            // Now restore with proper user_id
+                                            if let Some(user) = auth_clone.read().user.as_ref() {
+                                                for session_summary in summaries_clone {
+                                                    if let SessionStateSummary::Closed = session_summary.state {
+                                                        continue;
+                                                    }
+
+                                                    context_clone2.open_restored(
+                                                        user.id,
+                                                        session_summary.relay_name,
+                                                        session_summary.relay_id,
+                                                        session_summary.session_number,
+                                                        false,
+                                                        session_summary.active_connections,
+                                                        session_summary.active_viewers,
+                                                    );
+                                                }
+                                            }
+                                            return;
+                                        }
+                                        gloo_timers::future::TimeoutFuture::new(100).await;
+                                    }
+
+                                    #[cfg(feature = "web")]
+                                    {
+                                        web_sys::console::warn_1(&"Auth timeout, restoring sessions with default geometry".into());
+                                    }
+                                });
+
+                                continue;
+                            }
+
+                            for session_summary in summaries {
                                 // Only restore active sessions
                                 if let SessionStateSummary::Closed = session_summary.state {
                                     continue;
                                 }
 
-                                // Track active session keys for cleanup
-                                if let Some(user) = auth.read().user.as_ref() {
-                                    let key = context_clone.get_session_storage_key(
-                                        user.id,
-                                        session_summary.relay_id,
-                                        session_summary.session_number,
+                                // Get user_id for loading saved state and tracking
+                                let user_id = user_id.unwrap();
+
+                                #[cfg(feature = "web")]
+                                {
+                                    web_sys::console::log_1(
+                                        &format!(
+                                            "Restoring session: relay_id={}, session_number={}, user_id={}",
+                                            session_summary.relay_id, session_summary.session_number, user_id
+                                        )
+                                        .into(),
                                     );
-                                    active_session_keys.insert(key);
                                 }
 
+                                // Track active session keys for cleanup
+                                let key = context_clone.get_session_storage_key(
+                                    user_id,
+                                    session_summary.relay_id,
+                                    session_summary.session_number,
+                                );
+                                active_session_keys.insert(key);
+
+                                // Restore the session with proper user_id
                                 context_clone.open_restored(
+                                    user_id,
                                     session_summary.relay_name.clone(),
                                     session_summary.relay_id,
                                     session_summary.session_number,
@@ -293,7 +405,33 @@ impl SessionContext {
 
     fn load_session_state(&self, user_id: i64, relay_id: i64, session_number: u32) -> Option<SessionStorageData> {
         let key = self.get_session_storage_key(user_id, relay_id, session_number);
-        self.get_storage().get_json(&key)
+        let result: std::option::Option<SessionStorageData> = self.get_storage().get_json(&key);
+
+        #[cfg(feature = "web")]
+        {
+            web_sys::console::log_1(
+                &format!(
+                    "load_session_state: user_id={}, relay_id={}, session_number={}, key={}, found={}",
+                    user_id,
+                    relay_id,
+                    session_number,
+                    key,
+                    result.is_some()
+                )
+                .into(),
+            );
+            if let Some(ref data) = result {
+                web_sys::console::log_1(
+                    &format!(
+                        "  Loaded geometry: x={}, y={}, w={}, h={}, minimized={}",
+                        data.geometry.x, data.geometry.y, data.geometry.width, data.geometry.height, data.minimized
+                    )
+                    .into(),
+                );
+            }
+        }
+
+        result
     }
 
     pub fn remove_session_storage(&self, user_id: i64, relay_id: i64, session_number: u32) {
@@ -385,16 +523,38 @@ impl SessionContext {
         let current_count = sessions.read().len();
         new_session.z_index = 60 + current_count;
 
+        #[cfg(feature = "web")]
+        let new_session_id = new_session.id.clone();
         sessions.write().push(new_session);
 
         // Recalculate z-indexes for all sessions
         self.recalculate_z_indexes();
+
+        // Trigger focus for the new session
+        #[cfg(feature = "web")]
+        {
+            let term_id = format!("term-{}", new_session_id);
+            spawn(async move {
+                // Wait for terminal to mount and init
+                gloo_timers::future::TimeoutFuture::new(300).await;
+                let _ = dioxus::document::eval(&format!("if (window.focusTerminal) window.focusTerminal('{}')", term_id)).await;
+            });
+        }
     }
 
     /// Open a session window bound to an existing SSH session number.
     /// If a matching window already exists for this relay+session_number, do nothing.
     /// If it exists, update its active_connections count instead.
-    pub fn open_restored(&self, relay_name: String, relay_id: i64, session_number: u32, force_minimized: bool, active_connections: u32, active_viewers: u32) {
+    pub fn open_restored(
+        &self,
+        user_id: i64,
+        relay_name: String,
+        relay_id: i64,
+        session_number: u32,
+        force_minimized: bool,
+        active_connections: u32,
+        active_viewers: u32,
+    ) {
         let mut sessions = self.sessions;
 
         // Check for existing session with same relay_id and session_number
@@ -418,9 +578,7 @@ impl SessionContext {
         new_session.active_viewers = active_viewers;
 
         // Load saved state if available
-        if let Some(user_id) = self.get_current_user_id()
-            && let Some(saved_state) = self.load_session_state(user_id, relay_id, session_number)
-        {
+        if let Some(saved_state) = self.load_session_state(user_id, relay_id, session_number) {
             // Validate geometry is within screen bounds
             new_session.geometry = self.validate_geometry_on_screen(saved_state.geometry);
             new_session.minimized = saved_state.minimized;
@@ -433,9 +591,24 @@ impl SessionContext {
         let current_count = sessions.read().len();
         new_session.z_index = 60 + current_count;
 
+        #[cfg(feature = "web")]
+        let new_session_id = new_session.id.clone();
         sessions.write().push(new_session);
 
         self.recalculate_z_indexes();
+
+        // Trigger focus for the restored session if not minimized
+        if !force_minimized {
+            #[cfg(feature = "web")]
+            {
+                let term_id = format!("term-{}", new_session_id);
+                spawn(async move {
+                    // Wait for terminal to mount and init
+                    gloo_timers::future::TimeoutFuture::new(300).await;
+                    let _ = dioxus::document::eval(&format!("if (window.focusTerminal) window.focusTerminal('{}')", term_id)).await;
+                });
+            }
+        }
     }
 
     pub fn close(&self, id: &str) {
@@ -621,7 +794,7 @@ impl SessionContext {
         }
     }
 
-    pub fn update_drag(&self, current_x: i32, current_y: i32) {
+    pub fn update_drag(&mut self, current_x: i32, current_y: i32) {
         // Early return if no drag is active - this prevents unnecessary work on every mouse move
         let drag_state_signal = self.drag_state;
         let state = match drag_state_signal.read().as_ref() {
@@ -647,11 +820,227 @@ impl SessionContext {
 
             self.set_geometry(&state.session_id, new_geometry);
         }
+
+        // Snapping logic
+        #[cfg(feature = "web")]
+        {
+            if let Some(window) = web_sys::window() {
+                if let (Ok(inner_width), Ok(inner_height)) = (window.inner_width(), window.inner_height()) {
+                    if let (Some(screen_width), Some(screen_height)) = (inner_width.as_f64(), inner_height.as_f64()) {
+                        let screen_width = screen_width as i32;
+                        let screen_height = screen_height as i32;
+
+                        // Define snap zones (e.g. 20px from edge)
+                        let snap_margin = 20;
+                        let nav_height = 64; // Approximate nav bar height
+
+                        // Use nav_height if snap_to_navbar is true, otherwise use 0
+                        let top_offset = if self.snap_to_navbar.read().clone() { nav_height } else { 0 };
+
+                        let mut preview = None;
+
+                        if current_x < snap_margin {
+                            // Left edge
+                            if current_y < snap_margin {
+                                // Top-Left Corner (1/4)
+                                preview = Some(WindowGeometry {
+                                    x: 0,
+                                    y: top_offset,
+                                    width: screen_width / 2,
+                                    height: (screen_height - top_offset) / 2,
+                                });
+                            } else if current_y > screen_height - snap_margin {
+                                // Bottom-Left Corner (1/4)
+                                preview = Some(WindowGeometry {
+                                    x: 0,
+                                    y: top_offset + (screen_height - top_offset) / 2,
+                                    width: screen_width / 2,
+                                    height: (screen_height - top_offset) / 2,
+                                });
+                            } else {
+                                // Left Half
+                                preview = Some(WindowGeometry {
+                                    x: 0,
+                                    y: top_offset,
+                                    width: screen_width / 2,
+                                    height: screen_height - top_offset,
+                                });
+                            }
+                        } else if current_x > screen_width - snap_margin {
+                            // Right edge
+                            if current_y < snap_margin {
+                                // Top-Right Corner (1/4)
+                                preview = Some(WindowGeometry {
+                                    x: screen_width / 2,
+                                    y: top_offset,
+                                    width: screen_width / 2,
+                                    height: (screen_height - top_offset) / 2,
+                                });
+                            } else if current_y > screen_height - snap_margin {
+                                // Bottom-Right Corner (1/4)
+                                preview = Some(WindowGeometry {
+                                    x: screen_width / 2,
+                                    y: top_offset + (screen_height - top_offset) / 2,
+                                    width: screen_width / 2,
+                                    height: (screen_height - top_offset) / 2,
+                                });
+                            } else {
+                                // Right Half
+                                preview = Some(WindowGeometry {
+                                    x: screen_width / 2,
+                                    y: top_offset,
+                                    width: screen_width / 2,
+                                    height: screen_height - top_offset,
+                                });
+                            }
+                        } else if current_y < snap_margin {
+                            // Top Edge (Full width, half height)
+                            preview = Some(WindowGeometry {
+                                x: 0,
+                                y: top_offset,
+                                width: screen_width,
+                                height: (screen_height - top_offset) / 2,
+                            });
+                        } else if current_y > screen_height - snap_margin {
+                            // Bottom Edge (Full width, half height)
+                            preview = Some(WindowGeometry {
+                                x: 0,
+                                y: top_offset + (screen_height - top_offset) / 2,
+                                width: screen_width,
+                                height: (screen_height - top_offset) / 2,
+                            });
+                        }
+
+                        self.snap_preview.set(preview);
+                    }
+                }
+            }
+        }
     }
 
     pub fn end_drag(&self) {
         let mut drag_state = self.drag_state;
+        let mut snap_preview = self.snap_preview;
+
+        // Apply snap if preview exists
+        if let Some(preview) = snap_preview.read().clone() {
+            if let Some(state) = drag_state.read().as_ref() {
+                self.set_geometry(&state.session_id, preview);
+            }
+        }
+
+        // Save state
+        if let Some(state) = drag_state.read().as_ref() {
+            let sessions = self.sessions.read();
+            if let Some(session) = sessions.iter().find(|s| s.id == state.session_id) {
+                if let (Some(user_id), Some(relay_id), Some(session_number)) =
+                    (self.get_current_user_id(), session.relay_id, session.session_number)
+                {
+                    self.save_session_state(user_id, relay_id, session_number, session.geometry.clone(), session.minimized);
+                }
+            }
+        }
+
+        snap_preview.set(None);
         drag_state.set(None);
+    }
+
+    // Resizing logic
+    pub fn start_resize(&self, session_id: String, start_x: i32, start_y: i32, direction: ResizeDirection) {
+        let sessions = self.sessions.read();
+        if let Some(session) = sessions.iter().find(|s| s.id == session_id) {
+            let mut resize_state = self.resize_state;
+            resize_state.set(Some(ResizeState {
+                session_id,
+                start_x,
+                start_y,
+                initial_geometry: session.geometry.clone(),
+                direction,
+            }));
+        }
+    }
+
+    pub fn update_resize(&mut self, current_x: i32, current_y: i32) {
+        let resize_state_signal = self.resize_state;
+        let state = match resize_state_signal.read().as_ref() {
+            Some(s) => s.clone(),
+            None => return,
+        };
+
+        let dx = current_x - state.start_x;
+        let dy = current_y - state.start_y;
+
+        let mut sessions_write = self.sessions.write();
+
+        if let Some(session) = sessions_write.iter_mut().find(|s| s.id == state.session_id) {
+            let mut new_geo = state.initial_geometry.clone();
+            let min_width = 200;
+            let min_height = 150;
+
+            match state.direction {
+                ResizeDirection::Right => {
+                    new_geo.width = (state.initial_geometry.width + dx).max(min_width);
+                }
+                ResizeDirection::Bottom => {
+                    new_geo.height = (state.initial_geometry.height + dy).max(min_height);
+                }
+                ResizeDirection::BottomRight => {
+                    new_geo.width = (state.initial_geometry.width + dx).max(min_width);
+                    new_geo.height = (state.initial_geometry.height + dy).max(min_height);
+                }
+                ResizeDirection::Left => {
+                    let new_width = (state.initial_geometry.width - dx).max(min_width);
+                    new_geo.x = state.initial_geometry.x + (state.initial_geometry.width - new_width);
+                    new_geo.width = new_width;
+                }
+                ResizeDirection::BottomLeft => {
+                    let new_width = (state.initial_geometry.width - dx).max(min_width);
+                    new_geo.x = state.initial_geometry.x + (state.initial_geometry.width - new_width);
+                    new_geo.width = new_width;
+                    new_geo.height = (state.initial_geometry.height + dy).max(min_height);
+                }
+                ResizeDirection::Top => {
+                    let new_height = (state.initial_geometry.height - dy).max(min_height);
+                    new_geo.y = state.initial_geometry.y + (state.initial_geometry.height - new_height);
+                    new_geo.height = new_height;
+                }
+                ResizeDirection::TopRight => {
+                    new_geo.width = (state.initial_geometry.width + dx).max(min_width);
+                    let new_height = (state.initial_geometry.height - dy).max(min_height);
+                    new_geo.y = state.initial_geometry.y + (state.initial_geometry.height - new_height);
+                    new_geo.height = new_height;
+                }
+                ResizeDirection::TopLeft => {
+                    let new_width = (state.initial_geometry.width - dx).max(min_width);
+                    new_geo.x = state.initial_geometry.x + (state.initial_geometry.width - new_width);
+                    new_geo.width = new_width;
+
+                    let new_height = (state.initial_geometry.height - dy).max(min_height);
+                    new_geo.y = state.initial_geometry.y + (state.initial_geometry.height - new_height);
+                    new_geo.height = new_height;
+                }
+            }
+
+            session.geometry = new_geo;
+        }
+    }
+
+    pub fn end_resize(&self) {
+        let mut resize_state = self.resize_state;
+
+        // Save the final state
+        if let Some(state) = resize_state.read().as_ref() {
+            let sessions = self.sessions.read();
+            if let Some(session) = sessions.iter().find(|s| s.id == state.session_id) {
+                if let (Some(user_id), Some(relay_id), Some(session_number)) =
+                    (self.get_current_user_id(), session.relay_id, session.session_number)
+                {
+                    self.save_session_state(user_id, relay_id, session_number, session.geometry.clone(), session.minimized);
+                }
+            }
+        }
+
+        resize_state.set(None);
     }
 
     /// Recalculate z-indexes for all sessions based on last_focused_at

@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 
 use crate::{
     app::{
-        api::ssh_keys::{add_my_ssh_key, delete_my_ssh_key, get_my_ssh_keys}, auth::oidc::get_oidc_link_status, components::{Layout, Modal, Table, Toast, ToastMessage, ToastType}
+        api::ssh_keys::{add_my_ssh_key, delete_my_ssh_key, get_my_ssh_keys}, auth::oidc::get_oidc_link_status, components::{Layout, Modal, Table, Toast, ToastMessage, ToastType}, session::provider::use_session, storage::{BrowserStorage, StorageType}
     }, components::RequireAuth
 };
 
@@ -283,6 +283,58 @@ pub fn ProfilePage() -> Element {
                                 },
                                 None => rsx! {
                                     div { class: "flex justify-center p-4", span { class: "loading loading-spinner" } }
+                                }
+                            }
+                        }
+                    }
+
+                    // Web Settings Section
+                    div { class: "card bg-base-100 shadow-xl",
+                        div { class: "card-body",
+                            h2 { class: "card-title", "Web Settings" }
+                            p { class: "text-sm opacity-70 mb-4", "Configure browser-specific preferences." }
+
+                            // Snap Behavior Toggle
+                            {
+                                let session = use_session();
+                                let mut snap_to_navbar = session.snap_to_navbar;
+                                let is_enabled = snap_to_navbar.read().clone();
+
+                                rsx! {
+                                    div { class: "form-control",
+                                        label { class: "label cursor-pointer justify-start gap-4",
+                                            input {
+                                                r#type: "checkbox",
+                                                class: "toggle toggle-primary",
+                                                checked: is_enabled,
+                                                onchange: move |evt| {
+                                                    let new_value = evt.checked();
+                                                    snap_to_navbar.set(new_value);
+                                                    // Save to localStorage
+                                                    let storage = BrowserStorage::new(StorageType::Local);
+                                                    let _ = storage.set_json("rb-snap-to-navbar", &new_value);
+                                                }
+                                            }
+                                            div { class: "flex flex-col",
+                                                span { class: "label-text font-semibold",
+                                                    "Snap Windows Below Navbar"
+                                                    span { class: "ml-1 text-primary", "*" }
+                                                }
+                                                span { class: "label-text-alt opacity-70",
+                                                    if is_enabled {
+                                                        "Windows snap below the navigation bar"
+                                                    } else {
+                                                        "Windows snap to the screen edge"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    div { class: "text-xs opacity-50 mt-4 pl-1",
+                                        span { class: "text-primary", "* " }
+                                        "Settings marked with an asterisk are stored locally in your browser and are not synced across devices."
+                                    }
                                 }
                             }
                         }

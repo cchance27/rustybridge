@@ -13,7 +13,7 @@ enum DrawerState {
 
 #[component]
 pub fn SessionGlobalChrome(children: Element) -> Element {
-    let session = use_session();
+    let mut session = use_session();
     let sessions = session.sessions();
     let auth = use_auth();
 
@@ -101,6 +101,7 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
 
                 while let Ok(_) = eval.recv::<bool>().await {
                     session.end_drag();
+                    session.end_resize();
                 }
             });
         }
@@ -113,9 +114,11 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
             onmousemove: move |evt| {
                 let coords = evt.data.client_coordinates();
                 session.update_drag(coords.x as i32, coords.y as i32);
+                session.update_resize(coords.x as i32, coords.y as i32);
             },
             onmouseup: move |_| {
                 session.end_drag();
+                session.end_resize();
             },
             // Close drawers when clicking outside them
             onclick: move |_evt| {
@@ -145,9 +148,9 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
             // Left Drawer - Sessions
             div {
                 class: if drawer_state() == DrawerState::SessionsOpen {
-                    "fixed left-0 top-0 h-full w-80 bg-base-200 shadow-xl z-[55] transition-transform duration-300 transform translate-x-0 drawer-container"
+                    "fixed left-0 top-0 h-full w-80 bg-base-200 shadow-xl z-[201] transition-transform duration-300 transform translate-x-0 drawer-container"
                 } else {
-                    "fixed left-0 top-0 h-full w-80 bg-base-200 shadow-xl z-[55] transition-transform duration-300 transform -translate-x-full drawer-container"
+                    "fixed left-0 top-0 h-full w-80 bg-base-200 shadow-xl z-[201] transition-transform duration-300 transform -translate-x-full drawer-container"
                 },
                 onclick: move |evt| {
                     // Stop propagation so clicks inside drawer don't close it
@@ -171,37 +174,57 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                         }
                     } else {
                         div { class: "space-y-2",
-                            for s in sessions.read().iter() {
-                                {
-                                    let id = s.id.clone();
-                                    let title = s.title.clone();
-                                    let minimized = s.minimized;
-                                    let active_viewers = s.active_viewers;
-                                    rsx! {
-                                        button {
-                                            class: format!("btn btn-ghost w-full justify-start text-left relative {}", if minimized { "" } else { "btn-active" }),
-                                            onclick: move |_| {
-                                                if minimized {
-                                                    session.restore(&id);
+                            {
+                                let sessions_read = sessions.read();
+                                rsx! {
+                                    for s in sessions_read.iter() {
+                                        {
+                                            let id = s.id.clone();
+                                            let relay_name = s.relay_name.clone();
+                                            let same_relay_count = sessions_read.iter().filter(|sess| sess.relay_name == relay_name).count();
 
-                                                    #[cfg(feature = "web")]
-                                                    {
-                                                        let term_id = format!("term-{}", id);
-                                                        spawn(async move {
-                                                            gloo_timers::future::TimeoutFuture::new(50).await;
-                                                            let _ = dioxus::document::eval(&format!("if (window.fitTerminal) window.fitTerminal('{}')", term_id)).await;
-                                                            let _ = dioxus::document::eval(&format!("if (window.focusTerminal) window.focusTerminal('{}')", term_id)).await;
-                                                        });
+                                            let title = if same_relay_count > 1 {
+                                                let index = sessions_read.iter()
+                                                    .filter(|sess| sess.relay_name == relay_name)
+                                                    .position(|sess| sess.id == id)
+                                                    .map(|i| i + 1)
+                                                    .unwrap_or(1);
+                                                format!("{} #{}", s.title, index)
+                                            } else {
+                                                s.title.clone()
+                                            };
+
+                                            let minimized = s.minimized;
+                                            let active_viewers = s.active_viewers;
+                                            rsx! {
+                                                button {
+                                                    class: format!("btn btn-ghost w-full justify-start text-left relative {}", if minimized { "" } else { "btn-active" }),
+                                                    onclick: move |_| {
+                                                        if minimized {
+                                                            session.restore(&id);
+                                                            // Close the drawer when restoring
+                                                            drawer_state.set(DrawerState::Closed);
+
+                                                            #[cfg(feature = "web")]
+                                                            {
+                                                                let term_id = format!("term-{}", id);
+                                                                spawn(async move {
+                                                                    gloo_timers::future::TimeoutFuture::new(50).await;
+                                                                    let _ = dioxus::document::eval(&format!("if (window.fitTerminal) window.fitTerminal('{}')", term_id)).await;
+                                                                    let _ = dioxus::document::eval(&format!("if (window.focusTerminal) window.focusTerminal('{}')", term_id)).await;
+                                                                });
+                                                            }
+                                                        } else {
+                                                            session.focus(&id);
+                                                        }
+                                                    },
+                                                    span { class: "font-semibold", "{title}" }
+                                                    if active_viewers > 1 {
+                                                        span {
+                                                            class: "absolute right-2 top-1/2 transform -translate-y-1/2 badge badge-warning badge-xs",
+                                                            "{active_viewers}"
+                                                        }
                                                     }
-                                                } else {
-                                                    session.focus(&id);
-                                                }
-                                            },
-                                            span { class: "font-semibold", "{title}" }
-                                            if active_viewers > 1 {
-                                                span {
-                                                    class: "absolute right-2 top-1/2 transform -translate-y-1/2 badge badge-warning badge-xs",
-                                                    "{active_viewers}"
                                                 }
                                             }
                                         }
@@ -215,7 +238,7 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
 
             // Left Tab Button
             button {
-                class: "fixed left-0 top-1/2 bg-base-200 hover:cursor-pointer shadow-lg z-[54] transition-all duration-300 rounded-r-lg border-r border-t border-b border-base-300 drawer-tab-button",
+                class: "fixed left-0 top-1/2 bg-base-200 hover:cursor-pointer shadow-lg z-[200] transition-all duration-300 rounded-r-lg border-r border-t border-b border-base-300 drawer-tab-button",
                 style: if drawer_state() == DrawerState::SessionsOpen {
                     "transform: translateX(20rem) translateY(-50%);"
                 } else {
@@ -241,9 +264,9 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
             // Right Drawer - Relays
             div {
                 class: if drawer_state() == DrawerState::RelaysOpen {
-                    "fixed right-0 top-0 h-full w-80 bg-base-200 shadow-xl z-[55] transition-transform duration-300 transform translate-x-0 drawer-container"
+                    "fixed right-0 top-0 h-full w-80 bg-base-200 shadow-xl z-[201] transition-transform duration-300 transform translate-x-0 drawer-container"
                 } else {
-                    "fixed right-0 top-0 h-full w-80 bg-base-200 shadow-xl z-[55] transition-transform duration-300 transform translate-x-full drawer-container"
+                    "fixed right-0 top-0 h-full w-80 bg-base-200 shadow-xl z-[201] transition-transform duration-300 transform translate-x-full drawer-container"
                 },
                 onclick: move |evt| {
                     // Stop propagation so clicks inside drawer don't close it
@@ -329,7 +352,7 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
 
             // Right Tab Button
             button {
-                class: "fixed right-0 top-1/2 bg-base-200 hover:cursor-pointer shadow-lg z-[54] transition-all duration-300 rounded-l-lg border-l border-t border-b border-base-300 drawer-tab-button",
+                class: "fixed right-0 top-1/2 bg-base-200 hover:cursor-pointer shadow-lg z-[200] transition-all duration-300 rounded-l-lg border-l border-t border-b border-base-300 drawer-tab-button",
                 style: if drawer_state() == DrawerState::RelaysOpen {
                     "transform: translateX(-20rem) translateY(-50%);"
                 } else {
@@ -356,6 +379,15 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
             div {
                 class: "flex-1 flex flex-col min-h-screen",
                 {children}
+            }
+
+            // Session Windows - rendered with high z-index
+            // Snap Preview
+            if let Some(preview) = session.snap_preview.read().as_ref() {
+                div {
+                    class: "absolute z-[100] bg-blue-500/20 border-2 border-blue-500 rounded-lg pointer-events-none transition-all duration-100",
+                    style: format!("left: {}px; top: {}px; width: {}px; height: {}px;", preview.x, preview.y, preview.width, preview.height)
+                }
             }
 
             // Session Windows - rendered with high z-index
