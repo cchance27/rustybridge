@@ -1,8 +1,10 @@
 use dioxus::prelude::*;
 
 use super::session_window::SessionWindow;
+#[cfg(feature = "web")]
+use crate::app::components::use_toast;
 use crate::app::{
-    api::relay_list::list_user_relays, auth::hooks::use_auth, components::{Toast, ToastMessage}, session::provider::use_session, storage::{BrowserStorage, StorageType}
+    api::relay_list::list_user_relays, auth::hooks::use_auth, session::provider::use_session, storage::{BrowserStorage, StorageType}
 };
 #[derive(Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 enum DrawerState {
@@ -28,9 +30,9 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
         }
     });
 
-    // Toast notification state
-    #[allow(unused_mut)]
-    let mut toast = use_signal(|| None::<ToastMessage>);
+    // Toast notification hook - used in web feature for event listener
+    #[cfg(feature = "web")]
+    let toast = use_toast();
 
     // Helper to update drawer state and persist it
     let mut set_drawer_state = move |new_state: DrawerState| {
@@ -61,20 +63,15 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                     "#,
                 );
 
-                use crate::components::ToastType;
                 while let Ok(notification) = eval.recv::<serde_json::Value>().await {
                     if let Some(message) = notification.get("message").and_then(|v| v.as_str()) {
-                        let toast_type = match notification.get("type").and_then(|v| v.as_str()).unwrap_or("info") {
-                            "success" => ToastType::Success,
-                            "error" => ToastType::Error,
-                            "warning" => ToastType::Warning,
-                            _ => ToastType::Info,
-                        };
-
-                        toast.set(Some(ToastMessage {
-                            message: message.to_string(),
-                            toast_type,
-                        }));
+                        let type_str = notification.get("type").and_then(|v| v.as_str()).unwrap_or("info");
+                        match type_str {
+                            "success" => toast.success(message),
+                            "error" => toast.error(message),
+                            "warning" => toast.warning(message),
+                            _ => toast.info(message),
+                        }
                     }
                 }
             });
@@ -398,8 +395,7 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                 }
             }
 
-            // Toast notifications
-            Toast { message: toast }
+            // Toast notifications are now handled globally by the provider
         }
     }
 }

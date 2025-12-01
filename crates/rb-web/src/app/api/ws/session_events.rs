@@ -52,14 +52,19 @@ pub async fn ssh_web_events(client_id: String, options: WebSocketOptions) -> Res
 
             tracing::info!(user = %user.username, client_id = %client_id, "Session events WebSocket connected");
 
-            // Register connection
-            let meta = WebSessionMeta {
-                id: client_id.clone(),
-                ip,
-                user_agent,
-                connected_at: chrono::Utc::now(),
-            };
-            registry_inner.register_web_session(user_id, meta).await;
+            let is_status_monitor = client_id == "status-monitor";
+
+            // Register connection for presence tracking, but skip the internal
+            // status monitor so it doesn't show up as an "active session".
+            if !is_status_monitor {
+                let meta = WebSessionMeta {
+                    id: client_id.clone(),
+                    ip,
+                    user_agent,
+                    connected_at: chrono::Utc::now(),
+                };
+                registry_inner.register_web_session(user_id, meta).await;
+            }
 
             let mut rx = registry_inner.event_tx.subscribe();
 
@@ -101,8 +106,10 @@ pub async fn ssh_web_events(client_id: String, options: WebSocketOptions) -> Res
                 }
             }
 
-            // Unregister connection
-            registry_inner.unregister_web_session(user_id, &client_id).await;
+            // Unregister connection if it was registered for presence.
+            if !is_status_monitor {
+                registry_inner.unregister_web_session(user_id, &client_id).await;
+            }
         }))
     }
     #[cfg(not(feature = "server"))]

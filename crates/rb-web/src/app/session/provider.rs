@@ -1,6 +1,8 @@
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 use dioxus::{fullstack::use_websocket, prelude::*};
-use rb_types::ssh::{SessionEvent, SessionStateSummary, WebSessionMeta};
+use rb_types::ssh::{SessionEvent, SessionStateSummary, UserSessionSummary, WebSessionMeta};
 
 use crate::app::{
     auth::hooks::use_auth, session::types::{Session, SessionStatus, WindowGeometry}, storage::{BrowserStorage, StorageType}
@@ -17,6 +19,8 @@ pub struct SessionContext {
     pub snap_to_navbar: Signal<bool>, // true = snap below navbar, false = snap to screen edge
     pub active_web_sessions: Signal<Vec<WebSessionMeta>>,
     pub current_client_id: Signal<String>,
+    #[cfg(feature = "web")]
+    toast: Option<crate::app::components::toast::ToastContext>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -70,8 +74,17 @@ pub fn use_session_provider() -> SessionContext {
         let storage = BrowserStorage::new(StorageType::Local);
         storage.get_json::<bool>("rb-snap-to-navbar").unwrap_or(true)
     });
+    let pending_restores = use_signal(|| Option::<Vec<UserSessionSummary>>::None);
 
-    let context = SessionContext {
+    use dioxus::fullstack::WebSocketOptions;
+
+    use crate::app::api::ws::session_events::ssh_web_events;
+    #[cfg(feature = "web")]
+    use crate::app::components::use_toast;
+    #[cfg(feature = "web")]
+    let toast = use_toast();
+
+    let mut context = SessionContext {
         sessions,
         drag_state,
         resize_state,
@@ -79,296 +92,293 @@ pub fn use_session_provider() -> SessionContext {
         snap_to_navbar,
         active_web_sessions,
         current_client_id,
+        #[cfg(feature = "web")]
+        toast: None,
     };
+    #[cfg(feature = "web")]
+    {
+        context.toast = Some(toast);
+    }
     use_context_provider(|| context);
 
-    // WebSocket for real-time session events
-    use dioxus::fullstack::WebSocketOptions;
+    let auth = use_auth();
 
-    use crate::app::api::ws::session_events::ssh_web_events;
+    // When auth becomes ready after initial mount, restore any sessions we deferred
+    {
+        let mut pending_restores = pending_restores;
+        let context = context;
+        let auth = auth;
+        #[cfg(feature = "web")]
+        let toast = toast;
+
+        use_effect(move || {
+            if let Some(user) = auth.read().user.clone()
+                && let Some(summaries) = pending_restores.write().take() {
+                    let context = context;
+                    #[cfg(feature = "web")]
+                    let toast = toast;
+                    spawn(async move {
+                        let mut restored_relay_names = Vec::new();
+                        let mut active_session_keys = HashSet::new();
+
+                        for session_summary in summaries {
+                            if let SessionStateSummary::Closed = session_summary.state {
+                                continue;
+                            }
+
+                            #[cfg(feature = "web")]
+                            web_sys::console::log_1(
+                                &format!(
+                                    "Restoring (deferred) session: relay_id={}, session_number={}, user_id={}",
+                                    session_summary.relay_id, session_summary.session_number, user.id
+                                )
+                                .into(),
+                            );
+
+                            // Track active session keys for cleanup
+                            let key = context.get_session_storage_key(user.id, session_summary.relay_id, session_summary.session_number);
+                            active_session_keys.insert(key);
+
+                            context.open_restored(
+                                user.id,
+                                session_summary.relay_name.clone(),
+                                session_summary.relay_id,
+                                session_summary.session_number,
+                                false,
+                                session_summary.active_connections,
+                                session_summary.active_viewers,
+                            );
+                            restored_relay_names.push(session_summary.relay_name);
+                        }
+
+                        #[cfg(feature = "web")]
+                        {
+                            if !restored_relay_names.is_empty() {
+                                let count = restored_relay_names.len();
+                                let message = if count == 1 {
+                                    format!("Reattached to 1 SSH session ({})", restored_relay_names[0])
+                                } else {
+                                    format!("Reattached to {} SSH sessions", count)
+                                };
+                                toast.info(&message);
+                            }
+                        }
+
+                        // Cleanup stale sessions
+                        let storage = context.get_storage();
+                        let all_keys = storage.keys();
+                        let prefix = format!("rb-session-{}-", user.id);
+
+                        for key in all_keys {
+                            if key.starts_with(&prefix) && !active_session_keys.contains(&key) {
+                                let _ = storage.remove(&key);
+                            }
+                        }
+                    });
+                }
+        });
+    }
     let client_id_val = current_client_id.peek().clone();
     let mut ws = use_websocket(move || {
         let client_id = client_id_val.clone();
         async move { ssh_web_events(client_id, WebSocketOptions::new()).await }
     });
-    let mut context_clone = context.clone();
     let auth = use_auth();
 
+    let mut pending_restores_clone = pending_restores;
     use_coroutine(move |_rx: UnboundedReceiver<()>| async move {
-        loop {
-            match ws.recv().await {
-                Ok(event) => {
-                    match event {
-                        SessionEvent::Presence(_, list) => {
-                            context_clone.active_web_sessions.set(list);
-                        }
-                        SessionEvent::Created(_, summary) => {
-                            // Check if we already have this session and update it, or create new
-                            let mut sessions = context_clone.sessions.write();
+        let mut success = false;
+        while let Ok(event) = ws.recv().await {
+            success = true;
+            match event {
+                SessionEvent::Presence(_, list) => {
+                    context.active_web_sessions.set(list);
+                }
+                SessionEvent::Created(_, summary) => {
+                    // Check if we already have this session and update it, or create new
+                    let mut sessions = context.sessions.write();
 
-                            // First check: do we have a session with matching relay_id + session_number?
-                            let found_by_ids = sessions
-                                .iter_mut()
-                                .find(|s| s.relay_id == Some(summary.relay_id) && s.session_number == Some(summary.session_number));
+                    // First check: do we have a session with matching relay_id + session_number?
+                    let found_by_ids = sessions
+                        .iter_mut()
+                        .find(|s| s.relay_id == Some(summary.relay_id) && s.session_number == Some(summary.session_number));
 
-                            if let Some(existing) = found_by_ids {
-                                // Session already exists in this browser - just update active_connections and active_viewers
-                                existing.active_connections = summary.active_connections;
-                                existing.active_viewers = summary.active_viewers;
-                            } else {
-                                // Second check: do we have a session that's still connecting (no session_number yet)
-                                // for the same relay name? This handles the race where SessionEvent::Created arrives
-                                // before the Terminal's WebSocket receives the session_id
-                                let found_by_name = sessions.iter_mut().find(|s| {
-                                    s.relay_name == summary.relay_name
-                                        && s.session_number.is_none()
-                                        && matches!(s.status, SessionStatus::Connecting)
-                                });
+                    if let Some(existing) = found_by_ids {
+                        // Session already exists in this browser - just update active_connections and active_viewers
+                        existing.active_connections = summary.active_connections;
+                        existing.active_viewers = summary.active_viewers;
+                    } else {
+                        // Second check: do we have a session that's still connecting (no session_number yet)
+                        // for the same relay name? This handles the race where SessionEvent::Created arrives
+                        // before the Terminal's WebSocket receives the session_id
+                        let found_by_name = sessions.iter_mut().find(|s| {
+                            s.relay_name == summary.relay_name
+                                && s.session_number.is_none()
+                                && matches!(s.status, SessionStatus::Connecting)
+                        });
 
-                                if let Some(existing) = found_by_name {
-                                    // This is our session that's still connecting - update it with the IDs
-                                    existing.relay_id = Some(summary.relay_id);
-                                    existing.session_number = Some(summary.session_number);
-                                    existing.active_connections = summary.active_connections;
-                                    existing.active_viewers = summary.active_viewers;
-                                    existing.status = SessionStatus::Connected;
+                        if let Some(existing) = found_by_name {
+                            // This is our session that's still connecting - update it with the IDs
+                            existing.relay_id = Some(summary.relay_id);
+                            existing.session_number = Some(summary.session_number);
+                            existing.active_connections = summary.active_connections;
+                            existing.active_viewers = summary.active_viewers;
+                            existing.status = SessionStatus::Connected;
 
-                                    #[cfg(feature = "web")]
-                                    web_sys::console::log_1(
-                                        &format!(
-                                            "Updated connecting session {} with session_number {}",
-                                            existing.id, summary.session_number
-                                        )
-                                        .into(),
-                                    );
-                                } else {
-                                    // Drop the write lock before calling open_restored
-                                    drop(sessions);
-
-                                    // Get user_id from auth context
-                                    if let Some(user) = auth.read().user.as_ref() {
-                                        // This is a new session created elsewhere - open minimized
-                                        context_clone.open_restored(
-                                            user.id,
-                                            summary.relay_name.clone(),
-                                            summary.relay_id,
-                                            summary.session_number,
-                                            true,
-                                            summary.active_connections,
-                                            summary.active_viewers,
-                                        );
-                                    }
-
-                                    // Show toast
-                                    #[cfg(feature = "web")]
-                                    {
-                                        let message = format!("New session synced: {}", summary.relay_name);
-                                        let _ = dioxus::document::eval(&format!(
-                                            r#"
-                                            window.dispatchEvent(new CustomEvent('rb-toast-notification', {{
-                                                detail: {{ message: '{}', type: 'info' }}
-                                            }}));
-                                            "#,
-                                            message
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                        SessionEvent::Updated(_, summary) => {
-                            // Update session state and active_connections count
-                            let mut sessions = context_clone.sessions.write();
-                            if let Some(session) = sessions
-                                .iter_mut()
-                                .find(|s| s.relay_id == Some(summary.relay_id) && s.session_number == Some(summary.session_number))
-                            {
-                                // Update active connections and viewers count
-                                session.active_connections = summary.active_connections;
-                                session.active_viewers = summary.active_viewers;
-
-                                // Update status based on state
-                                if let SessionStateSummary::Closed = summary.state {
-                                    session.status = SessionStatus::Closed;
-                                }
-                            }
-                        }
-                        SessionEvent::Removed {
-                            user_id: _,
-                            relay_id,
-                            session_number,
-                        } => {
-                            // Remove session
-                            let mut sessions = context_clone.sessions.write();
-                            if let Some(pos) = sessions
-                                .iter()
-                                .position(|s| s.relay_id == Some(relay_id) && s.session_number == Some(session_number))
-                            {
-                                sessions.remove(pos);
-                            }
-                            drop(sessions); // Drop the lock before calling other methods
-
-                            // Also remove storage
-                            if let Some(user) = auth.read().user.as_ref() {
-                                context_clone.remove_session_storage(user.id, relay_id, session_number);
-                            }
-                        }
-                        SessionEvent::List(summaries) => {
                             #[cfg(feature = "web")]
-                            web_sys::console::log_1(&format!("Received {} sessions from WebSocket", summaries.len()).into());
+                            web_sys::console::log_1(
+                                &format!(
+                                    "Updated connecting session {} with session_number {}",
+                                    existing.id, summary.session_number
+                                )
+                                .into(),
+                            );
+                        } else {
+                            // Drop the write lock before calling open_restored
+                            drop(sessions);
 
-                            let mut restored_relay_names = Vec::new();
-                            let mut active_session_keys = std::collections::HashSet::new();
-
-                            // Check if auth is ready
-                            let user_id = auth.read().user.as_ref().map(|u| u.id);
-
-                            if user_id.is_none() {
-                                #[cfg(feature = "web")]
-                                {
-                                    web_sys::console::log_1(&"Auth not ready yet, deferring session restoration".into());
-                                }
-
-                                // Store summaries for later restoration
-                                // We'll restore them when auth becomes available
-                                let summaries_clone = summaries.clone();
-                                let context_clone2 = context_clone.clone();
-                                let auth_clone = auth.clone();
-
-                                dioxus::prelude::spawn(async move {
-                                    // Wait for auth to be ready (poll every 100ms, max 5 seconds)
-                                    for _ in 0..50 {
-                                        if auth_clone.read().user.is_some() {
-                                            #[cfg(feature = "web")]
-                                            {
-                                                web_sys::console::log_1(&"Auth ready, restoring deferred sessions".into());
-                                            }
-
-                                            // Now restore with proper user_id
-                                            if let Some(user) = auth_clone.read().user.as_ref() {
-                                                for session_summary in summaries_clone {
-                                                    if let SessionStateSummary::Closed = session_summary.state {
-                                                        continue;
-                                                    }
-
-                                                    context_clone2.open_restored(
-                                                        user.id,
-                                                        session_summary.relay_name,
-                                                        session_summary.relay_id,
-                                                        session_summary.session_number,
-                                                        false,
-                                                        session_summary.active_connections,
-                                                        session_summary.active_viewers,
-                                                    );
-                                                }
-                                            }
-                                            return;
-                                        }
-                                        gloo_timers::future::TimeoutFuture::new(100).await;
-                                    }
-
-                                    #[cfg(feature = "web")]
-                                    {
-                                        web_sys::console::warn_1(&"Auth timeout, restoring sessions with default geometry".into());
-                                    }
-                                });
-
-                                continue;
+                            // Get user_id from auth context
+                            if let Some(user) = auth.read().user.as_ref() {
+                                // This is a new session created elsewhere - open minimized
+                                context.open_restored(
+                                    user.id,
+                                    summary.relay_name.clone(),
+                                    summary.relay_id,
+                                    summary.session_number,
+                                    true,
+                                    summary.active_connections,
+                                    summary.active_viewers,
+                                );
                             }
 
-                            for session_summary in summaries {
-                                // Only restore active sessions
-                                if let SessionStateSummary::Closed = session_summary.state {
-                                    continue;
-                                }
-
-                                // Get user_id for loading saved state and tracking
-                                let user_id = user_id.unwrap();
-
-                                #[cfg(feature = "web")]
-                                {
-                                    web_sys::console::log_1(
-                                        &format!(
-                                            "Restoring session: relay_id={}, session_number={}, user_id={}",
-                                            session_summary.relay_id, session_summary.session_number, user_id
-                                        )
-                                        .into(),
-                                    );
-                                }
-
-                                // Track active session keys for cleanup
-                                let key = context_clone.get_session_storage_key(
-                                    user_id,
-                                    session_summary.relay_id,
-                                    session_summary.session_number,
-                                );
-                                active_session_keys.insert(key);
-
-                                // Restore the session with proper user_id
-                                context_clone.open_restored(
-                                    user_id,
-                                    session_summary.relay_name.clone(),
-                                    session_summary.relay_id,
-                                    session_summary.session_number,
-                                    false, // Don't force minimized on restore
-                                    session_summary.active_connections,
-                                    session_summary.active_viewers,
-                                );
-                                restored_relay_names.push(session_summary.relay_name);
-                            }
-
-                            // Show toast notification for number of reattached sessions
+                            // Show toast
                             #[cfg(feature = "web")]
                             {
-                                if !restored_relay_names.is_empty() {
-                                    let count = restored_relay_names.len();
-                                    let message = if count == 1 {
-                                        format!("Reattached to 1 SSH session ({})", restored_relay_names[0])
-                                    } else {
-                                        format!("Reattached to {} SSH sessions", count)
-                                    };
-
-                                    let escaped_message = message.replace("\\", "\\\\").replace("'", "\\'").replace("\"", "\\\"");
-                                    let _ = dioxus::document::eval(&format!(
-                                        r#"
-                                        try {{
-                                            console.log('Dispatching rb-toast-notification for {} sessions');
-                                            window.dispatchEvent(new CustomEvent('rb-toast-notification', {{
-                                                detail: {{
-                                                    message: '{}',
-                                                    type: 'info'
-                                                }}
-                                            }}));
-                                        }} catch (e) {{
-                                            console.error('Error dispatching toast event:', e);
-                                        }}
-                                        "#,
-                                        count, escaped_message
-                                    ))
-                                    .await;
-                                }
-                            }
-
-                            // Cleanup stale sessions
-                            if let Some(user) = auth.read().user.as_ref() {
-                                let storage = context_clone.get_storage();
-                                let all_keys = storage.keys();
-                                let prefix = format!("rb-session-{}-", user.id);
-
-                                for key in all_keys {
-                                    if key.starts_with(&prefix) && !active_session_keys.contains(&key) {
-                                        let _ = storage.remove(&key);
-                                    }
-                                }
+                                toast.info(&format!("New session synced: {}", summary.relay_name));
                             }
                         }
                     }
                 }
-                Err(_e) => {
+                SessionEvent::Updated(_, summary) => {
+                    // Update session state and active_connections count
+                    let mut sessions = context.sessions.write();
+                    if let Some(session) = sessions
+                        .iter_mut()
+                        .find(|s| s.relay_id == Some(summary.relay_id) && s.session_number == Some(summary.session_number))
+                    {
+                        // Update active connections and viewers count
+                        session.active_connections = summary.active_connections;
+                        session.active_viewers = summary.active_viewers;
+
+                        // Update status based on state
+                        if let SessionStateSummary::Closed = summary.state {
+                            session.status = SessionStatus::Closed;
+                        }
+                    }
+                }
+                SessionEvent::Removed {
+                    user_id: _,
+                    relay_id,
+                    session_number,
+                } => {
+                    // Remove session
+                    let mut sessions = context.sessions.write();
+                    if let Some(pos) = sessions
+                        .iter()
+                        .position(|s| s.relay_id == Some(relay_id) && s.session_number == Some(session_number))
+                    {
+                        sessions.remove(pos);
+                    }
+                    drop(sessions); // Drop the lock before calling other methods
+
+                    // Also remove storage
+                    if let Some(user) = auth.read().user.as_ref() {
+                        context.remove_session_storage(user.id, relay_id, session_number);
+                    }
+                }
+                SessionEvent::List(summaries) => {
                     #[cfg(feature = "web")]
-                    web_sys::console::error_1(&format!("WebSocket error: {}", _e).into());
-                    break;
+                    web_sys::console::log_1(&format!("Received {} sessions from WebSocket", summaries.len()).into());
+
+                    // If auth not ready yet, stash for immediate restore when it arrives
+                    if auth.read().user.is_none() {
+                        pending_restores_clone.set(Some(summaries));
+                        continue;
+                    }
+
+                    let user = auth.read().user.clone().unwrap();
+                    let context = context;
+                    #[cfg(feature = "web")]
+                    let toast = toast;
+                    spawn(async move {
+                        let mut restored_relay_names = Vec::new();
+                        let mut active_session_keys = HashSet::new();
+
+                        for session_summary in summaries {
+                            // Only restore active sessions
+                            if let SessionStateSummary::Closed = session_summary.state {
+                                continue;
+                            }
+
+                            #[cfg(feature = "web")]
+                            {
+                                web_sys::console::log_1(
+                                    &format!(
+                                        "Restoring session: relay_id={}, session_number={}, user_id={}",
+                                        session_summary.relay_id, session_summary.session_number, user.id
+                                    )
+                                    .into(),
+                                );
+                            }
+
+                            // Track active session keys for cleanup
+                            let key = context.get_session_storage_key(user.id, session_summary.relay_id, session_summary.session_number);
+                            active_session_keys.insert(key);
+
+                            // Restore the session with proper user_id
+                            context.open_restored(
+                                user.id,
+                                session_summary.relay_name.clone(),
+                                session_summary.relay_id,
+                                session_summary.session_number,
+                                false, // Don't force minimized on restore
+                                session_summary.active_connections,
+                                session_summary.active_viewers,
+                            );
+                            restored_relay_names.push(session_summary.relay_name);
+                        }
+
+                        // Show toast notification for number of reattached sessions
+                        #[cfg(feature = "web")]
+                        {
+                            if !restored_relay_names.is_empty() {
+                                let count = restored_relay_names.len();
+                                let message = if count == 1 {
+                                    format!("Reattached to 1 SSH session ({})", restored_relay_names[0])
+                                } else {
+                                    format!("Reattached to {} SSH sessions", count)
+                                };
+                                toast.info(&message);
+                            }
+                        }
+
+                        // Cleanup stale sessions
+                        let storage = context.get_storage();
+                        let all_keys = storage.keys();
+                        let prefix = format!("rb-session-{}-", user.id);
+
+                        for key in all_keys {
+                            if key.starts_with(&prefix) && !active_session_keys.contains(&key) {
+                                let _ = storage.remove(&key);
+                            }
+                        }
+                    });
                 }
             }
+        }
+        if !success {
+            #[cfg(feature = "web")]
+            web_sys::console::error_1(&format!("Failed to connect to WebSocket").into());
         }
     });
 
@@ -380,6 +390,11 @@ pub fn use_session() -> SessionContext {
 }
 
 impl SessionContext {
+    #[cfg(feature = "web")]
+    fn toast(&self) -> Option<crate::app::components::toast::ToastContext> {
+        self.toast
+    }
+
     pub fn sessions(&self) -> Signal<Vec<Session>> {
         self.sessions
     }
@@ -502,14 +517,9 @@ impl SessionContext {
             #[cfg(feature = "web")]
             {
                 web_sys::console::warn_1(&"Session cap reached (4)".into());
-                // Dispatch event for UI feedback
-                let _ = dioxus::document::eval(
-                    r#"
-                     window.dispatchEvent(new CustomEvent('rb-session-cap-reached', {
-                         detail: { max: 4, message: 'Maximum 4 concurrent SSH sessions allowed' }
-                     }));
-                 "#,
-                );
+                if let Some(toast) = self.toast() {
+                    toast.warning("Maximum 4 concurrent SSH sessions allowed");
+                }
             }
             return;
         }
@@ -545,6 +555,8 @@ impl SessionContext {
     /// Open a session window bound to an existing SSH session number.
     /// If a matching window already exists for this relay+session_number, do nothing.
     /// If it exists, update its active_connections count instead.
+    //FIXME: too many args we should probably make this a struct?
+    #[allow(clippy::too_many_arguments)]
     pub fn open_restored(
         &self,
         user_id: i64,
@@ -615,10 +627,10 @@ impl SessionContext {
         let mut sessions = self.sessions;
 
         // Cancel any drag operation for this session
-        if let Some(drag) = self.drag_state.read().as_ref() {
-            if drag.session_id == id {
-                self.end_drag();
-            }
+        if let Some(drag) = self.drag_state.read().as_ref()
+            && drag.session_id == id
+        {
+            self.end_drag();
         }
 
         // Clean up storage if session has relay_id and session_number
@@ -923,21 +935,20 @@ impl SessionContext {
         let mut snap_preview = self.snap_preview;
 
         // Apply snap if preview exists
-        if let Some(preview) = snap_preview.read().clone() {
-            if let Some(state) = drag_state.read().as_ref() {
-                self.set_geometry(&state.session_id, preview);
-            }
+        if let Some(preview) = snap_preview.read().clone()
+            && let Some(state) = drag_state.read().as_ref()
+        {
+            self.set_geometry(&state.session_id, preview);
         }
 
         // Save state
         if let Some(state) = drag_state.read().as_ref() {
             let sessions = self.sessions.read();
-            if let Some(session) = sessions.iter().find(|s| s.id == state.session_id) {
-                if let (Some(user_id), Some(relay_id), Some(session_number)) =
+            if let Some(session) = sessions.iter().find(|s| s.id == state.session_id)
+                && let (Some(user_id), Some(relay_id), Some(session_number)) =
                     (self.get_current_user_id(), session.relay_id, session.session_number)
-                {
-                    self.save_session_state(user_id, relay_id, session_number, session.geometry.clone(), session.minimized);
-                }
+            {
+                self.save_session_state(user_id, relay_id, session_number, session.geometry.clone(), session.minimized);
             }
         }
 
@@ -1031,12 +1042,11 @@ impl SessionContext {
         // Save the final state
         if let Some(state) = resize_state.read().as_ref() {
             let sessions = self.sessions.read();
-            if let Some(session) = sessions.iter().find(|s| s.id == state.session_id) {
-                if let (Some(user_id), Some(relay_id), Some(session_number)) =
+            if let Some(session) = sessions.iter().find(|s| s.id == state.session_id)
+                && let (Some(user_id), Some(relay_id), Some(session_number)) =
                     (self.get_current_user_id(), session.relay_id, session.session_number)
-                {
-                    self.save_session_state(user_id, relay_id, session_number, session.geometry.clone(), session.minimized);
-                }
+            {
+                self.save_session_state(user_id, relay_id, session_number, session.geometry.clone(), session.minimized);
             }
         }
 

@@ -14,9 +14,6 @@ pub struct RelayState {
     pub relays: Resource<Result<Vec<RelayHostInfo>, CapturedError>>,
     pub credentials: Resource<Result<Vec<CredentialInfo>, CapturedError>>,
 
-    // Toast notifications
-    pub toast: Signal<Option<crate::components::ToastMessage>>,
-
     // Assign credential modal state
     pub assign_modal_open: Signal<bool>,
     pub assign_target_id: Signal<i64>,
@@ -89,9 +86,6 @@ impl RelayState {
             // Resources
             relays: use_resource(|| async move { list_relay_hosts().await }),
             credentials: use_resource(|| async move { crate::app::api::credentials::list_credentials().await }),
-
-            // Toast
-            toast: use_signal(|| None),
 
             // Assign modal
             assign_modal_open: use_signal(|| false),

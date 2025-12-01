@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::{
-    app::api::{groups::list_groups, roles::*}, components::{Modal, ToastMessage, ToastType}
+    app::api::{groups::list_groups, roles::*}, components::{Modal, use_toast}
 };
 
 /// Role Groups Management Modal
@@ -15,8 +15,8 @@ pub fn ManageRoleGroupsModal(
     selected_group_to_add: Signal<String>,
     roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
     groups: Resource<Result<Vec<rb_types::users::GroupInfo>, ServerFnError>>,
-    toast: Signal<Option<ToastMessage>>,
 ) -> Element {
+    let toast = use_toast();
     let add_group_handler = move |_| {
         let role_name = groups_role_name();
         let group_name = selected_group_to_add();
@@ -48,18 +48,12 @@ pub fn ManageRoleGroupsModal(
                             }
                         }
                         selected_group_to_add.set(String::new());
-                        toast.set(Some(ToastMessage {
-                            message: format!("Added group '{}' to role '{}'", group_name, role_name),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("Added group '{}' to role '{}'", group_name, role_name));
                         roles.restart();
                         groups.restart();
                     }
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to add group to role: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to add group to role: {}", e));
                     }
                 }
             }
@@ -91,18 +85,12 @@ pub fn ManageRoleGroupsModal(
                                 available_groups.set(available);
                             }
                         }
-                        toast.set(Some(ToastMessage {
-                            message: format!("Removed group '{}' from role '{}'", group_name, role_name),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("Removed group '{}' from role '{}'", group_name, role_name));
                         roles.restart();
                         groups.restart();
                     }
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to remove group from role: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to remove group from role: {}", e));
                     }
                 }
             }

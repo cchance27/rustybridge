@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::{
-    app::api::roles::*, components::{Modal, ToastMessage, ToastType}
+    app::api::roles::*, components::{Modal, use_toast}
 };
 
 /// User Roles Management Modal
@@ -15,8 +15,8 @@ pub fn ManageUserRolesModal(
     selected_role_to_add: Signal<String>,
     roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
     users: Resource<Result<Vec<rb_types::users::UserGroupInfo>, ServerFnError>>,
-    toast: Signal<Option<ToastMessage>>,
 ) -> Element {
+    let toast = use_toast();
     let add_role_handler = move |_| {
         let user_name = username();
         let role_name = selected_role_to_add();
@@ -45,20 +45,14 @@ pub fn ManageUserRolesModal(
 
                         selected_role_to_add.set(String::new());
 
-                        toast.set(Some(ToastMessage {
-                            message: format!("Assigned role '{}' to user '{}'", role_name, user_name),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("Assigned role '{}' to user '{}'", role_name, user_name));
 
                         // Refresh resources
                         roles.restart();
                         users.restart();
                     }
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to assign role: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to assign role: {}", e));
                     }
                 }
             }
@@ -91,19 +85,13 @@ pub fn ManageUserRolesModal(
                             available_roles.set(available);
                         }
 
-                        toast.set(Some(ToastMessage {
-                            message: format!("Removed role '{}' from user '{}'", role_name, user_name),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("Removed role '{}' from user '{}'", role_name, user_name));
 
                         roles.restart();
                         users.restart();
                     }
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to remove role: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to remove role: {}", e));
                     }
                 }
             }

@@ -21,17 +21,17 @@ pub fn SessionDock() -> Element {
                     let relay_name = s.relay_name.clone();
                     let minimized = s.minimized;
                     let active_viewers = s.active_viewers;
-                    
+
                     rsx! {
                         div {
                             class: "tooltip tooltip-right",
                             "data-tip": "{title}",
                             div { class: "indicator",
                                 if active_viewers > 1 {
-                                    span { 
-                                        class: "indicator-item badge badge-warning badge-xs text-[9px] border-none", 
+                                    span {
+                                        class: "indicator-item badge badge-warning badge-xs text-[9px] border-none",
                                         style: "right: 4px; top: 4px;",
-                                        "{active_viewers}" 
+                                        "{active_viewers}"
                                     }
                                 }
                                 button {

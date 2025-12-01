@@ -138,7 +138,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
         if *prev_minimized.read() != props.minimized {
             let val = props.minimized;
             *prev_minimized.write() = val;
-            
+
             if connected() {
                 spawn({
                     let socket = socket.clone();

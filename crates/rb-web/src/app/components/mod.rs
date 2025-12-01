@@ -17,7 +17,7 @@ mod structured_tooltip;
 mod table;
 mod terminal;
 mod theme_toggle;
-mod toast;
+pub mod toast;
 
 pub use auth::{Protected, RequireAuth};
 pub use avatar_dropdown::*;

@@ -6,3 +6,4 @@ pub mod storage;
 
 // Server functions need to be accessible from both client and server
 pub mod api;
+pub mod server_status;

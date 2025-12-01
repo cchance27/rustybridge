@@ -411,18 +411,36 @@ Check Server side code with `cargo check -p rb-web --features server`
 ### Priority 4: User Feedback & Error Handling
 > **Reminder**: Reuse components where possible to avoid code duplication, plan ahead and check for components and how we store svg components and other items that we reuse, make components as needed.
 
+#### Completed Work
+- [x] **Toast System Refactoring**:
+  - Created `ToastProvider` context with global toast state management
+  - Implemented `use_toast()` hook for easy access from any component
+  - Built toast stacking system with automatic removal after 5 seconds
+  - Implemented toast grouping (identical messages increment count instead of creating duplicates)
+  - Migrated all modal components in `access` module to use `use_toast` (11 files)
+  - Migrated all components in `relays` module to use `use_toast` (7 files)
+  - Updated `global_chrome.rs` to use `use_toast` for event-based notifications
+  - Fixed `ToastContext` to properly use Dioxus Signal's Copy trait and interior mutability
+  - Added proper `#[cfg(feature = "web")]` gates for conditional compilation
+  - Toast component now renders in bottom-right corner with proper z-index (9999)
+  - Toasts display with color-coded alerts (success=green, error=red, warning=yellow, info=blue)
+  - Each toast has a close button for manual dismissal
+
+**Files Modified**:
+- [crates/rb-web/src/app/components/toast.rs](../crates/rb-web/src/app/components/toast.rs) - Toast system implementation
+- [crates/rb-web/src/app/pages/access/modals/*.rs](../crates/rb-web/src/app/pages/access/modals/) - 11 modal files
+- [crates/rb-web/src/app/pages/relays/](../crates/rb-web/src/app/pages/relays/) - State, page, and 5 modal files
+- [crates/rb-web/src/app/session/components/global_chrome.rs](../crates/rb-web/src/app/session/components/global_chrome.rs)
+- [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs)
+
 #### Remaining Work
-- [ ] **Toast notifications**:
-  - We should refactor toast to a proper system with its own components and sytem, where we can broadcast to maybe using dioxus context or some form of messaging?
-  - Enable our new toast system to stack toasts and maybe group with count if they are identical?, to support multiple toasts (for instance right now we have to group restored sessions into 1 toast because spawning 4 toasts overlap one another).
-  - Session cap reached 
-  - Connection failures
-  - Authentication errors
-  - Session disconnected/reconnected
-  - ensure any other areas of rb-web that use toats are moved over to the new system
-  - any additional toast messages to bubble up things that users should be aware assess by page.
-- [ ] **Disconnection handling**:
-  - Reconnection attempts with backoff (dioxus 0.7.1 should support this in websocketoptions? maybe?)
+- [x] **Additional toast notifications**:
+  - Session cap reached notifications (already exists via custom event, bring into proper toast system)
+  - Review other areas of rb-web for toast opportunities
+  - Add toast messages for user-facing operations that don't currently have feedback
+
+- [x] **Disconnection and Reconnection Handling**:
+  - Reconnection attempts with backoff (dioxus 0.7.1 should support this in websocketoptions check docs/DIOXUS_0.7.1/websocket.rs-from.dioxus0.7-git.txt (the websocket impl from dioxus 0.7.1 repo) if not do we need to consider handling ourselves?? maybe?)
   - Visual indicator when WebSocket connection lost on ssh sessions overlay over xterm with watermark that it's disconencted and attempting to reconnect
   - Show when server tells us a session was lost toast
   - we should gray out the screen with a spinning reconnector as we're trying to reconnect websockets so we know we need to wait for reconnecting to our backend to continue.

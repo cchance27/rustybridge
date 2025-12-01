@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 
 use crate::{
     app::{
-        api::ssh_keys::{add_my_ssh_key, delete_my_ssh_key, get_my_ssh_keys}, auth::oidc::get_oidc_link_status, components::{Layout, Modal, Table, Toast, ToastMessage, ToastType}, session::provider::use_session, storage::{BrowserStorage, StorageType}
+        api::ssh_keys::{add_my_ssh_key, delete_my_ssh_key, get_my_ssh_keys}, auth::oidc::get_oidc_link_status, components::{Layout, Modal, Table, use_toast}, session::provider::use_session, storage::{BrowserStorage, StorageType}
     }, components::RequireAuth
 };
 
@@ -13,7 +13,7 @@ pub fn ProfilePage() -> Element {
     let mut oidc_status = use_resource(|| async move { get_oidc_link_status().await.ok() });
 
     // State
-    let mut toast = use_signal(|| None::<ToastMessage>);
+    let toast = use_toast();
     let mut is_add_key_modal_open = use_signal(|| false);
     let mut new_key_value = use_signal(String::new);
     let mut new_key_comment = use_signal(String::new);
@@ -61,17 +61,11 @@ pub fn ProfilePage() -> Element {
             match add_my_ssh_key(key, if comment.is_empty() { None } else { Some(comment) }).await {
                 Ok(_) => {
                     is_add_key_modal_open.set(false);
-                    toast.set(Some(ToastMessage {
-                        message: "SSH key added successfully".to_string(),
-                        toast_type: ToastType::Success,
-                    }));
+                    toast.success("SSH key added successfully");
                     ssh_keys.restart();
                 }
                 Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to add SSH key: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Failed to add SSH key: {}", e));
                 }
             }
         });
@@ -83,17 +77,11 @@ pub fn ProfilePage() -> Element {
                 match delete_my_ssh_key(id).await {
                     Ok(_) => {
                         delete_key_target.set(None);
-                        toast.set(Some(ToastMessage {
-                            message: "SSH key deleted successfully".to_string(),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success("SSH key deleted successfully");
                         ssh_keys.restart();
                     }
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to delete SSH key: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to delete SSH key: {}", e));
                     }
                 }
             });
@@ -120,18 +108,12 @@ pub fn ProfilePage() -> Element {
             match unlink_oidc().await {
                 Ok(_) => {
                     oidc_unlink_confirm_open.set(false);
-                    toast.set(Some(ToastMessage {
-                        message: "OIDC account unlinked successfully".to_string(),
-                        toast_type: ToastType::Success,
-                    }));
+                    toast.success("OIDC account unlinked successfully");
                     oidc_status.restart();
                 }
                 Err(e) => {
                     oidc_unlink_confirm_open.set(false);
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to unlink OIDC account: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Failed to unlink OIDC account: {}", e));
                 }
             }
         });
@@ -140,7 +122,6 @@ pub fn ProfilePage() -> Element {
     rsx! {
         RequireAuth {
             Layout {
-                Toast { message: toast }
 
                 div { class: "flex flex-col gap-6",
                     // Header
@@ -298,7 +279,7 @@ pub fn ProfilePage() -> Element {
                             {
                                 let session = use_session();
                                 let mut snap_to_navbar = session.snap_to_navbar;
-                                let is_enabled = snap_to_navbar.read().clone();
+                                let is_enabled = snap_to_navbar.read();
 
                                 rsx! {
                                     div { class: "form-control",
@@ -306,7 +287,7 @@ pub fn ProfilePage() -> Element {
                                             input {
                                                 r#type: "checkbox",
                                                 class: "toggle toggle-primary",
-                                                checked: is_enabled,
+                                                checked: *is_enabled,
                                                 onchange: move |evt| {
                                                     let new_value = evt.checked();
                                                     snap_to_navbar.set(new_value);
@@ -321,7 +302,7 @@ pub fn ProfilePage() -> Element {
                                                     span { class: "ml-1 text-primary", "*" }
                                                 }
                                                 span { class: "label-text-alt opacity-70",
-                                                    if is_enabled {
+                                                    if *is_enabled {
                                                         "Windows snap below the navigation bar"
                                                     } else {
                                                         "Windows snap to the screen edge"

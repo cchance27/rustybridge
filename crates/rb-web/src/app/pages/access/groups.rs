@@ -5,7 +5,7 @@ use dioxus::prelude::*;
 use rb_types::auth::{ClaimLevel, ClaimType};
 
 use crate::{
-    app::api::{groups::*, users::*}, components::{Modal, Protected, StructuredTooltip, Table, ToastMessage, ToastType, TooltipSection}, pages::access::modals::{ConfirmDeleteGroupModal, EditGroupModal, ManageGroupRolesModal}
+    app::api::{groups::*, users::*}, components::{Modal, Protected, StructuredTooltip, Table, TooltipSection, use_toast}, pages::access::modals::{ConfirmDeleteGroupModal, EditGroupModal, ManageGroupRolesModal}
 };
 
 /// Main Groups Section component
@@ -14,8 +14,10 @@ pub fn GroupsSection(
     groups: Resource<Result<Vec<rb_types::users::GroupInfo>, ServerFnError>>,
     users: Resource<Result<Vec<rb_types::users::UserGroupInfo>, ServerFnError>>,
     roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
-    toast: Signal<Option<ToastMessage>>,
 ) -> Element {
+    // Toast notification state
+    let toast = use_toast();
+
     // Delete confirmation state
     let mut delete_confirm_open = use_signal(|| false);
     let mut delete_target_id = use_signal(|| 0i64);
@@ -35,19 +37,13 @@ pub fn GroupsSection(
             match delete_group(target_id).await {
                 Ok(_) => {
                     delete_confirm_open.set(false);
-                    toast.set(Some(ToastMessage {
-                        message: format!("Group '{}' deleted successfully", target_name),
-                        toast_type: ToastType::Success,
-                    }));
+                    toast.success(&format!("Group '{}' deleted successfully", target_name));
                     groups.restart();
                     users.restart();
                 }
                 Err(e) => {
                     delete_confirm_open.set(false);
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to delete group: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Failed to delete group: {}", e));
                 }
             }
         });
@@ -143,18 +139,12 @@ pub fn GroupsSection(
                             }
                         }
                         selected_user_to_add.set(String::new());
-                        toast.set(Some(ToastMessage {
-                            message: format!("Added '{}' to group '{}'", username, group_name),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("Added '{}' to group '{}'", username, group_name));
                         groups.restart();
                         users.restart(); // Refresh users list to show updated group memberships
                     }
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to add user to group: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to add user to group: {}", e));
                     }
                 }
             }
@@ -183,18 +173,12 @@ pub fn GroupsSection(
                                 available_users_for_group.set(available);
                             }
                         }
-                        toast.set(Some(ToastMessage {
-                            message: format!("Removed '{}' from group '{}'", username, group_name),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("Removed '{}' from group '{}'", username, group_name));
                         groups.restart();
                         users.restart(); // Refresh users list to show updated group memberships
                     }
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to remove user from group: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to remove user from group: {}", e));
                     }
                 }
             }
@@ -419,7 +403,6 @@ pub fn GroupsSection(
             group_name: edit_group_name,
             roles,
             groups,
-            toast,
         }
 
         // Manage Group Roles Modal
@@ -432,7 +415,6 @@ pub fn GroupsSection(
              selected_role_to_add: manage_roles_selected,
              roles,
              groups,
-             toast,
         }
 
         // Group Members Modal

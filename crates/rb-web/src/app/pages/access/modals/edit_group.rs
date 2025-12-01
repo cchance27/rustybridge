@@ -6,7 +6,7 @@ use rb_types::auth::ClaimType;
 use crate::{
     app::api::{
         groups::{add_group_claim, remove_group_claim}, roles::{assign_role_to_group, revoke_role_from_group}
-    }, components::{Modal, ToastMessage, ToastType}
+    }, components::{Modal, use_toast}
 };
 
 /// Edit Group Modal with name, roles, and claims management
@@ -17,11 +17,11 @@ pub fn EditGroupModal(
     group_name: Signal<String>,
     roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
     groups: Resource<Result<Vec<rb_types::users::GroupInfo>, ServerFnError>>,
-    toast: Signal<Option<ToastMessage>>,
 ) -> Element {
     let name = group_name();
     let group_id_val = group_id();
     let mut active_tab = use_signal(|| "general"); // general, roles, claims
+    let toast = use_toast();
 
     // Name state
     let mut edit_name = use_signal(String::new);
@@ -59,18 +59,12 @@ pub fn EditGroupModal(
             spawn(async move {
                 match crate::app::api::groups::update_group(group_id_val, new_name.clone()).await {
                     Ok(_) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Renamed group to '{}'", new_name),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("Renamed group to '{}'", new_name));
                         groups.restart();
                         open.set(false);
                     }
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to rename group: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to rename group: {}", e));
                     }
                 }
             });
@@ -103,16 +97,10 @@ pub fn EditGroupModal(
                             group_roles.set(current);
                         }
                         selected_role_to_add.set(String::new());
-                        toast.set(Some(ToastMessage {
-                            message: format!("Assigned role '{}' to group '{}'", role_name, group_name),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("Assigned role '{}' to group '{}'", role_name, group_name));
                     }
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to assign role: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to assign role: {}", e));
                     }
                 }
             }
@@ -134,16 +122,10 @@ pub fn EditGroupModal(
                         let mut current = group_roles();
                         current.retain(|r| r != &role_name);
                         group_roles.set(current);
-                        toast.set(Some(ToastMessage {
-                            message: format!("Removed role '{}' from group '{}'", role_name, group_name),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("Removed role '{}' from group '{}'", role_name, group_name));
                     }
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to remove role: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to remove role: {}", e));
                     }
                 }
             }
@@ -162,10 +144,7 @@ pub fn EditGroupModal(
             let claim_type = match ClaimType::from_str(&claim_str) {
                 Ok(ct) => ct,
                 Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Invalid claim format: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Invalid claim format: {}", e));
                     return;
                 }
             };
@@ -179,16 +158,10 @@ pub fn EditGroupModal(
                         group_claims.set(current);
                     }
                     selected_claim_to_add.set(String::new());
-                    toast.set(Some(ToastMessage {
-                        message: format!("Added claim '{}' to group '{}'", claim_str, group),
-                        toast_type: ToastType::Success,
-                    }));
+                    toast.success(&format!("Added claim '{}' to group '{}'", claim_str, group));
                 }
                 Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to add claim: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Failed to add claim: {}", e));
                 }
             }
         });
@@ -204,16 +177,10 @@ pub fn EditGroupModal(
                     let mut current = group_claims();
                     current.retain(|c| c != &claim);
                     group_claims.set(current);
-                    toast.set(Some(ToastMessage {
-                        message: format!("Removed claim '{}' from group '{}'", claim, group),
-                        toast_type: ToastType::Success,
-                    }));
+                    toast.success(&format!("Removed claim '{}' from group '{}'", claim, group));
                 }
                 Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to remove claim: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Failed to remove claim: {}", e));
                 }
             }
         });

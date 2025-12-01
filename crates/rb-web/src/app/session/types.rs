@@ -63,7 +63,7 @@ impl Session {
             z_index: 60, // Default base z-index
             session_number: None,
             active_connections: 1, // Default to 1 (this connection)
-            active_viewers: 1, // Default to 1 (this connection)
+            active_viewers: 1,     // Default to 1 (this connection)
         }
     }
 }

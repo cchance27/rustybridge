@@ -40,6 +40,8 @@ pub struct SshSession {
 }
 
 impl SshSession {
+    #[allow(clippy::too_many_arguments)]
+    //FIXME: too many args we should probably make this a struct?
     pub fn new(
         session_number: u32,
         user_id: i64,

@@ -4,7 +4,7 @@ use dioxus::prelude::*;
 use rb_types::auth::ClaimType;
 
 use crate::{
-    app::api::roles::{add_role_claim, remove_role_claim}, components::{Modal, ToastMessage, ToastType}
+    app::api::roles::{add_role_claim, remove_role_claim}, components::{Modal, use_toast}
 };
 
 /// Role Claims Management Modal
@@ -16,10 +16,10 @@ pub fn EditRoleClaimsModal(
     role_claims: Signal<Vec<ClaimType>>,
     role_selected_claim_to_add: Signal<String>,
     roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
-    toast: Signal<Option<ToastMessage>>,
 ) -> Element {
     let is_super_admin = claims_role_name() == "Super Admin";
     let role_id_val = claims_role_id();
+    let toast = use_toast();
 
     let add_role_claim_handler = move |claim: String| {
         let role_id = role_id_val;
@@ -29,10 +29,7 @@ pub fn EditRoleClaimsModal(
             let claim_type = match ClaimType::from_str(&claim) {
                 Ok(ct) => ct,
                 Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Invalid claim format: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Invalid claim format: {}", e));
                     return;
                 }
             };
@@ -43,16 +40,10 @@ pub fn EditRoleClaimsModal(
                     let mut current = role_claims();
                     current.push(claim_type);
                     role_claims.set(current);
-                    toast.set(Some(ToastMessage {
-                        message: format!("Added claim '{}' to role '{}'", claim, role),
-                        toast_type: ToastType::Success,
-                    }));
+                    toast.success(&format!("Added claim '{}' to role '{}'", claim, role));
                 }
                 Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to add claim: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Failed to add claim: {}", e));
                 }
             }
         });
@@ -68,16 +59,10 @@ pub fn EditRoleClaimsModal(
                     let mut current = role_claims();
                     current.retain(|c| c != &claim);
                     role_claims.set(current);
-                    toast.set(Some(ToastMessage {
-                        message: format!("Removed claim '{}' from role '{}'", claim, role),
-                        toast_type: ToastType::Success,
-                    }));
+                    toast.success(&format!("Removed claim '{}' from role '{}'", claim, role));
                 }
                 Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to remove claim: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Failed to remove claim: {}", e));
                 }
             }
         });

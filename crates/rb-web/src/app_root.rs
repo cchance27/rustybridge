@@ -15,10 +15,7 @@ pub fn app_root() -> Element {
     let auth = use_auth_provider();
     use_context_provider(|| auth);
 
-    // Initialize session provider
-    let _session = use_session_provider();
-
-    // Auto-restore sessions is now handled by the SessionProvider WebSocket connection
+    use crate::app::components::ToastProvider;
 
     rsx! {
         document::Title { "RustyBridge Web UI" }
@@ -33,8 +30,25 @@ pub fn app_root() -> Element {
         document::Script { src: "/xterm/addon-web-links.js"}
         document::Script { src: "/xterm/addon-webgl.js"}
 
-        SessionGlobalChrome {
-            Router::<Routes> {}
+        ToastProvider {
+            SessionProviderShell {}
+        }
+    }
+}
+
+#[component]
+fn SessionProviderShell() -> Element {
+    // Initialize session provider after toast context is available
+    let _session = use_session_provider();
+
+    // Auto-restore sessions is now handled by the SessionProvider WebSocket connection
+    use crate::app::server_status::ServerStatusProvider;
+
+    rsx! {
+        ServerStatusProvider {
+            SessionGlobalChrome {
+                Router::<Routes> {}
+            }
         }
     }
 }

@@ -8,7 +8,7 @@ use dioxus::prelude::*;
 use rb_types::auth::{ClaimLevel, ClaimType};
 
 use crate::{
-    app::api::{groups::*, roles::list_roles, users::*}, components::{Layout, RequireAuth, Toast, ToastMessage}
+    app::api::{groups::*, roles::list_roles, users::*}, components::{Layout, RequireAuth}
 };
 
 #[component]
@@ -18,18 +18,13 @@ pub fn AccessPage() -> Element {
     let groups = use_resource(|| async move { list_groups().await });
     let roles = use_resource(|| async move { list_roles().await });
 
-    // Toast notification state
-    let toast = use_signal(|| None::<ToastMessage>);
-
     rsx! {
         RequireAuth {
             any_claims: vec![ClaimType::Users(ClaimLevel::View), ClaimType::Groups(ClaimLevel::View)],
-            Toast { message: toast }
             Layout {
                 div { class: "grid grid-cols-1 xl:grid-cols-2 gap-6 items-start",
                     users::UsersSection {
                         users,
-                        toast,
                         roles, // Pass roles resource to UsersSection for effective claims calculation
                         groups, // Pass groups resource to UsersSection for effective claims calculation
                     }
@@ -37,13 +32,11 @@ pub fn AccessPage() -> Element {
                         groups,
                         users,
                         roles, // Pass roles resource to GroupsSection
-                        toast,
                     },
                     roles::RolesSection {
                         roles,
                         users,
                         groups,
-                        toast,
                     }
                 }
 
@@ -52,7 +45,6 @@ pub fn AccessPage() -> Element {
                     users,
                     groups,
                     roles,
-                    toast,
                 }
             }
         }

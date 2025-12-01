@@ -6,12 +6,13 @@ use rb_types::{
 };
 
 use crate::{
-    app::{api::relays::*, pages::relays::state::RelayState}, components::{CredentialForm, RelayAccessForm, StepModal, ToastMessage, ToastType}
+    app::{api::relays::*, pages::relays::state::RelayState}, components::{CredentialForm, RelayAccessForm, StepModal, use_toast}
 };
 
 /// Modal for creating or editing a relay
 #[component]
 pub fn EditRelayModal(state: RelayState) -> Element {
+    let toast = use_toast();
     // Helper to check if we can proceed to the next step
     let can_proceed = {
         if (state.current_step)() == 1 {
@@ -237,10 +238,7 @@ pub fn EditRelayModal(state: RelayState) -> Element {
                         match auth_result {
                             Ok(_) => {
                                 state.is_modal_open.set(false);
-                                state.toast.set(Some(ToastMessage {
-                                    message: format!("Relay '{}' {} successfully", name_val, action_word),
-                                    toast_type: ToastType::Success,
-                                }));
+                                toast.success(&format!("Relay '{}' {} successfully", name_val, action_word));
                                 state.relays.restart();
                                 if created_new {
                                     // Trigger hostkey modal
@@ -255,30 +253,21 @@ pub fn EditRelayModal(state: RelayState) -> Element {
                                             Err(e) => {
                                                 state.refresh_modal_open.set(false);
                                                 state.refresh_review.set(None);
-                                                state.toast.set(Some(ToastMessage {
-                                                    message: format!("Failed to fetch hostkey: {}", e),
-                                                    toast_type: ToastType::Error,
-                                                }));
+                                                toast.error(&format!("Failed to fetch hostkey: {}", e));
                                             }
                                         }
                                     });
                                 }
                             }
                             Err(e) => {
-                                state.toast.set(Some(ToastMessage {
-                                    message: format!("Relay saved but auth configuration failed: {}", e),
-                                    toast_type: ToastType::Error,
-                                }));
+                                toast.error(&format!("Relay saved but auth configuration failed: {}", e));
                                 state.relays.restart();
                             }
                         }
                     } else {
                         // No auth needed, just close and show success
                         state.is_modal_open.set(false);
-                        state.toast.set(Some(ToastMessage {
-                            message: format!("Relay '{}' {} successfully", name_val, action_word),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("Relay '{}' {} successfully", name_val, action_word));
                         state.relays.restart();
                         if created_new {
                             // Trigger hostkey modal
@@ -293,10 +282,7 @@ pub fn EditRelayModal(state: RelayState) -> Element {
                                     Err(e) => {
                                         state.refresh_modal_open.set(false);
                                         state.refresh_review.set(None);
-                                        state.toast.set(Some(ToastMessage {
-                                            message: format!("Failed to fetch hostkey: {}", e),
-                                            toast_type: ToastType::Error,
-                                        }));
+                                        toast.error(&format!("Failed to fetch hostkey: {}", e));
                                     }
                                 }
                             });
@@ -305,10 +291,11 @@ pub fn EditRelayModal(state: RelayState) -> Element {
                 }
                 Err(e) => {
                     state.is_modal_open.set(false);
-                    state.toast.set(Some(ToastMessage {
-                        message: format!("Failed to {} relay: {}", if id.is_some() { "update" } else { "create" }, e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!(
+                        "Failed to {} relay: {}",
+                        if id.is_some() { "update" } else { "create" },
+                        e
+                    ));
                 }
             }
         });
