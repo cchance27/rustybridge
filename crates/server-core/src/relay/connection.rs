@@ -36,7 +36,7 @@ impl RelayHandle {
 }
 
 /// Build the client configuration for connecting to relay hosts.
-fn build_client_config(options: &HashMap<String, SecretBoxedString>) -> Arc<client::Config> {
+pub(crate) fn build_client_config(options: &HashMap<String, SecretBoxedString>) -> Arc<client::Config> {
     let mut cfg = client::Config {
         preferred: default_preferred(),
         nodelay: true,

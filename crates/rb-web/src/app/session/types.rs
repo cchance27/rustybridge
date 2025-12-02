@@ -41,6 +41,14 @@ pub struct Session {
     pub viewers: ConnectionAmounts,
     // Whether this session can be attached to from the web (web-origin vs ssh-origin)
     pub attachable: bool,
+    // Optional target user ID for attaching to other users' sessions (requires admin claim)
+    pub target_user_id: Option<i64>,
+    // Whether this is an admin-attached session (viewing another user's session)
+    pub is_admin_attached: bool,
+    // Username of the user whose session is being attached to (for admin attach)
+    pub attached_to_username: Option<String>,
+    // List of admin user IDs currently viewing this session
+    pub admin_viewers: Vec<i64>,
 }
 
 impl Session {
@@ -67,6 +75,10 @@ impl Session {
             connections: ConnectionAmounts { web: 1, ssh: 0 },
             viewers: ConnectionAmounts { web: 1, ssh: 0 },
             attachable: true, // New windows opened from web are attachable
+            target_user_id: None,
+            is_admin_attached: false,
+            attached_to_username: None,
+            admin_viewers: Vec::new(),
         }
     }
 }

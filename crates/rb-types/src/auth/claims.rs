@@ -222,6 +222,7 @@ impl ClaimType {
         for level in &levels {
             claims.push(ClaimType::Server(*level));
         }
+        claims.push(ClaimType::Custom("server:attach_any".to_string()));
         claims
     }
 }

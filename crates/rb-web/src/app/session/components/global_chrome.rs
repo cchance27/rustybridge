@@ -183,7 +183,13 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                                             let attachable = s.attachable;
 
                                             // Use a stable label based on relay and backend session number
-                                            let title = if let Some(num) = s.session_number {
+                                            let title = if s.is_admin_attached {
+                                                if let Some(target_user) = &s.attached_to_username {
+                                                    format!("[{}] {} #{}", target_user, s.relay_name, s.session_number.unwrap_or(0))
+                                                } else {
+                                                    format!("[Unknown] {} #{}", s.relay_name, s.session_number.unwrap_or(0))
+                                                }
+                                            } else if let Some(num) = s.session_number {
                                                 format!("{} #{}", relay_name, num)
                                             } else {
                                                 s.title.clone()

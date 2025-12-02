@@ -48,6 +48,11 @@ pub struct TerminalProps {
     /// Current minimized state of the parent window
     #[props(default = false)]
     pub minimized: bool,
+
+    /// Optional target user ID for attaching to other users' sessions
+    #[serde(skip)]
+    #[props(default = None)]
+    pub target_user_id: Option<i64>,
 }
 
 #[component]
@@ -117,6 +122,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
 
         let _ws_id = id_for_ws.clone();
         let initial_session_number = props.session_number;
+        let target_user_id = props.target_user_id;
 
         #[derive(Clone)]
         struct TerminalDrop {
@@ -250,7 +256,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
                         use crate::app::api::ws::ssh::ssh_terminal_ws;
 
                         web_sys::console::log_1(&format!("Terminal: attempting to connect relay {relay_name}").into());
-                        let result = ssh_terminal_ws(relay_name, initial_session_number, WebSocketOptions::new()).await;
+                        let result = ssh_terminal_ws(relay_name, initial_session_number, target_user_id, WebSocketOptions::new()).await;
 
                         match &result {
                             Ok(_) => {

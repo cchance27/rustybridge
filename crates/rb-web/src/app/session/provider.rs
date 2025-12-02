@@ -190,6 +190,8 @@ pub fn use_session_provider() -> SessionContext {
                             session_summary.connections,
                             session_summary.viewers,
                             attachable,
+                            None,
+                            None,
                         );
                         restored_relay_names.push(session_summary.relay_name);
                     }
@@ -306,6 +308,8 @@ pub fn use_session_provider() -> SessionContext {
                                     summary.connections,
                                     summary.viewers,
                                     attachable,
+                                    None,
+                                    None,
                                 );
                             }
 
@@ -416,6 +420,8 @@ pub fn use_session_provider() -> SessionContext {
                                 session_summary.connections,
                                 session_summary.viewers,
                                 attachable,
+                                None,
+                                None,
                             );
                             restored_relay_names.push(session_summary.relay_name);
                         }
@@ -642,6 +648,8 @@ impl SessionContext {
         connections: rb_types::ssh::ConnectionAmounts,
         viewers: rb_types::ssh::ConnectionAmounts,
         attachable: bool,
+        target_user_id: Option<i64>,
+        attached_to_username: Option<String>,
     ) {
         let mut sessions = self.sessions;
 
@@ -665,6 +673,9 @@ impl SessionContext {
         new_session.connections = connections;
         new_session.viewers = viewers;
         new_session.attachable = attachable;
+        new_session.target_user_id = target_user_id;
+        new_session.is_admin_attached = target_user_id.is_some();
+        new_session.attached_to_username = attached_to_username;
 
         // Load saved state if available
         if let Some(saved_state) = self.load_session_state(user_id, relay_id, session_number) {

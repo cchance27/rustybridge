@@ -60,6 +60,8 @@ pub struct SshSession {
     pub origin: SessionOrigin,
     // Backend for I/O operations (unified interface)
     pub backend: Arc<dyn SessionBackend>,
+    // Admin viewers (user IDs of admins attached via server:attach_any)
+    pub admin_viewers: RwLock<std::collections::HashSet<i64>>,
     // Close signal
     pub close_tx: broadcast::Sender<()>,
     // Event channel
@@ -108,6 +110,7 @@ impl SshSession {
             ssh_viewers: AtomicU32::new(0),
             origin,
             backend,
+            admin_viewers: RwLock::new(std::collections::HashSet::new()),
             close_tx,
             event_tx,
         }
@@ -146,6 +149,7 @@ impl SshSession {
             },
             created_at: self.created_at,
             last_active_at: self.last_active_at(),
+            admin_viewers: self.admin_viewers.read().await.iter().copied().collect(),
         }
     }
 
@@ -392,6 +396,57 @@ impl SshSession {
 
     pub fn ssh_viewer_count(&self) -> u32 {
         self.ssh_viewers.load(Ordering::SeqCst)
+    }
+
+    /// Add an admin viewer to this session
+    pub async fn add_admin_viewer(&self, admin_user_id: i64) {
+        let mut admin_viewers = self.admin_viewers.write().await;
+        admin_viewers.insert(admin_user_id);
+        tracing::info!(
+            session_number = self.session_number,
+            admin_user_id,
+            admin_count = admin_viewers.len(),
+            "Admin viewer added to session"
+        );
+        // Broadcast session update with new admin viewer
+        drop(admin_viewers); // Release lock before broadcasting
+        if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
+            if self.event_tx.receiver_count() > 0 {
+                tracing::warn!(
+                    session_number = self.session_number,
+                    error = ?e,
+                    "Failed to broadcast admin viewer addition"
+                );
+            }
+        }
+    }
+
+    /// Remove an admin viewer from this session
+    pub async fn remove_admin_viewer(&self, admin_user_id: i64) {
+        let mut admin_viewers = self.admin_viewers.write().await;
+        admin_viewers.remove(&admin_user_id);
+        tracing::info!(
+            session_number = self.session_number,
+            admin_user_id,
+            admin_count = admin_viewers.len(),
+            "Admin viewer removed from session"
+        );
+        // Broadcast session update with removed admin viewer
+        drop(admin_viewers); // Release lock before broadcasting
+        if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
+            if self.event_tx.receiver_count() > 0 {
+                tracing::warn!(
+                    session_number = self.session_number,
+                    error = ?e,
+                    "Failed to broadcast admin viewer removal"
+                );
+            }
+        }
+    }
+
+    /// Get list of admin viewer user IDs
+    pub async fn get_admin_viewers(&self) -> Vec<i64> {
+        self.admin_viewers.read().await.iter().copied().collect()
     }
 
     pub async fn append_to_history(&self, data: &[u8]) {

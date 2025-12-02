@@ -106,8 +106,11 @@ async fn wait_for_client_ready(
     }
 }
 
+// TODO(security): Migrate to UUID-based session identifiers
+// Current implementation uses sequential integers which are easily guessable.
+// This creates a potential attack vector for session enumeration.
 #[get(
-    "/api/ws/ssh_connection/{relay_name}?session_number",
+    "/api/ws/ssh_connection/{relay_name}?session_number&target_user_id",
     auth: WebAuthSession,
     pool: axum::Extension<sqlx::SqlitePool>,
     registry: axum::Extension<SharedRegistry>,
@@ -116,16 +119,57 @@ async fn wait_for_client_ready(
 pub async fn ssh_terminal_ws(
     relay_name: String,
     session_number: Option<u32>,
+    target_user_id: Option<i64>,
     options: WebSocketOptions,
 ) -> Result<SshWebSocket, ServerFnError> {
     // Extract state and auth
-    let (username, user_id, relay_id) = match ensure_relay_websocket_permissions(&relay_name, &auth, &pool.0).await {
-        Ok(res) => res,
-        Err(err) => {
-            tracing::error!("SSH Access Error: {:?}", err);
-            return Err(ServerFnError::new(format!("Access denied: {:?}", err)));
+    let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    // Check for server:attach_any claim
+    use rb_types::auth::ClaimType;
+    let has_attach_any = crate::server::auth::guards::ensure_claim(&auth, &ClaimType::Custom("server:attach_any".to_string())).is_ok();
+
+    // Resolve relay
+    let relay = fetch_relay_host_by_name(&pool.0, &relay_name)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?
+        .ok_or_else(|| ServerFnError::new("Relay not found"))?;
+
+    let (effective_user_id, effective_username) = if has_attach_any {
+        if let Some(target_id) = target_user_id {
+            // Admin attaching to another user
+            // FIXME: is this correct / best way to handle this?
+            // Fetching target user is safer to ensure they exist.
+            let target_user = state_store::fetch_user_auth_record(&pool.0, target_id)
+                .await
+                .map_err(|e| ServerFnError::new(e.to_string()))?
+                .ok_or_else(|| ServerFnError::new("Target user not found"))?;
+            (target_id, target_user.username)
+        } else {
+            (user.id, user.username.clone())
         }
+    } else {
+        // Regular user
+        if let Some(target_id) = target_user_id {
+            if target_id != user.id {
+                return Err(ServerFnError::new("Unauthorized to attach to other users"));
+            }
+        }
+
+        // Check relay access
+        let has_access = user_has_relay_access(&pool.0, user.id, relay.id)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+        if !has_access {
+            return Err(ServerFnError::new("Relay access denied"));
+        }
+
+        (user.id, user.username.clone())
     };
+
+    let username = effective_username;
+    let user_id = effective_user_id;
+    let relay_id = relay.id;
 
     let relay_for_upgrade = relay_name.clone();
     let registry_inner: SharedRegistry = registry.0.clone();
@@ -150,7 +194,17 @@ pub async fn ssh_terminal_ws(
             );
             if let Ok((socket, is_minimized, _dims)) = wait_for_client_ready(socket).await {
                 let registry_for_upgrade = registry_inner.clone();
-                handle_reattach(socket, existing, registry_for_upgrade, is_minimized).await;
+                let is_admin_viewer = target_user_id.is_some();
+                let admin_user_id_for_attach = if is_admin_viewer { Some(user_id) } else { None };
+                handle_reattach(
+                    socket,
+                    existing,
+                    registry_for_upgrade,
+                    is_minimized,
+                    is_admin_viewer,
+                    admin_user_id_for_attach,
+                )
+                .await;
             } else {
                 tracing::info!(
                     relay = %relay_for_upgrade,
@@ -228,6 +282,8 @@ async fn handle_reattach(
     session: std::sync::Arc<SshSession>,
     registry: SharedRegistry,
     initial_minimized: bool,
+    is_admin_viewer: bool,
+    admin_user_id: Option<i64>,
 ) {
     use rb_types::ssh::SshControl;
 
@@ -235,6 +291,13 @@ async fn handle_reattach(
     let mut is_minimized = initial_minimized;
 
     session.attach().await;
+
+    // Track admin viewer if this is an admin attachment
+    if is_admin_viewer {
+        if let Some(admin_id) = admin_user_id {
+            session.add_admin_viewer(admin_id).await;
+        }
+    }
 
     // Replay scrollback history so a reattached client sees the existing shell state
     let history = session.get_history().await;
@@ -364,14 +427,23 @@ async fn handle_reattach(
         session.decrement_viewers(rb_types::ssh::ConnectionType::Web).await;
     }
 
+    // Remove admin viewer tracking if this was an admin attachment
+    if is_admin_viewer {
+        if let Some(admin_id) = admin_user_id {
+            session.remove_admin_viewer(admin_id).await;
+        }
+    }
+
     tracing::info!(
         session_number = session.session_number,
         remaining_connections = remaining,
         explicit_close = explicit_close,
+        is_admin_viewer = is_admin_viewer,
         "Client detached from session"
     );
 
-    if explicit_close {
+    // Admin viewers should never trigger session cleanup, even on explicit close
+    if explicit_close && !is_admin_viewer {
         // Explicit close (user clicked X or SSH closed)
         if remaining == 0 {
             // Last client with explicit close - clean up immediately
@@ -390,7 +462,7 @@ async fn handle_reattach(
             );
         }
     } else {
-        // Unexpected disconnect (refresh, network drop)
+        // Unexpected disconnect (refresh, network drop) OR admin detach
         if remaining == 0 {
             // No more clients - detach with timeout for reattachment
             tracing::info!(
@@ -601,5 +673,6 @@ async fn handle_new_session(
         .await;
 
     // Hand off to reattach logic (which handles the WS loop)
-    handle_reattach(socket, session, registry, current_minimized).await;
+    // New sessions are never admin viewers (they own the session)
+    handle_reattach(socket, session, registry, current_minimized, false, None).await;
 }

@@ -539,16 +539,28 @@ Check Server side code with `cargo check -p rb-web --features server`
 - ✅ **Resize support**: `SshControl::Resize` is handled end-to-end and forwarded via `RelayBackend` to the relay PTY.
 - ✅ **Frontend Resize Integration**: `xterm.js` resize events are captured and sent to Rust via `setupTerminalResize` bridge, ensuring PTY size matches browser window.
 - ✅ **History/reattach** runs through the backend subscription for both origins.
-- ✅ **Mouse Support**: Standard VT mouse tracking works via the unified backend (xterm.js captures mouse events -> sends as escape 
+- ✅ **Mouse Support**: Standard VT mouse tracking works via the unified backend.
 - ✅  **Connection-type counters**: finer-grained web vs SSH connection/viewer counts surfaced in types/UI.
+- ✅ **Attach API & UI**: Admin users can attach to any active session (Web or SSH origin) via the Admin Panel.
+  - "View" button for own sessions (restores state).
+  - "Attach" button for other users' sessions (opens in spy/assist mode).
+- ✅ **Admin Attachment UX**:
+  - Distinct window title: `[{Username}] {relayname} #{session_number}`.
+  - Red "ADMIN VIEWING" warning bar when admin is attached.
+  - "Disconnect" icon (unplug) instead of "X" to detach without closing the session.
+  - Admin viewers are tracked separately from regular viewers.
 
-### Deferred / next-upsequences -> backend -> PTY).
-- ⏳ **Attach API & UI**: web attach to SSH-origin sessions (server function + UI hooks) still to build.
-- ⏳ **Additional SSH event polish**: review/control messages beyond resize/close; ensure parity across origins.
-
+### Deferred
+- ⏳ **Guest Sessions**: One-time links for external access (Phase 5/6).
+-    **LegacyChannelBackend** Cleanup and removal, or implemented as a more basic backend/renamed to localonly if we really have to keep it
+   
+**LegacyChannelBackend Usage**:
+- Only used for TUI management sessions (relay_id=0)
+- TUI sessions are local-only and don't connect to relay hosts
+- Can be fully removed once TUI is refactored (optional future work)
 
 ### Notes
-- The remaining work is primarily API/UI surface and richer telemetry; the backend unification is done.
+- The backend unification is complete, enabling seamless cross-origin session sharing.
 - **Fixed**: "Clean bytes" issue where `xterm.js` received raw bytes causing newline artifacts. Now properly decoding `Uint8Array` before writing to terminal.
 - **Mouse Support**: Standard mouse support works out-of-the-box because xterm.js sends mouse reporting sequences as standard input bytes. The unused `mouse_event` method and `MouseEvent` structs were removed from the backend to keep the API clean.
 - **Fixed**: SSH input regression where `session.backend.send()` was not awaited in `handle_data`, causing input from SSH clients to be dropped. Added missing `.await`.
@@ -648,6 +660,7 @@ Check Server side code with `cargo check -p rb-web --features server`
   - Mirror limits to frontend for better UX
 - [ ] **User-level overrides**:
   - Allow per-user session limit overrides in user settings so admins can set certain users to more or less than server defaults.
+- [ ] **Admin Attach Session** Sessions where admins attach to a third party users session should be outside of this limit and not count toward the target user or the admin's 4 session cap
 
 **Files to Modify**:
 - [crates/rb-web/src/app/api/ws/ssh.rs](../crates/rb-web/src/app/api/ws/ssh.rs)
@@ -728,89 +741,7 @@ Check Server side code with `cargo check -p rb-web --features server`
 
 ### Current Limitations
 1. **No persistent recording**: Sessions are only buffered in memory (64KB)
-2. **No resize support**: Terminal resize commands not implemented
-3. **No mouse events**: TUI applications with mouse support won't work
-4. **Client-side session cap**: 4-session limit not enforced server-side (client enforces it)
-5. **No window resizing**: Cannot resize windows with mouse, only drag to move
-
-### Known Bugs
-- None currently reported for Phase 2 features
-
----
-
-## Technical Architecture
-
-### Session Lifecycle
-
-```mermaid
-sequenceDiagram
-    participant Client as Browser
-    participant WS as WebSocket Handler
-    participant Registry as SessionRegistry
-    participant SSH as SSH Loop
-
-    Note over Client,SSH: New Session Creation
-    Client->>WS: Connect to /api/ssh/{relay}
-    WS->>Registry: create_next_session()
-    Registry-->>WS: (session_number, session)
-    WS->>SSH: Spawn SSH connection loop
-    SSH->>Registry: Append to history
-    WS->>Client: Send session_number
-
-    Note over Client,SSH: Reattachment
-    Client->>WS: Connect to /api/ssh/{relay}?session_number=X
-    WS->>Registry: get_session(user_id, relay_id, X)
-    Registry-->>WS: Existing session
-    WS->>Client: Replay history
-    WS->>Client: Subscribe to output
-
-    Note over Client,SSH: Explicit Close
-    Client->>WS: SshControl::Close
-    WS->>SSH: Close signal
-    SSH->>Registry: Mark as Closed
-    WS->>Registry: remove_session() (if last client)
-
-    Note over Client,SSH: Unexpected Disconnect
-    Client--xWS: Connection lost
-    WS->>Registry: Decrement connections
-    alt Last client
-        WS->>Registry: Detach with 120s timeout
-    else Other clients remain
-        Note over Registry: Keep session alive
-    end
-```
-
-### Multi-Viewer Architecture
-
-```mermaid
-graph TD
-    A[SSH Loop] -->|broadcast| B[output_tx]
-    B --> C[Client 1 WebSocket]
-    B --> D[Client 2 WebSocket]
-    B --> E[Client N WebSocket]
-
-    C -->|input| F[input_tx]
-    D -->|input| F
-    E -->|input| F
-    F --> A
-
-    A -->|append| G[History Buffer 64KB]
-    G -->|replay on attach| C
-    G -->|replay on attach| D
-    G -->|replay on attach| E
-```
-
-### Session State Transitions
-
-```mermaid
-stateDiagram-v2
-    [*] --> Attached: create_next_session()
-    Attached --> Detached: Last client disconnects (unexpected)
-    Attached --> Closed: Explicit close OR SSH EOF
-    Detached --> Attached: Client reattaches
-    Detached --> Closed: Timeout expires
-    Closed --> [*]: remove_session()
-```
+2. **Client-side session cap**: 4-session limit not enforced server-side (client enforces it)
 
 ---
 
@@ -871,9 +802,6 @@ These should be moved to server admin panel:
 ## References
 
 ### Related Documents
-- [WEB_SHELL_PLAN.md](../docs/WEB_SHELL_PLAN.md) - Original implementation plan (deprecated, no longer updated)
-- [AUTO_LOAD.md](../docs/AUTO_LOAD.md) - Auto-restore design (deprecated, no longer updated)
-- [WEB_ATTACH.md](../docs/WEB_ATTACH.md) - Detach/reattach architecture (deprecated, no longer updated)
 - [wip_genie_effect.html](../wip_genie_effect.html) - Minimize animation prototype, example of genie effect
 
 ### Key Files
@@ -883,24 +811,3 @@ These should be moved to server admin panel:
 - [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs) - Frontend session management
 - [crates/rb-web/src/app/components/terminal.rs](../crates/rb-web/src/app/components/terminal.rs) - Terminal component
 - [crates/rb-web/public/xterm-init.js](../crates/rb-web/public/xterm-init.js) - Terminal JavaScript bridge
-
----
-
-## Next Steps
-
-### Immediate Priorities (Phase 2 Completion)
-1. **LocalStorage integration** - Persist window geometry and restore sessions on page load (COMPLETED)
-2. **Real-time session sync** - Replace polling with WebSocket/SSE for session events (COMPLETED)
-3. **Window management polish** - Bounds checking, default positioning, resize support
-4. **User feedback** - Toast notifications and error handling
-
-### Short-Term Goals (Phase 3 Start)
-1. **Session administration** - Admin panel and user profile session views
-2. **Terminal resize** - Implement PTY resize support
-3. **Thumbnail animation** - Integrate genie effect for minimize
-
-### Long-Term Vision
-1. **Session recording & replay** - Full audit trail with playback UI
-2. **Session sharing** - Collaborative sessions with permission management
-3. **Server-enforced limits** - Move session cap to server configuration
-4. **Flexible restoration** - Per-device vs shared session modes

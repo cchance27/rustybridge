@@ -261,7 +261,13 @@ pub fn SessionWindow(session_id: String) -> Element {
                             let relay_name = s.relay_name.clone();
                             let same_relay_count = sessions_read.iter().filter(|sess| sess.relay_name == relay_name).count();
 
-                            let title = if same_relay_count > 1 {
+                            let title = if s.is_admin_attached {
+                                if let Some(target_user) = &s.attached_to_username {
+                                    format!("[{}] {} #{}", target_user, s.relay_name, s.session_number.unwrap_or(0))
+                                } else {
+                                    format!("[Unknown] {} #{}", s.relay_name, s.session_number.unwrap_or(0))
+                                }
+                            } else if same_relay_count > 1 {
                                 // Find our index among sessions with same relay name
                                 let index = sessions_read.iter()
                                     .filter(|sess| sess.relay_name == relay_name)
@@ -304,43 +310,86 @@ pub fn SessionWindow(session_id: String) -> Element {
                             },
                             "[]"
                         }
-                        button {
-                            class: "btn btn-xs btn-ghost text-error hover:bg-red-900",
-                            onclick: move |evt| {
-                                evt.stop_propagation();
-
-                                // If multiple viewers (active windows), confirm before closing
-                                if active_viewers > 1 {
-                                    show_close_confirm.set(true);
-                                } else {
-                                    session.close_with_command(&session_id_close);
+                        if s.is_admin_attached {
+                            button {
+                                class: "btn btn-xs btn-ghost text-error hover:bg-red-900 py-2",
+                                title: "Detach from session",
+                                onclick: move |evt| {
+                                    evt.stop_propagation();
+                                    // Admin just detaches locally
+                                    session.close(&session_id_close);
+                                },
+                                span { class: "w-4 h-4",
+                                    crate::app::components::icons::DisconnectIcon {}
                                 }
-                            },
-                            "X"
+                            }
+                        } else {
+                            button {
+                                class: "btn btn-xs btn-ghost text-error hover:bg-red-900",
+                                onclick: move |evt| {
+                                    evt.stop_propagation();
+
+                                    // If multiple viewers (active windows), confirm before closing
+                                    if active_viewers > 1 {
+                                        show_close_confirm.set(true);
+                                    } else {
+                                        session.close_with_command(&session_id_close);
+                                    }
+                                },
+                                "X"
+                            }
                         }
                     }
                 }
                 // Terminal Content
                 div { class: "flex-1 min-h-0 relative bg-black",
-                    // Multi-session warning bar - only show if multiple viewers have window open
-                    if active_viewers > 1 {
+                    // Multi-session warning bar - only show if multiple viewers have window open OR if admin is viewing
+                    if active_viewers > 1 || !s.admin_viewers.is_empty() {
                         div {
-                            class: "bg-yellow-600 items-center text-black text-xs px-3 py-1.5 flex justify-between gap-2 border-b border-yellow-700",
+                            class: if !s.admin_viewers.is_empty() {
+                                "bg-red-900/90 text-white items-center text-xs px-3 py-1.5 flex justify-between gap-2 border-b border-red-700"
+                            } else {
+                                "bg-yellow-600 items-center text-black text-xs px-3 py-1.5 flex justify-between gap-2 border-b border-yellow-700"
+                            },
                             div {
-                                class: "flex flex-row",
-                                svg {
-                                    class: "w-4 h-4 flex-shrink-0",
-                                    view_box: "0 0 20 20",
-                                    fill: "currentColor",
-                                    path {
-                                        fill_rule: "evenodd",
-                                        d: "M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z",
-                                        clip_rule: "evenodd"
+                                class: "flex flex-row items-center gap-2",
+                                if !s.admin_viewers.is_empty() {
+                                    svg {
+                                        class: "w-4 h-4 flex-shrink-0 text-white animate-pulse",
+                                        view_box: "0 0 24 24",
+                                        fill: "none",
+                                        stroke: "currentColor",
+                                        stroke_width: "2",
+                                        path {
+                                            stroke_linecap: "round",
+                                            stroke_linejoin: "round",
+                                            d: "M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                                        }
+                                        path {
+                                            stroke_linecap: "round",
+                                            stroke_linejoin: "round",
+                                            d: "M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+                                        }
                                     }
-                                }
-                                span {
-                                    class: "font-semibold",
-                                    "{active_viewers} viewers connected to this shell"
+                                    span {
+                                        class: "font-bold uppercase tracking-wider",
+                                        "ADMIN VIEWING"
+                                    }
+                                } else {
+                                    svg {
+                                        class: "w-4 h-4 flex-shrink-0",
+                                        view_box: "0 0 20 20",
+                                        fill: "currentColor",
+                                        path {
+                                            fill_rule: "evenodd",
+                                            d: "M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z",
+                                            clip_rule: "evenodd"
+                                        }
+                                    }
+                                    span {
+                                        class: "font-semibold",
+                                        "{active_viewers} viewers connected to this shell"
+                                    }
                                 }
                             }
                             div {
@@ -357,6 +406,7 @@ pub fn SessionWindow(session_id: String) -> Element {
                         id: format!("term-{}", s.id),
                         relay_name: Some(s.relay_name.clone()),
                         session_number: s.session_number,
+                        target_user_id: s.target_user_id,
                         minimized: s.minimized,
                         on_close: move |_| {
                             // When the SSH session ends, close the window

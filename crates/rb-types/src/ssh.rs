@@ -216,6 +216,9 @@ pub struct UserSessionSummary {
     pub viewers: ConnectionAmounts,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub last_active_at: chrono::DateTime<chrono::Utc>,
+    /// Admin viewer user IDs (users with server:attach_any viewing this session)
+    #[serde(default)]
+    pub admin_viewers: Vec<i64>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]

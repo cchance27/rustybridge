@@ -58,6 +58,7 @@ pub async fn list_all_sessions() -> Result<Vec<AdminSessionSummary>, ServerFnErr
                 viewers: rb_types::ssh::ConnectionAmounts { web: 1, ssh: 0 },
                 created_at: web_session.connected_at,
                 last_active_at: web_session.connected_at,
+                admin_viewers: Vec::new(),
             },
         });
     }
@@ -102,6 +103,7 @@ pub async fn list_my_sessions() -> Result<Vec<UserSessionSummary>, ServerFnError
             viewers: rb_types::ssh::ConnectionAmounts { web: 1, ssh: 0 },
             created_at: web_session.connected_at,
             last_active_at: web_session.connected_at,
+            admin_viewers: Vec::new(),
         });
     }
 
@@ -144,17 +146,23 @@ pub async fn close_session(user_id: i64, relay_id: i64, session_number: u32) -> 
 pub async fn attach_to_session(user_id: i64, relay_id: i64, session_number: u32) -> Result<String, ServerFnError> {
     let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    // Only allow attaching to your own sessions
-    if user.id != user_id {
-        return Err(ServerFnError::new("Cannot attach to another user's session"));
-    }
+    // Check for server:attach_any claim
+    use state_store::ClaimType;
+    let has_attach_any = crate::server::auth::guards::ensure_claim(&auth, &ClaimType::Custom("server:attach_any".to_string())).is_ok();
 
-    // Verify relay access
-    let has_access = user_has_relay_access(&*pool, user.id, relay_id)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-    if !has_access {
-        return Err(ServerFnError::new("Relay access denied"));
+    if !has_attach_any {
+        // Only allow attaching to your own sessions
+        if user.id != user_id {
+            return Err(ServerFnError::new("Cannot attach to another user's session"));
+        }
+
+        // Verify relay access
+        let has_access = user_has_relay_access(&*pool, user.id, relay_id)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+        if !has_access {
+            return Err(ServerFnError::new("Relay access denied"));
+        }
     }
 
     // Ensure the session exists and matches the relay/user

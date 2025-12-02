@@ -7,7 +7,7 @@ use rb_types::ssh::SessionEvent;
 use crate::app::{
     api::{
         sessions::{close_session, list_all_sessions}, ws::session_events::ssh_web_events
-    }, components::{
+    }, auth::hooks::use_auth, components::{
         StructuredTooltip, Table, TooltipSection, icons::{BrowserIcon, TerminalIcon}, use_toast
     }, session::provider::use_session
 };
@@ -20,9 +20,12 @@ pub fn SessionsSection() -> Element {
 
         list_all_sessions().await
     });
+
     let toast = use_toast();
-    let session = use_session();
-    let client_id = session.current_client_id.read().clone();
+    let session_ctx = use_session();
+    let auth = use_auth();
+    let current_user_id = auth.read().user.as_ref().map(|u| u.id);
+    let client_id = session_ctx.current_client_id.read().clone();
     let tick = use_signal(|| 0u64);
 
     // Fallback: If resource hasn't loaded after a reasonable time and WebSocket fails,
@@ -229,7 +232,27 @@ pub fn SessionsSection() -> Element {
                                                                 last_active.clone()
                                                             } }
                                                         }
-                                                        td { class: "text-right",
+                                                        td { class: "text-right flex gap-1 justify-end",
+                                                            if current_user_id != Some(session.user_id) {
+                                                                button {
+                                                                    class: "btn btn-xs btn-secondary",
+                                                                    onclick: move |_| {
+                                                                        session_ctx.open_restored(
+                                                                            session.user_id,
+                                                                            session.session.relay_name.clone(),
+                                                                            session.session.relay_id,
+                                                                            session.session.session_number,
+                                                                            false,
+                                                                            session.session.connections.clone(),
+                                                                            session.session.viewers.clone(),
+                                                                            true,
+                                                                            Some(session.user_id),
+                                                                            Some(session.username.clone()),
+                                                                        );
+                                                                    },
+                                                                    "Attach"
+                                                                }
+                                                            }
                                                             button {
                                                                 class: "btn btn-xs btn-error",
                                                                 onclick: move |_| handle_close(session.user_id, session.session.relay_id, session.session.session_number),
