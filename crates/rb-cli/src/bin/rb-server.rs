@@ -48,9 +48,13 @@ async fn main() -> Result<()> {
         None => {
             if let Some(web_cfg) = web_config {
                 let server_cfg = args.to_run_config();
+                let registry = std::sync::Arc::new(server_core::sessions::SessionRegistry::new());
 
-                let mut server_task = tokio::spawn(async move { run_ssh_server(server_cfg).await });
-                let mut web_task = tokio::spawn(async move { run_web_server(web_cfg, rb_web::app_root::app_root).await });
+                let registry_for_ssh = registry.clone();
+                let registry_for_web = registry.clone();
+
+                let mut server_task = tokio::spawn(async move { run_ssh_server(server_cfg, registry_for_ssh).await });
+                let mut web_task = tokio::spawn(async move { run_web_server(web_cfg, rb_web::app_root::app_root, registry_for_web).await });
 
                 tokio::select! {
                     res = &mut server_task => {
@@ -64,7 +68,7 @@ async fn main() -> Result<()> {
                     }
                 }
             } else {
-                run_ssh_server(args.to_run_config()).await?;
+                run_ssh_server(args.to_run_config(), std::sync::Arc::new(server_core::sessions::SessionRegistry::new())).await?;
             }
         }
         Some(ServerSubcommand::Hosts { cmd }) => match cmd {

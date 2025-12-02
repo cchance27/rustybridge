@@ -13,6 +13,10 @@ pub fn SessionWindow(session_id: String) -> Element {
     let current_session = sessions.read().iter().find(|s| s.id == session_id).cloned();
 
     if let Some(s) = current_session {
+        // SSH-origin relay sessions are not attachable from web; don't render a window
+        if !s.attachable {
+            return rsx! {};
+        }
         // Use pre-calculated z-index from session state
         let z_index = if s.fullscreen {
             // When fullscreen, add 40 to ensure it's always on top of windowed sessions

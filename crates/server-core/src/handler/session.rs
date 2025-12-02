@@ -1,6 +1,6 @@
 //! Terminal session and TUI management.
 
-use rb_types::relay::HostkeyReview;
+use rb_types::{relay::HostkeyReview, ssh::TUIApplication};
 use russh::{ChannelId, Pty, server::Session};
 use tracing::info;
 use tui_core::{AppSession, backend::RemoteBackend, utils::desired_rect};
@@ -20,40 +20,47 @@ impl ServerHandler {
         session.exit_status_request(channel, 0)?;
         session.close(channel)?;
         self.channel = None;
+
+        // Clear active app presence (fire-and-forget)
+        self.set_active_app_on_session(None);
+
+        // Remove session from registry
+        if let Some(session_number) = self.session_number
+            && let Some(user_id) = self.user_id
+        {
+            let relay_id = self.active_relay_id.unwrap_or(0);
+            let registry = self.registry.clone();
+            tokio::spawn(async move {
+                // Check if session is detached before removing
+                let should_remove = if let Some(session) = registry.get_session(user_id, relay_id, session_number).await {
+                    let state = session.state.read().await;
+                    !matches!(*state, crate::sessions::SessionState::Detached { .. })
+                } else {
+                    true
+                };
+
+                if should_remove {
+                    if let Some(session) = registry.get_session(user_id, relay_id, session_number).await {
+                        session.close().await;
+                    }
+                    registry.remove_session(user_id, relay_id, session_number).await;
+                }
+            });
+        }
+
         self.log_disconnect("client requested exit");
         Ok(())
     }
 
     /// Initialise the shell, including a fresh TUI instance and remote terminal.
     pub(super) async fn init_shell(&mut self) -> Result<(), russh::Error> {
-        let username = self.username.as_deref().unwrap_or("unknown");
-
         // FIXME: this feels like it should be a helper  that we can call from anywhere since its useful for TUI and Web, etc
         // Check for management access via claims
-        // Users with any *:view claim or wildcard get management access
-        let can_manage = if let Ok(handle) = state_store::server_db().await {
-            let pool = handle.into_pool();
-            if let Ok(mut conn) = pool.acquire().await {
-                if let Some(user_id) = state_store::fetch_user_id_by_name(&mut *conn, username).await.ok().flatten() {
-                    if let Ok(claims) = state_store::get_user_claims_by_id(&mut conn, user_id).await {
-                        claims.iter().any(|c| {
-                            let claim_str = c.to_string();
-                            claim_str == "*" || claim_str.ends_with(":view")
-                        })
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
-        } else {
-            false
-        };
+        let username = self.username.as_deref().unwrap_or("unknown");
+        let (can_manage, user_id) = Self::check_management_access(username).await;
+        self.user_id = user_id;
 
-        let (app, app_name): (Box<dyn tui_core::TuiApp>, &str) = if can_manage {
+        let (app, app_name, active_app): (Box<dyn tui_core::TuiApp>, &str, Option<TUIApplication>) = if can_manage {
             (
                 Box::new(
                     create_management_app(None)
@@ -61,6 +68,7 @@ impl ServerHandler {
                         .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?,
                 ),
                 "ManagementApp",
+                Some(TUIApplication::Management),
             )
         } else {
             (
@@ -70,6 +78,7 @@ impl ServerHandler {
                         .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?,
                 ),
                 "RelaySelectorApp",
+                Some(TUIApplication::RelaySelector),
             )
         };
 
@@ -80,6 +89,39 @@ impl ServerHandler {
             "unknown".to_string()
         };
         info!(app_name, username, peer_addr, "tui launched");
+
+        // Register the session
+        let (input_tx, _) = tokio::sync::mpsc::channel(100); // Dummy channel for now, as we handle input directly
+        let (output_tx, _) = tokio::sync::broadcast::channel(100);
+        let (close_tx, _) = tokio::sync::broadcast::channel(1);
+
+        // Extract IP and User Agent
+        let ip_address = self.peer_addr.map(|addr| addr.ip().to_string());
+        // TODO: Extract client version string from russh session if possible, for now None
+        let user_agent = None;
+
+        let (session_number, _) = self
+            .registry
+            .create_next_session(
+                self.user_id.unwrap_or(0),
+                0, // System/Shell relay ID
+                "Shell".to_string(),
+                username.to_string(),
+                input_tx,
+                output_tx,
+                close_tx,
+                ip_address,
+                user_agent,
+            )
+            .await;
+        self.session_number = Some(session_number);
+        self.tui_session_number = Some(session_number);
+        self.active_relay_id = Some(0);
+
+        // Surface the active TUI app to observers
+        if let Some(app_kind) = active_app {
+            self.set_active_app_on_session(Some(app_kind));
+        }
 
         let rect = desired_rect(self.view_size());
         let backend = RemoteBackend::new(rect);
@@ -125,7 +167,11 @@ impl ServerHandler {
         };
         info!(app_name, username, peer_addr, "tui switched");
 
-        self.show_app_by_name(app_name, None, session, channel).await
+        let result = self.show_app_by_name(app_name, None, session, channel).await;
+        if result.is_ok() {
+            self.set_active_app_on_session(Self::map_app_name(app_name));
+        }
+        result
     }
 
     pub(super) async fn reload_management_app(
@@ -179,7 +225,11 @@ impl ServerHandler {
         let app = create_app_by_name(self.username.as_deref(), name, selected_tab)
             .await
             .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
-        self.set_and_render_app(app, session, channel)
+        let result = self.set_and_render_app(app, session, channel);
+        if result.is_ok() {
+            self.set_active_app_on_session(Self::map_app_name(name));
+        }
+        result
     }
 
     /// Push accumulated escape sequences toward the remote SSH channel.
@@ -195,6 +245,41 @@ impl ServerHandler {
 
     pub(super) fn drop_terminal(&mut self) {
         self.app_session = None;
+    }
+
+    fn set_active_app_on_session(&self, app: Option<TUIApplication>) {
+        if let (Some(user_id), Some(session_number)) = (self.user_id, self.session_number) {
+            let relay_id = self.active_relay_id.unwrap_or(0);
+            let registry = self.registry.clone();
+            tokio::spawn(async move {
+                if let Some(session) = registry.get_session(user_id, relay_id, session_number).await {
+                    session.set_active_app(app).await;
+                }
+            });
+        }
+    }
+
+    fn map_app_name(name: &str) -> Option<TUIApplication> {
+        match name {
+            "Management" | "ManagementApp" => Some(TUIApplication::Management),
+            "RelaySelector" | "RelaySelectorApp" => Some(TUIApplication::RelaySelector),
+            _ => None,
+        }
+    }
+
+    /// Remove the TUI session from the registry (fire-and-forget).
+    pub(super) fn end_tui_session(&mut self) {
+        if let (Some(user_id), Some(tui_number)) = (self.user_id, self.tui_session_number) {
+            // TUI sessions always use relay_id 0
+            let registry = self.registry.clone();
+            self.tui_session_number = None;
+            tokio::spawn(async move {
+                if let Some(session) = registry.get_session(user_id, 0, tui_number).await {
+                    session.close().await;
+                }
+                registry.remove_session(user_id, 0, tui_number).await;
+            });
+        }
     }
 
     /// Switch the remote PTY into the alternate screen buffer once per session.
@@ -299,6 +384,18 @@ impl ServerHandler {
 
             self.drop_terminal();
             self.channel = None;
+            self.set_active_app_on_session(None);
+            // Mark session closed for observers
+            if let (Some(user_id), Some(session_number)) = (self.user_id, self.session_number) {
+                let relay_id = self.active_relay_id.unwrap_or(0);
+                let registry = self.registry.clone();
+                tokio::spawn(async move {
+                    if let Some(session) = registry.get_session(user_id, relay_id, session_number).await {
+                        session.close().await;
+                    }
+                    registry.remove_session(user_id, relay_id, session_number).await;
+                });
+            }
             self.log_disconnect("channel closed");
         }
         Ok(())

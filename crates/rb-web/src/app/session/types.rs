@@ -39,6 +39,8 @@ pub struct Session {
     pub active_connections: u32,
     // Track number of active viewers (non-minimized windows)
     pub active_viewers: u32,
+    // Whether this session can be attached to from the web (web-origin vs ssh-origin)
+    pub attachable: bool,
 }
 
 impl Session {
@@ -64,6 +66,7 @@ impl Session {
             session_number: None,
             active_connections: 1, // Default to 1 (this connection)
             active_viewers: 1,     // Default to 1 (this connection)
+            attachable: true,      // New windows opened from web are attachable
         }
     }
 }

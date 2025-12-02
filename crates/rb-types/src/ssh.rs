@@ -165,23 +165,59 @@ pub struct SshKey {
     pub created_at: i64,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum SessionStateSummary {
     Attached,
     Detached,
     Closed,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SessionKind {
+    TUI,   // Direct SSH to bridge
+    Relay, // SSH via bridge to target
+    Web,   // Web Dashboard Presence
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum TUIApplication {
+    Management,
+    RelaySelector,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct UserSessionSummary {
     pub relay_id: i64,
     pub relay_name: String,
     pub session_number: u32,
+    pub kind: SessionKind,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
     pub state: SessionStateSummary,
+    /// Whether the user has been active (typed) recently
+    #[serde(default)]
+    pub active_recent: bool,
+    /// The name of the active TUI application (e.g. "Management", "Relay Selector")
+    #[serde(default)]
+    pub active_app: Option<TUIApplication>,
+    /// When the session was detached (if applicable)
+    #[serde(default)]
+    pub detached_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Timeout for detached sessions in seconds (if applicable)
+    #[serde(default)]
+    pub detached_timeout_secs: Option<u32>,
     pub active_connections: u32,
     pub active_viewers: u32,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub last_active_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AdminSessionSummary {
+    pub user_id: i64,
+    pub username: String,
+    #[serde(flatten)]
+    pub session: UserSessionSummary,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -189,6 +225,7 @@ pub enum SshControl {
     Close,
     Resize { cols: u32, rows: u32 },
     Minimize(bool),
+    Ready,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -209,9 +246,12 @@ pub struct SshServerMsg {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct WebSessionMeta {
     pub id: String, // Unique ID for the connection
+    pub user_id: i64,
+    pub username: String,
     pub ip: String,
     pub user_agent: Option<String>,
     pub connected_at: chrono::DateTime<chrono::Utc>,
+    pub last_seen: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

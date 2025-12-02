@@ -102,6 +102,34 @@ impl ServerHandler {
                                 let options_arc = Arc::new(options);
                                 let host_clone = host.clone();
                                 let username_clone = username.clone();
+                                
+                                // Register the session
+                                let (input_tx, _) = tokio::sync::mpsc::channel(100); // Dummy for now
+                                let (output_tx, _) = tokio::sync::broadcast::channel(100);
+                                let (close_tx, _) = tokio::sync::broadcast::channel(1);
+                                let ip_address = self.peer_addr.map(|addr| addr.ip().to_string());
+
+                                let (session_number, _) = self
+                                    .registry
+                                    .create_next_session(
+                                        user_id,
+                                        host.id,
+                                        host.name.clone(),
+                                        username.clone(),
+                                        input_tx,
+                                        output_tx,
+                                        close_tx,
+                                        ip_address,
+                                        None,
+                                    )
+                                    .await;
+                                self.session_number = Some(session_number);
+                                self.user_id = Some(user_id);
+                                self.active_relay_id = Some(host.id);
+
+                                // We are transitioning out of the TUI; drop any existing TUI session (relay_id = 0)
+                                // so dashboards don't show both the TUI and the active relay at once.
+                                self.end_tui_session();
 
                                 // Spawn background connect; result delivered via oneshot
                                 let (tx_done, rx_done) = oneshot::channel();

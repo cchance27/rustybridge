@@ -452,53 +452,101 @@ Check Server side code with `cargo check -p rb-web --features server`
 
 ---
 
-## 📋 Phase 3: Future Enhancements
-
-### Session Administration & Monitoring
+## ✅ Phase 3: Session Administration & Monitoring (COMPLETE)
 
 > [!NOTE]
 > **Goal**: Provide visibility into all active sessions for admins and users
-> **Reminder**: Reuse components where possible to avoid code duplication, plan ahead and check for components and how we store svg components and other items that we reuse, make components as needed.
+> **Status**: All planned features implemented with additional enhancements
 
-#### Planned Features
-- [ ] **Admin panel**:
-  - View all active sessions across all users
-  - Display: user, relay, session_number, state, connection count, duration
-  - Show both web-shell sessions and SSH→relay→SSH sessions
-  - Include IP info and connection metadata
-  - Ability to forcefully close sessions to brek a relay connection from admin.
-- [ ] **User profile page**:
-  - Show user's own active sessions web, ssh, and relays so we can visually see people logged into our TUI, into our web, or that have active relays.
-  - Display connection details
-  - Allow user to close their own sessions remotely
-- [ ] **Session metadata tracking**:
-  - Connection time, IP address, user agent
-  - Reconnect events
-  - How relay was initiated (ssh, web)
-  - Duration, last activity timestamp
+### Implemented Features
 
-**New Files**:
-- `crates/rb-web/src/app/pages/admin/sessions.rs`
-- `crates/rb-web/src/app/pages/profile/sessions.rs`
+#### ✅ Admin Panel
+**Location**: [crates/rb-web/src/app/pages/server/sessions.rs](../crates/rb-web/src/app/pages/server/sessions.rs)
 
-**Database Changes**:
-- Consider adding session metadata table for persistent audit trail
+- ✅ View all active sessions across all users
+- ✅ Display: user, relay, session_number, state, connection count, viewers, duration
+- ✅ Show **three categories**: SSH Relay sessions, SSH TUI sessions, Web sessions
+- ✅ Include IP info and connection metadata (IP, user agent, created_at, last_active_at)
+- ✅ Ability to forcefully close sessions (admin can terminate any session)
+- ✅ Real-time updates via WebSocket with debounced refresh
+- ✅ Categorized tables with separate sections for clarity
+- ✅ State badges (Attached/Detached/Closed) with contextual colors and tooltips
+- ✅ Live countup timers showing "Connected for X" duration
+- ✅ Active/idle status indicators based on recent activity
+- ✅ Browser origin tracking (Web vs SSH for relay sessions)
+- ✅ Detached session timeout tracking with visual indicators
+
+#### ✅ User Profile Page
+**Location**: [crates/rb-web/src/app/pages/profile/sessions.rs](../crates/rb-web/src/app/pages/profile/sessions.rs)
+
+- ✅ Show user's own active sessions (web, ssh, relays)
+- ✅ Categorized display matching admin panel structure
+- ✅ Display connection details with full metadata
+- ✅ Allow user to close their own sessions remotely
+- ✅ Real-time sync via WebSocket for instant updates
+- ✅ Visual distinction between session types
+
+#### ✅ Session Metadata Tracking
+**Locations**: 
+- [crates/server-core/src/sessions.rs](../crates/server-core/src/sessions.rs)
+- [crates/rb-types/src/ssh.rs](../crates/rb-types/src/ssh.rs)
+- [crates/rb-web/src/app/api/ws/ssh.rs](../crates/rb-web/src/app/api/ws/ssh.rs)
+
+- ✅ Connection time (`created_at` timestamp)
+- ✅ IP address tracking (from `X-Forwarded-For` and `X-Real-IP` headers)
+- ✅ User agent tracking (browser identification)
+- ✅ Session origin detection (Web vs SSH login)
+- ✅ Duration calculation (from `created_at`)
+- ✅ Last activity timestamp (`last_active_at` with 30s idle threshold)
+- ✅ Active/idle status indicators
+- ✅ TUI application type tracking (Management vs Relay Selector)
+- ✅ Connection count tracking (`active_connections`)
+- ✅ Viewer count tracking (`active_viewers` - non-minimized connections)
+- ✅ Session state tracking (Attached/Detached/Closed)
+- ✅ Detached timestamp and timeout for reattachment
+
+#### ✅ Backend API & Authorization
+**Location**: [crates/rb-web/src/app/api/sessions.rs](../crates/rb-web/src/app/api/sessions.rs)
+
+- ✅ `list_all_sessions()` - Admin-only endpoint (requires `server:view` claim)
+- ✅ `close_session(user_id, relay_id, session_number)` - Admin-only (requires `server:edit` claim)
+- ✅ Returns `AdminSessionSummary` with user attribution
+- ✅ Includes both SSH sessions and Web presence tracking
+- ✅ Server claims properly enforced via RBAC system
+
+**Files Created**:
+- ✅ `crates/rb-web/src/app/pages/server/mod.rs` - Server admin module
+- ✅ `crates/rb-web/src/app/pages/server/sessions.rs` - Admin sessions page
+- ✅ `crates/rb-web/src/app/pages/profile/sessions.rs` - User sessions page
+- ✅ `crates/rb-web/src/app/api/sessions.rs` - Session management API
+- ✅ `crates/state-store/migrations/server/20251201020000_add_server_claim.sql` - Server claim migration
+
+**Additional Enhancements**:
+- Real-time WebSocket updates for instant session changes
+- Debounced UI refresh to optimize performance
+- Fallback resource restart mechanism for reliability
+- Comprehensive error handling and toast notifications
+- Relative time formatting with absolute time tooltips
+- Browser-local time display using JavaScript Date API
 
 ---
+
+## 📋 Phase 4: Future Improvements
 
 ### Advanced Terminal Features
 > **Reminder**: Reuse components where possible to avoid code duplication, plan ahead and check for components and how we store svg components and other items that we reuse, make components as needed.
 
 #### Remaining Work
-- [ ] **Terminal resize support**:
+- 
+- [ ] **Web Terminal resize support**:
   - Implement `SshControl::Resize` handling in server
   - Send resize commands when window/terminal size changes
   - Proper PTY resize via russh
-- [ ] **Mouse events**:
+- [ ] **Web Mouse events**:
   - Enable xterm.js mouse tracking
   - Forward mouse events to SSH for TUI support
   - Add toggle for mouse mode (some users may prefer text selection)
-- [ ] **Additional SSH events**:
+- [ ] **Additional Web SSH events**:
   - Review `SshClientMsg` and `SshServerMsg` for missing functionality
   - Implement best practices for SSH event handling
 
@@ -507,6 +555,8 @@ Check Server side code with `cargo check -p rb-web --features server`
 - [crates/rb-web/public/xterm-init.js](../crates/rb-web/public/xterm-init.js)
 
 ---
+
+## 📋 Phase 5: UI Improvements
 
 ### Thumbnail Minimize Animation
 
@@ -539,6 +589,8 @@ Check Server side code with `cargo check -p rb-web --features server`
 - Modify: [crates/rb-web/src/app/session/components/session_window.rs](../crates/rb-web/src/app/session/components/session_window.rs)
 
 ---
+
+## 📋 Phase 6: Auditing and Security
 
 ### Session Auditing & Replay
 

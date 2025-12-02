@@ -24,16 +24,21 @@ impl ServerHandler {
                     self.auth_tx = Some(auth_tx);
                     self.pending_relay = None;
                     self.prompt_sink_active = false; // relay established; prompts will come from remote shell now
+                    self.touch_session();
+                    // We are leaving the TUI; retire the TUI session so it disappears from dashboards.
+                    self.end_tui_session();
                 }
                 Ok(Err(err)) => {
                     let _ = self.send_line(session, channel, &format!("failed to start relay: {}", err));
                     self.pending_relay = None;
+                    self.touch_session();
                     return self.handle_exit(session, channel);
                 }
                 Err(oneshot::error::TryRecvError::Empty) => {}
                 Err(oneshot::error::TryRecvError::Closed) => {
                     let _ = self.send_line(session, channel, "failed to start relay: channel closed");
                     self.pending_relay = None;
+                    self.touch_session();
                     return self.handle_exit(session, channel);
                 }
             }
@@ -134,6 +139,7 @@ impl ServerHandler {
                 }
                 self.pending_auth = None;
             }
+            self.touch_session();
             return Ok(());
         }
 
@@ -141,6 +147,7 @@ impl ServerHandler {
             if !data.is_empty() {
                 relay.send(data.to_vec());
             }
+            self.touch_session();
             return Ok(());
         }
 
@@ -159,6 +166,19 @@ impl ServerHandler {
                 .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
             self.process_action(action, session, channel).await?;
         }
+        self.touch_session();
         Ok(())
+    }
+
+    fn touch_session(&self) {
+        if let (Some(user_id), Some(session_number)) = (self.user_id, self.session_number) {
+            let relay_id = self.active_relay_id.unwrap_or(0);
+            let registry = self.registry.clone();
+            tokio::spawn(async move {
+                if let Some(session) = registry.get_session(user_id, relay_id, session_number).await {
+                    session.touch().await;
+                }
+            });
+        }
     }
 }

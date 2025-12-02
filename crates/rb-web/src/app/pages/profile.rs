@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+mod sessions;
 
 use crate::{
     app::{
@@ -131,7 +132,7 @@ pub fn ProfilePage() -> Element {
                     }
 
                     // OIDC Section
-                    div { class: "card bg-base-100 shadow-xl",
+                    div { class: "card bg-base-200 shadow-xl self-start w-full",
                         div { class: "card-body",
                             h2 { class: "card-title", "Identity Provider" }
                             p { "Link your account to an external identity provider for single sign-on." }
@@ -184,7 +185,7 @@ pub fn ProfilePage() -> Element {
                     }
 
                     // SSH Keys Section
-                    div { class: "card bg-base-100 shadow-xl",
+                    div { class: "card bg-base-200 shadow-xl self-start w-full",
                         div { class: "card-body",
                             div { class: "flex justify-between items-center mb-4",
                                 div {
@@ -270,7 +271,7 @@ pub fn ProfilePage() -> Element {
                     }
 
                     // Web Settings Section
-                    div { class: "card bg-base-100 shadow-xl",
+                    div { class: "card bg-base-200 shadow-xl self-start w-full",
                         div { class: "card-body",
                             h2 { class: "card-title", "Web Settings" }
                             p { class: "text-sm opacity-70 mb-4", "Configure browser-specific preferences." }
@@ -320,6 +321,9 @@ pub fn ProfilePage() -> Element {
                             }
                         }
                     }
+
+                    // Sessions Section
+                    sessions::SessionsSection {}
                 }
 
                 // Add Key Modal

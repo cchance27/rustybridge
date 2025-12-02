@@ -60,14 +60,38 @@ struct SessionStorageData {
 }
 
 pub fn use_session_provider() -> SessionContext {
+    // Try to get existing context first - if it exists, return it immediately
+    if let Some(existing_context) = try_consume_context::<SessionContext>() {
+        #[cfg(feature = "web")]
+        web_sys::console::log_1(&"SessionProvider: Reusing existing context".into());
+        return existing_context;
+    }
+
+    #[cfg(feature = "web")]
+    web_sys::console::log_1(&"SessionProvider: Creating NEW context and WebSocket connections".into());
+
     let sessions = use_signal(Vec::new);
     let drag_state = use_signal(|| None);
     let resize_state = use_signal(|| None);
     let snap_preview = use_signal(|| None);
     let active_web_sessions = use_signal(Vec::new);
 
-    // Generate a unique client ID for this browser tab session
-    let current_client_id = use_signal(|| uuid::Uuid::new_v4().to_string());
+    // Generate or retrieve persistent client ID for this browser tab
+    // Use sessionStorage so it persists across page refreshes but not across tabs
+    let current_client_id = use_signal(|| {
+        let storage = BrowserStorage::new(StorageType::Session);
+        if let Some(existing_id) = storage.get("rb-client-id") {
+            #[cfg(feature = "web")]
+            web_sys::console::log_1(&format!("Reusing existing client ID: {}", existing_id).into());
+            existing_id
+        } else {
+            let new_id = uuid::Uuid::new_v4().to_string();
+            let _ = storage.set("rb-client-id", &new_id);
+            #[cfg(feature = "web")]
+            web_sys::console::log_1(&format!("Generated new client ID: {}", new_id).into());
+            new_id
+        }
+    });
 
     // Load snap_to_navbar preference from localStorage (default: true = snap below navbar)
     let snap_to_navbar = use_signal(|| {
@@ -104,19 +128,35 @@ pub fn use_session_provider() -> SessionContext {
     let auth = use_auth();
 
     // When auth becomes ready after initial mount, restore any sessions we deferred
+    // Use a memo to track if restoration is in progress to prevent duplicate attempts
+    let restoration_in_progress = use_signal(|| false);
+
     {
         let mut pending_restores = pending_restores;
+        let mut restoration_in_progress = restoration_in_progress;
         let context = context;
         let auth = auth;
         #[cfg(feature = "web")]
         let toast = toast;
 
         use_effect(move || {
-            if let Some(user) = auth.read().user.clone()
-                && let Some(summaries) = pending_restores.write().take() {
+            // Direct reads - proper reactive tracking without intermediate variables
+            let pending = pending_restores.read().clone();
+            let user = auth.read().user.clone();
+            let in_progress = *restoration_in_progress.read();
+
+            // Only proceed if we have both pending sessions and auth, and not already restoring
+            if let (Some(summaries), Some(user)) = (pending, user) {
+                if !in_progress {
+                    // Mark as in progress and clear pending
+                    restoration_in_progress.set(true);
+                    pending_restores.set(None);
+
                     let context = context;
                     #[cfg(feature = "web")]
                     let toast = toast;
+                    let mut restoration_in_progress = restoration_in_progress;
+
                     spawn(async move {
                         let mut restored_relay_names = Vec::new();
                         let mut active_session_keys = HashSet::new();
@@ -139,6 +179,7 @@ pub fn use_session_provider() -> SessionContext {
                             let key = context.get_session_storage_key(user.id, session_summary.relay_id, session_summary.session_number);
                             active_session_keys.insert(key);
 
+                            let attachable = session_summary.user_agent.is_some();
                             context.open_restored(
                                 user.id,
                                 session_summary.relay_name.clone(),
@@ -147,6 +188,7 @@ pub fn use_session_provider() -> SessionContext {
                                 false,
                                 session_summary.active_connections,
                                 session_summary.active_viewers,
+                                attachable,
                             );
                             restored_relay_names.push(session_summary.relay_name);
                         }
@@ -174,15 +216,29 @@ pub fn use_session_provider() -> SessionContext {
                                 let _ = storage.remove(&key);
                             }
                         }
+
+                        // Mark restoration as complete
+                        restoration_in_progress.set(false);
                     });
                 }
+            }
         });
     }
+    // WebSocket connection with proper lifecycle management
     let client_id_val = current_client_id.peek().clone();
     let mut ws = use_websocket(move || {
         let client_id = client_id_val.clone();
-        async move { ssh_web_events(client_id, WebSocketOptions::new()).await }
+        #[cfg(feature = "web")]
+        web_sys::console::log_1(&format!("Opening WebSocket connection with client_id: {}", client_id).into());
+        async move { ssh_web_events(client_id, None, WebSocketOptions::new()).await }
     });
+
+    // Log component lifecycle for debugging
+    use_effect(move || {
+        #[cfg(feature = "web")]
+        web_sys::console::log_1(&"SessionProvider mounted, WebSocket connection active".into());
+    });
+
     let auth = use_auth();
 
     let mut pending_restores_clone = pending_restores;
@@ -240,6 +296,7 @@ pub fn use_session_provider() -> SessionContext {
                             // Get user_id from auth context
                             if let Some(user) = auth.read().user.as_ref() {
                                 // This is a new session created elsewhere - open minimized
+                                let attachable = summary.user_agent.is_some();
                                 context.open_restored(
                                     user.id,
                                     summary.relay_name.clone(),
@@ -248,6 +305,7 @@ pub fn use_session_provider() -> SessionContext {
                                     true,
                                     summary.active_connections,
                                     summary.active_viewers,
+                                    attachable,
                                 );
                             }
 
@@ -306,10 +364,22 @@ pub fn use_session_provider() -> SessionContext {
                         continue;
                     }
 
+                    // Check if restoration is already in progress - prevent duplicate restoration
+                    if *restoration_in_progress.read() {
+                        #[cfg(feature = "web")]
+                        web_sys::console::log_1(&"Session restoration already in progress, skipping duplicate List event".into());
+                        continue;
+                    }
+
                     let user = auth.read().user.clone().unwrap();
                     let context = context;
                     #[cfg(feature = "web")]
                     let toast = toast;
+                    let mut restoration_in_progress_clone = restoration_in_progress;
+
+                    // Mark restoration as in progress
+                    restoration_in_progress_clone.set(true);
+
                     spawn(async move {
                         let mut restored_relay_names = Vec::new();
                         let mut active_session_keys = HashSet::new();
@@ -336,6 +406,7 @@ pub fn use_session_provider() -> SessionContext {
                             active_session_keys.insert(key);
 
                             // Restore the session with proper user_id
+                            let attachable = session_summary.user_agent.is_some();
                             context.open_restored(
                                 user.id,
                                 session_summary.relay_name.clone(),
@@ -344,6 +415,7 @@ pub fn use_session_provider() -> SessionContext {
                                 false, // Don't force minimized on restore
                                 session_summary.active_connections,
                                 session_summary.active_viewers,
+                                attachable,
                             );
                             restored_relay_names.push(session_summary.relay_name);
                         }
@@ -372,6 +444,9 @@ pub fn use_session_provider() -> SessionContext {
                                 let _ = storage.remove(&key);
                             }
                         }
+
+                        // Mark restoration as complete
+                        restoration_in_progress_clone.set(false);
                     });
                 }
             }
@@ -566,6 +641,7 @@ impl SessionContext {
         force_minimized: bool,
         active_connections: u32,
         active_viewers: u32,
+        attachable: bool,
     ) {
         let mut sessions = self.sessions;
 
@@ -588,6 +664,7 @@ impl SessionContext {
         new_session.relay_id = Some(relay_id);
         new_session.active_connections = active_connections;
         new_session.active_viewers = active_viewers;
+        new_session.attachable = attachable;
 
         // Load saved state if available
         if let Some(saved_state) = self.load_session_state(user_id, relay_id, session_number) {

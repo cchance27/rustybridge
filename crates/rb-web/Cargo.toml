@@ -6,7 +6,7 @@ publish = false
 
 [features]
 default = ["server"]
-web = ["dioxus/web", "web-sys"]
+web = ["dioxus/web", "web-sys", "futures"]
 server = [
     "anyhow",
     "tracing",

@@ -1,4 +1,6 @@
 #[cfg(feature = "server")]
+use axum::http::HeaderMap;
+#[cfg(feature = "server")]
 use dioxus::fullstack::TypedWebsocket;
 use dioxus::{
     fullstack::{JsonEncoding, WebSocketOptions, Websocket}, prelude::*
@@ -13,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use server_core::relay::connect_to_relay_channel;
 #[cfg(feature = "server")]
 use server_core::sessions::{SessionRegistry, SshSession};
+#[cfg(feature = "server")]
+type SharedRegistry = std::sync::Arc<SessionRegistry>;
 #[cfg(feature = "server")]
 use state_store::{fetch_relay_host_by_name, user_has_relay_access};
 
@@ -81,11 +85,35 @@ async fn ensure_relay_websocket_permissions(
 
 pub type SshWebSocket = Websocket<SshClientMsg, SshServerMsg, JsonEncoding>;
 
+#[cfg(feature = "server")]
+async fn wait_for_client_ready(
+    mut socket: TypedWebsocket<SshClientMsg, SshServerMsg, JsonEncoding>,
+) -> Result<(TypedWebsocket<SshClientMsg, SshServerMsg, JsonEncoding>, bool), ()> {
+    use rb_types::ssh::SshControl;
+    let mut is_minimized = false;
+    loop {
+        match socket.recv().await {
+            Ok(msg) => {
+                if let Some(cmd) = msg.cmd {
+                    match cmd {
+                        SshControl::Ready => return Ok((socket, is_minimized)),
+                        SshControl::Close => return Err(()),
+                        SshControl::Minimize(val) => is_minimized = val,
+                        SshControl::Resize { .. } => {}
+                    }
+                }
+            }
+            Err(_) => return Err(()),
+        }
+    }
+}
+
 #[get(
     "/api/ws/ssh_connection/{relay_name}?session_number",
     auth: WebAuthSession,
     pool: axum::Extension<sqlx::SqlitePool>,
-    registry: axum::Extension<SessionRegistry>
+    registry: axum::Extension<SharedRegistry>,
+    headers: HeaderMap
 )]
 pub async fn ssh_terminal_ws(
     relay_name: String,
@@ -102,7 +130,7 @@ pub async fn ssh_terminal_ws(
     };
 
     let relay_for_upgrade = relay_name.clone();
-    let registry_inner: SessionRegistry = registry.0.clone();
+    let registry_inner: SharedRegistry = registry.0.clone();
 
     // If a session_number was provided, try to reattach to an existing session first.
     if let Some(num) = session_number
@@ -122,17 +150,62 @@ pub async fn ssh_terminal_ws(
                 session_number = num,
                 "WebSocket upgrade callback started (reattach)"
             );
-            let registry_for_upgrade = registry_inner.clone();
-            handle_reattach(socket, existing, registry_for_upgrade).await;
+            if let Ok((socket, is_minimized)) = wait_for_client_ready(socket).await {
+                let registry_for_upgrade = registry_inner.clone();
+                handle_reattach(socket, existing, registry_for_upgrade, is_minimized).await;
+            } else {
+                tracing::info!(
+                    relay = %relay_for_upgrade,
+                    user = %username,
+                    session_number = num,
+                    "Client disconnected before Ready signal"
+                );
+            }
         }));
     }
 
     // Fallback: create a new session
+    // Extract IP and User Agent from headers
+    let ip_address = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
+        .or_else(|| headers.get("x-real-ip").and_then(|v| v.to_str().ok()).map(|s| s.to_string()))
+        .or_else(|| {
+            // Fallback for localhost dev without proxy
+            let host = headers.get("host").and_then(|v| v.to_str().ok()).unwrap_or("");
+            if host.contains("localhost") || host.contains("127.0.0.1") {
+                Some("127.0.0.1".to_string())
+            } else {
+                None
+            }
+        });
+
+    let user_agent_str = headers.get("user-agent").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+
     Ok(options.on_upgrade(move |socket| async move {
         tracing::info!(relay = %relay_for_upgrade, user = %username, "WebSocket upgrade callback started (new session)");
-
-        let registry_for_new = registry_inner.clone();
-        handle_new_session(socket, registry_for_new, relay_for_upgrade, username, user_id, relay_id).await;
+        if let Ok((socket, is_minimized)) = wait_for_client_ready(socket).await {
+            let registry_for_new = registry_inner.clone();
+            handle_new_session(
+                socket,
+                registry_for_new,
+                relay_for_upgrade,
+                username,
+                user_id,
+                relay_id,
+                ip_address,
+                user_agent_str,
+                is_minimized,
+            )
+            .await;
+        } else {
+            tracing::info!(
+                relay = %relay_for_upgrade,
+                user = %username,
+                "Client disconnected before Ready signal (new session)"
+            );
+        }
     }))
 }
 
@@ -154,8 +227,14 @@ pub async fn ssh_terminal_status(relay_name: String) -> Result<SshStatusResponse
 async fn handle_reattach(
     mut socket: TypedWebsocket<SshClientMsg, SshServerMsg, JsonEncoding>,
     session: std::sync::Arc<SshSession>,
-    registry: SessionRegistry,
+    registry: SharedRegistry,
+    initial_minimized: bool,
 ) {
+    use rb_types::ssh::SshControl;
+
+    // Track minimize state for this connection
+    let mut is_minimized = initial_minimized;
+
     session.attach().await;
 
     // Replay scrollback history so a reattached client sees the existing shell state
@@ -180,10 +259,10 @@ async fn handle_reattach(
 
     // Increment connection count
     let conn_count = session.increment_connections().await;
-    // Assume new connections start as active viewers (not minimized)
-    session.increment_viewers().await;
-    // Track minimize state for this connection
-    let mut is_minimized = false;
+    // Increment viewers only if not minimized
+    if !is_minimized {
+        session.increment_viewers().await;
+    }
 
     tracing::info!(
         session_number = session.session_number,
@@ -205,8 +284,6 @@ async fn handle_reattach(
     let mut explicit_close = false;
 
     loop {
-        use rb_types::ssh::SshControl;
-
         tokio::select! {
             Ok(data) = output_rx.recv() => {
                 let is_eof = data.is_empty();
@@ -231,6 +308,7 @@ async fn handle_reattach(
                     Ok(client_msg) => {
                         if let Some(cmd) = &client_msg.cmd {
                             match cmd {
+                                SshControl::Ready => {} // Already ready
                                 SshControl::Close => {
                                     // User explicitly closed the shell
                                     explicit_close = true;
@@ -317,11 +395,14 @@ async fn handle_reattach(
 #[cfg(feature = "server")]
 async fn handle_new_session(
     mut socket: TypedWebsocket<SshClientMsg, SshServerMsg, JsonEncoding>,
-    registry: SessionRegistry,
+    registry: SharedRegistry,
     relay_name: String,
     username: String,
     user_id: i64,
     relay_id: i64,
+    ip_address: Option<String>,
+    user_agent: Option<String>,
+    is_minimized: bool,
 ) {
     use tokio::sync::{Mutex, broadcast, mpsc, mpsc::unbounded_channel};
 
@@ -331,9 +412,10 @@ async fn handle_new_session(
     let auth_rx_mutex = Mutex::new(auth_rx);
 
     // Drive interactive auth prompts over the WebSocket while connecting
+    let username_for_connect = username.clone();
     let mut connect_fut = Box::pin(connect_to_relay_channel(
         &relay_name,
-        &username,
+        &username_for_connect,
         (80, 24),
         Some(prompt_tx.clone()),
         Some(auth_rx_mutex),
@@ -345,6 +427,9 @@ async fn handle_new_session(
         echo: bool,
     }
     let mut pending_prompt: Option<PendingPrompt> = None;
+    // Track minimize state update if any arrived during handshake (unlikely given wait_for_client_ready)
+    let mut current_minimized = is_minimized;
+
     let mut channel = loop {
         use rb_types::ssh::SshControl;
 
@@ -383,9 +468,12 @@ async fn handle_new_session(
             maybe_msg = socket.recv() => {
                 match maybe_msg {
                     Ok(client_msg) => {
-                        if let Some(cmd) = &client_msg.cmd
-                            && let SshControl::Close = cmd {
-                            return;
+                        if let Some(cmd) = &client_msg.cmd {
+                            match cmd {
+                                SshControl::Close => return,
+                                SshControl::Minimize(val) => current_minimized = *val,
+                                _ => {}
+                            }
                         }
                         if let Some(mut pending) = pending_prompt.take() {
                             let data = &client_msg.data;
@@ -436,13 +524,27 @@ async fn handle_new_session(
 
     // Register session and get session number
     let (session_number, session) = registry
-        .create_next_session(user_id, relay_id, relay_name.clone(), input_tx.clone(), output_tx.clone(), close_tx)
+        .create_next_session(
+            user_id,
+            relay_id,
+            relay_name.clone(),
+            username,
+            input_tx.clone(),
+            output_tx.clone(),
+            close_tx,
+            ip_address,
+            user_agent,
+        )
         .await;
 
     tracing::info!(session_number = session_number, relay = %relay_name, "Created new session");
 
-    // Clone session for history appending
+    // Clone session for history appending and cleanup
     let session_for_history = session.clone();
+    let registry_for_cleanup = registry.clone();
+    let user_id_for_cleanup = user_id;
+    let relay_id_for_cleanup = relay_id;
+    let session_number_for_cleanup = session_number;
 
     // Update SSH loop to append to history
     let output_tx_for_history = output_tx.clone();
@@ -454,11 +556,13 @@ async fn handle_new_session(
                     match msg {
                         ChannelMsg::Data { ref data } => {
                             // Append to history
+                            session_for_history.touch().await;
                             session_for_history.append_to_history(data).await;
                             if output_tx_for_history.send(data.to_vec()).is_err() { break; }
                         }
                         ChannelMsg::ExtendedData { ref data, .. } => {
                             // Append to history
+                            session_for_history.touch().await;
                             session_for_history.append_to_history(data).await;
                             if output_tx_for_history.send(data.to_vec()).is_err() { break; }
                         }
@@ -498,6 +602,11 @@ async fn handle_new_session(
             }
         }
         tracing::info!(relay = %relay_name_for_ssh, "ssh output history loop terminated");
+
+        // Remove the session from the registry after shutdown so it disappears from admin/user lists.
+        registry_for_cleanup
+            .remove_session(user_id_for_cleanup, relay_id_for_cleanup, session_number_for_cleanup)
+            .await;
     });
 
     // Send initial message with session number
@@ -512,5 +621,5 @@ async fn handle_new_session(
         .await;
 
     // Hand off to reattach logic (which handles the WS loop)
-    handle_reattach(socket, session, registry).await;
+    handle_reattach(socket, session, registry, current_minimized).await;
 }

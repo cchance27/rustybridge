@@ -1,0 +1,131 @@
+use dioxus::prelude::*;
+use rb_types::ssh::{AdminSessionSummary, UserSessionSummary};
+#[cfg(feature = "server")]
+use server_core::sessions::SessionRegistry;
+#[cfg(feature = "server")]
+type SharedRegistry = std::sync::Arc<SessionRegistry>;
+
+#[cfg(feature = "server")]
+use crate::server::auth::guards::{WebAuthSession, ensure_authenticated, ensure_claim};
+
+#[get(
+    "/api/sessions/all",
+    auth: WebAuthSession,
+    registry: axum::Extension<SharedRegistry>
+)]
+pub async fn list_all_sessions() -> Result<Vec<AdminSessionSummary>, ServerFnError> {
+    // Require server:view claim to list all sessions
+
+    use state_store::{ClaimLevel, ClaimType};
+    ensure_claim(&auth, &ClaimType::Server(ClaimLevel::View)).map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let sessions = registry.0.list_all_sessions().await;
+    let mut summaries = Vec::new();
+
+    // Add SSH sessions
+    for session in sessions {
+        summaries.push(AdminSessionSummary {
+            user_id: session.user_id,
+            username: session.username.clone(),
+            session: session.to_summary().await,
+        });
+    }
+
+    // Add Web sessions
+    let web_sessions = registry.0.list_all_web_sessions().await;
+    for web_session in web_sessions {
+        use rb_types::ssh::{SessionKind, SessionStateSummary};
+
+        summaries.push(AdminSessionSummary {
+            user_id: web_session.user_id,
+            username: web_session.username.clone(),
+            session: UserSessionSummary {
+                relay_id: 0,
+                relay_name: "Web Dashboard".to_string(),
+                session_number: 0,
+                kind: SessionKind::Web,
+                ip_address: Some(web_session.ip),
+                user_agent: web_session.user_agent,
+                state: SessionStateSummary::Attached,
+                active_recent: true,
+                active_app: None,
+                detached_at: None,
+                detached_timeout_secs: None,
+                active_connections: 1,
+                active_viewers: 1,
+                created_at: web_session.connected_at,
+                last_active_at: web_session.connected_at,
+            },
+        });
+    }
+
+    Ok(summaries)
+}
+
+#[get(
+    "/api/sessions/my",
+    auth: WebAuthSession,
+    registry: axum::Extension<SharedRegistry>
+)]
+pub async fn list_my_sessions() -> Result<Vec<UserSessionSummary>, ServerFnError> {
+    let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let sessions = registry.0.list_sessions_for_user(user.id).await;
+    let web_sessions = registry.0.list_web_sessions_for_user(user.id).await;
+    let mut summaries = Vec::new();
+
+    // Add SSH sessions
+    for session in sessions {
+        summaries.push(session.to_summary().await);
+    }
+
+    // Add Web sessions as pseudo-sessions
+    for web_session in web_sessions {
+        use rb_types::ssh::{SessionKind, SessionStateSummary};
+
+        summaries.push(UserSessionSummary {
+            relay_id: 0, // No relay for web sessions
+            relay_name: "Web Dashboard".to_string(),
+            session_number: 0, // No session number for web sessions
+            kind: SessionKind::Web,
+            ip_address: Some(web_session.ip),
+            user_agent: web_session.user_agent,
+            state: SessionStateSummary::Attached,
+            active_recent: true,
+            active_app: None,
+            detached_at: None,
+            detached_timeout_secs: None,
+            active_connections: 1,
+            active_viewers: 1,
+            created_at: web_session.connected_at,
+            last_active_at: web_session.connected_at,
+        });
+    }
+
+    Ok(summaries)
+}
+
+#[post(
+    "/api/sessions/close",
+    auth: WebAuthSession,
+    registry: axum::Extension<SharedRegistry>
+)]
+pub async fn close_session(user_id: i64, relay_id: i64, session_number: u32) -> Result<(), ServerFnError> {
+    let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    // Check if user is closing their own session or has server:edit claim
+    if user.id != user_id {
+        use state_store::{ClaimLevel, ClaimType};
+
+        ensure_claim(&auth, &ClaimType::Server(ClaimLevel::Edit)).map_err(|e| ServerFnError::new(e.to_string()))?;
+    }
+
+    if let Some(session) = registry.0.get_session(user_id, relay_id, session_number).await {
+        session.close().await;
+        registry.0.remove_session(user_id, relay_id, session_number).await;
+    } else {
+        return Err(ServerFnError::new("Session not found"));
+    }
+
+    Ok(())
+}

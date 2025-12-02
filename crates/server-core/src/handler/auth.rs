@@ -276,4 +276,27 @@ impl ServerHandler {
         );
         Ok(())
     }
+
+    /// Check if the current user has management access (any *:view claim or wildcard).
+    pub(super) async fn check_management_access(username: &str) -> (bool, Option<i64>) {
+        if let Ok(handle) = state_store::server_db().await {
+            let pool = handle.into_pool();
+            if let Ok(mut conn) = pool.acquire().await {
+                if let Some(uid) = state_store::fetch_user_id_by_name(&mut *conn, username).await.ok().flatten() {
+                    if let Ok(claims) = state_store::get_user_claims_by_id(&mut conn, uid).await {
+                        let can_manage = claims.iter().any(|c| {
+                            let claim_str = c.to_string();
+                            claim_str == "*" || claim_str.ends_with(":view")
+                        });
+                        return (can_manage, Some(uid));
+                    } else {
+                        return (false, Some(uid));
+                    }
+                } else {
+                    return (false, None);
+                }
+            }
+        }
+        (false, None)
+    }
 }

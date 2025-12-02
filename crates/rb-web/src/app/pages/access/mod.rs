@@ -22,7 +22,7 @@ pub fn AccessPage() -> Element {
         RequireAuth {
             any_claims: vec![ClaimType::Users(ClaimLevel::View), ClaimType::Groups(ClaimLevel::View)],
             Layout {
-                div { class: "grid grid-cols-1 xl:grid-cols-2 gap-6 items-start",
+                div { class: "grid grid-cols-1 gap-6 items-start",
                     users::UsersSection {
                         users,
                         roles, // Pass roles resource to UsersSection for effective claims calculation

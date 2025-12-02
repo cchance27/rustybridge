@@ -178,25 +178,30 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                                         {
                                             let id = s.id.clone();
                                             let relay_name = s.relay_name.clone();
-                                            let same_relay_count = sessions_read.iter().filter(|sess| sess.relay_name == relay_name).count();
+                                            let minimized = s.minimized;
+                                            let active_viewers = s.active_viewers;
+                                            let attachable = s.attachable;
 
-                                            let title = if same_relay_count > 1 {
-                                                let index = sessions_read.iter()
-                                                    .filter(|sess| sess.relay_name == relay_name)
-                                                    .position(|sess| sess.id == id)
-                                                    .map(|i| i + 1)
-                                                    .unwrap_or(1);
-                                                format!("{} #{}", s.title, index)
+                                            // Use a stable label based on relay and backend session number
+                                            let title = if let Some(num) = s.session_number {
+                                                format!("{} #{}", relay_name, num)
                                             } else {
                                                 s.title.clone()
                                             };
-
-                                            let minimized = s.minimized;
-                                            let active_viewers = s.active_viewers;
                                             rsx! {
                                                 button {
-                                                    class: format!("btn btn-ghost w-full justify-start text-left relative {}", if minimized { "" } else { "btn-active" }),
+                                                    class: format!(
+                                                        "btn btn-ghost w-full justify-start text-left relative {} {}",
+                                                        if minimized { "" } else { "btn-active" },
+                                                        if attachable { "" } else { "cursor-not-allowed opacity-60" }
+                                                    ),
+                                                    disabled: !attachable,
                                                     onclick: move |_| {
+                                                        if !attachable {
+                                                            #[cfg(feature = "web")]
+                                                            web_sys::console::log_1(&"OpenSessions: SSH-origin session is view-only in web".into());
+                                                            return;
+                                                        }
                                                         if minimized {
                                                             session.restore(&id);
                                                             // Close the drawer when restoring
@@ -216,6 +221,12 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                                                         }
                                                     },
                                                     span { class: "font-semibold", "{title}" }
+                                                    if !attachable {
+                                                        span {
+                                                            class: "ml-2 badge badge-xs badge-error align-middle",
+                                                            "SSH-only"
+                                                        }
+                                                    }
                                                     if active_viewers > 1 {
                                                         span {
                                                             class: "absolute right-2 top-1/2 transform -translate-y-1/2 badge badge-warning badge-xs",

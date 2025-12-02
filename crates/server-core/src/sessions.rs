@@ -1,11 +1,11 @@
 use std::{
     collections::{HashMap, VecDeque}, sync::{
-        Arc, atomic::{AtomicU32, Ordering}
+        Arc, atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering}
     }, time::Duration
 };
 
 use chrono::{DateTime, Utc};
-use rb_types::ssh::{SessionEvent, SessionStateSummary, UserSessionSummary, WebSessionMeta};
+use rb_types::ssh::{SessionEvent, SessionKind, SessionStateSummary, TUIApplication, UserSessionSummary, WebSessionMeta};
 use tokio::sync::{RwLock, broadcast, mpsc};
 
 #[derive(Debug, Clone)]
@@ -15,14 +15,31 @@ pub enum SessionState {
     Closed,
 }
 
+impl From<&SessionState> for SessionStateSummary {
+    fn from(state: &SessionState) -> Self {
+        match state {
+            SessionState::Attached => SessionStateSummary::Attached,
+            SessionState::Detached { .. } => SessionStateSummary::Detached,
+            SessionState::Closed => SessionStateSummary::Closed,
+        }
+    }
+}
+
 pub struct SshSession {
     pub session_number: u32,
     pub user_id: i64,
     pub relay_id: i64,
     pub relay_name: String,
+    pub username: String,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
     pub created_at: DateTime<Utc>,
-    pub last_active_at: RwLock<DateTime<Utc>>,
+    last_active_broadcast_ms: AtomicI64,
+    last_activity_ms: AtomicI64,
+    pub idle_notified: AtomicBool,
     pub state: RwLock<SessionState>,
+    // Active TUI app name (if any)
+    pub active_app: RwLock<Option<TUIApplication>>,
     // Scrollback history buffer (64KB)
     pub history: RwLock<VecDeque<u8>>,
     // Number of active WebSocket connections
@@ -40,6 +57,8 @@ pub struct SshSession {
 }
 
 impl SshSession {
+    const ACTIVE_PULSE_MS: i64 = 5_000; // keep "active now" fresh without spamming
+    const IDLE_THRESHOLD_MS: i64 = 30_000; // treat as idle after 30s
     #[allow(clippy::too_many_arguments)]
     //FIXME: too many args we should probably make this a struct?
     pub fn new(
@@ -47,19 +66,29 @@ impl SshSession {
         user_id: i64,
         relay_id: i64,
         relay_name: String,
+        username: String,
         input_tx: mpsc::Sender<Vec<u8>>,
         output_tx: broadcast::Sender<Vec<u8>>,
         close_tx: broadcast::Sender<()>,
         event_tx: broadcast::Sender<SessionEvent>,
+        ip_address: Option<String>,
+        user_agent: Option<String>,
     ) -> Self {
+        let now_ms = Utc::now().timestamp_millis();
         Self {
             session_number,
             user_id,
             relay_id,
             relay_name,
+            username,
+            ip_address,
+            user_agent,
             created_at: Utc::now(),
-            last_active_at: RwLock::new(Utc::now()),
+            last_active_broadcast_ms: AtomicI64::new(now_ms),
+            last_activity_ms: AtomicI64::new(now_ms),
+            idle_notified: AtomicBool::new(false),
             state: RwLock::new(SessionState::Attached),
+            active_app: RwLock::new(None),
             history: RwLock::new(VecDeque::with_capacity(65536)), // 64KB
             active_connections: AtomicU32::new(0),
             active_viewers: AtomicU32::new(0),
@@ -71,22 +100,51 @@ impl SshSession {
     }
 
     pub async fn to_summary(&self) -> UserSessionSummary {
-        let state = self.state.read().await;
-        let state_summary = match *state {
-            SessionState::Attached => SessionStateSummary::Attached,
-            SessionState::Detached { .. } => SessionStateSummary::Detached,
-            SessionState::Closed => SessionStateSummary::Closed,
+        let current_state = self.state.read().await;
+        let state = SessionStateSummary::from(&*current_state);
+        let detached_at = if let SessionState::Detached { detached_at, .. } = *current_state {
+            Some(detached_at)
+        } else {
+            None
         };
+
+        let kind = if self.relay_id == 0 { SessionKind::TUI } else { SessionKind::Relay };
+
         UserSessionSummary {
             relay_id: self.relay_id,
             relay_name: self.relay_name.clone(),
             session_number: self.session_number,
-            state: state_summary,
-            active_connections: self.active_connections.load(Ordering::SeqCst),
-            active_viewers: self.active_viewers.load(Ordering::SeqCst),
+            kind,
+            ip_address: self.ip_address.clone(),
+            user_agent: self.user_agent.clone(),
+            state,
+            active_recent: self.is_active_recent(),
+            detached_at,
+            detached_timeout_secs: None, // TODO: Implement timeout config
+            active_app: self.active_app.read().await.clone(),
+            active_connections: self.active_connections.load(Ordering::Relaxed),
+            active_viewers: self.active_viewers.load(Ordering::Relaxed),
             created_at: self.created_at,
-            last_active_at: *self.last_active_at.read().await,
+            last_active_at: self.last_active_at(),
         }
+    }
+
+    pub async fn set_active_app(&self, app_name: Option<TUIApplication>) {
+        let mut app = self.active_app.write().await;
+        *app = app_name;
+        drop(app);
+        let _ = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await));
+    }
+
+    fn is_active_recent(&self) -> bool {
+        let now_ms = Utc::now().timestamp_millis();
+        let last_activity_ms = self.last_activity_ms.load(Ordering::Relaxed);
+        now_ms.saturating_sub(last_activity_ms) < Self::IDLE_THRESHOLD_MS
+    }
+
+    fn last_active_at(&self) -> DateTime<Utc> {
+        let last_activity_ms = self.last_activity_ms.load(Ordering::Relaxed);
+        DateTime::from_timestamp_millis(last_activity_ms).unwrap_or_default()
     }
 
     pub async fn increment_connections(&self) -> u32 {
@@ -173,7 +231,34 @@ impl SshSession {
     }
 
     pub async fn touch(&self) {
-        *self.last_active_at.write().await = Utc::now();
+        let now_ms = Utc::now().timestamp_millis();
+        self.last_activity_ms.store(now_ms, Ordering::Relaxed);
+
+        // If we were idle, broadcast once on transition to active
+        let last_ms = self.last_active_broadcast_ms.load(Ordering::Relaxed);
+        let idle_for = now_ms.saturating_sub(last_ms);
+        if idle_for >= Self::IDLE_THRESHOLD_MS {
+            self.idle_notified.store(false, Ordering::Relaxed);
+            if self
+                .last_active_broadcast_ms
+                .compare_exchange(last_ms, now_ms, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                let _ = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await));
+            }
+            return;
+        }
+
+        // While active, rate-limit pulses
+        let elapsed = now_ms.saturating_sub(last_ms);
+        if elapsed >= Self::ACTIVE_PULSE_MS
+            && self
+                .last_active_broadcast_ms
+                .compare_exchange(last_ms, now_ms, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            let _ = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await));
+        }
     }
 
     pub async fn detach(&self, timeout: Duration) {
@@ -186,11 +271,34 @@ impl SshSession {
         let _ = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await));
     }
 
+    pub async fn idle_watch(self: Arc<Self>) {
+        use tokio::time::{Duration as TokioDuration, sleep};
+        loop {
+            sleep(TokioDuration::from_millis(5_000)).await;
+
+            if matches!(*self.state.read().await, SessionState::Closed) {
+                break;
+            }
+
+            let now_ms = Utc::now().timestamp_millis();
+            let last_activity = self.last_activity_ms.load(Ordering::Relaxed);
+            let idle_for = now_ms.saturating_sub(last_activity);
+
+            if idle_for >= Self::IDLE_THRESHOLD_MS && !self.idle_notified.swap(true, Ordering::Relaxed) {
+                let _ = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await));
+            }
+        }
+    }
+
     pub async fn attach(&self) {
         let mut state = self.state.write().await;
         *state = SessionState::Attached;
-        self.touch().await;
+        // IMPORTANT: Drop the write lock BEFORE calling touch().
+        // touch() calls to_summary() which attempts to acquire a read lock.
+        // If we hold the write lock here, it causes a deadlock.
         drop(state);
+
+        self.touch().await;
         let _ = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await));
     }
 
@@ -211,6 +319,7 @@ pub struct SessionRegistry {
     sessions: Arc<RwLock<HashMap<(i64, i64, u32), Arc<SshSession>>>>,
     web_connections: Arc<RwLock<HashMap<i64, Vec<WebSessionMeta>>>>,
     pub event_tx: broadcast::Sender<SessionEvent>,
+    next_session_id: Arc<AtomicU32>,
 }
 
 impl Default for SessionRegistry {
@@ -226,13 +335,19 @@ impl SessionRegistry {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             web_connections: Arc::new(RwLock::new(HashMap::new())),
             event_tx,
+            next_session_id: Arc::new(AtomicU32::new(1)),
         }
     }
 
     pub async fn register_web_session(&self, user_id: i64, meta: WebSessionMeta) {
         let mut conns = self.web_connections.write().await;
         let list = conns.entry(user_id).or_default();
-        list.push(meta);
+        if let Some(existing) = list.iter_mut().find(|m| m.id == meta.id) {
+            // Update metadata for an existing tab instead of duplicating it
+            *existing = meta;
+        } else {
+            list.push(meta);
+        }
         let current_list = list.clone();
         drop(conns);
 
@@ -262,28 +377,39 @@ impl SessionRegistry {
         user_id: i64,
         relay_id: i64,
         relay_name: String,
+        username: String,
         input_tx: mpsc::Sender<Vec<u8>>,
         output_tx: broadcast::Sender<Vec<u8>>,
         close_tx: broadcast::Sender<()>,
+        ip_address: Option<String>,
+        user_agent: Option<String>,
     ) -> (u32, Arc<SshSession>) {
         let mut sessions = self.sessions.write().await;
 
-        // Find next session number
-        let session_number = (1u32..).find(|&n| !sessions.contains_key(&(user_id, relay_id, n))).unwrap_or(1);
+        // Use atomic counter for O(1) ID generation
+        let session_number = self.next_session_id.fetch_add(1, Ordering::Relaxed);
 
         let session = Arc::new(SshSession::new(
             session_number,
             user_id,
             relay_id,
             relay_name,
+            username,
             input_tx,
             output_tx,
             close_tx,
             self.event_tx.clone(),
+            ip_address,
+            user_agent,
         ));
 
         sessions.insert((user_id, relay_id, session_number), session.clone());
         let _ = self.event_tx.send(SessionEvent::Created(user_id, session.to_summary().await));
+
+        // Spawn idle watcher to emit idle->active transitions without client polling
+        let session_clone = session.clone();
+        tokio::spawn(async move { session_clone.idle_watch().await });
+
         (session_number, session)
     }
 
@@ -310,30 +436,118 @@ impl SessionRegistry {
             .collect()
     }
 
-    pub async fn cleanup_expired_sessions(&self) {
-        let mut sessions = self.sessions.write().await;
-        let now = Utc::now();
-        let mut to_remove = Vec::new();
+    pub async fn list_all_sessions(&self) -> Vec<Arc<SshSession>> {
+        let sessions = self.sessions.read().await;
+        sessions.values().cloned().collect()
+    }
 
-        for (key, session) in sessions.iter() {
-            let state = session.state.read().await;
-            match *state {
-                SessionState::Detached { detached_at, timeout } => {
-                    if now > detached_at + timeout {
-                        to_remove.push(*key);
-                        // Signal close
-                        let _ = session.close_tx.send(());
+    pub async fn list_all_web_sessions(&self) -> Vec<WebSessionMeta> {
+        let conns = self.web_connections.read().await;
+        conns.values().flatten().cloned().collect()
+    }
+
+    pub async fn list_web_sessions_for_user(&self, user_id: i64) -> Vec<WebSessionMeta> {
+        self.web_connections.read().await.get(&user_id).cloned().unwrap_or_default()
+    }
+
+    pub async fn cleanup_expired_sessions(&self) {
+        // First pass: collect keys to remove without holding the write lock for the entire duration
+        // and without holding the write lock while awaiting individual session locks.
+        let candidates = {
+            let sessions = self.sessions.read().await;
+            let now = Utc::now();
+            let mut candidates = Vec::new();
+
+            for (key, session) in sessions.iter() {
+                // We need to read the state. This awaits a RwLock read, which is fine as long as we don't hold the global write lock.
+                let state = session.state.read().await;
+                match *state {
+                    SessionState::Detached { detached_at, timeout } => {
+                        if now > detached_at + timeout {
+                            candidates.push(*key);
+                            // Signal close - it's okay if we signal close and then don't remove (e.g. race),
+                            // the session will just handle the close signal (which might be ignored if attached).
+                            let _ = session.close_tx.send(());
+                        }
+                    }
+                    SessionState::Closed => {
+                        candidates.push(*key);
+                    }
+                    SessionState::Attached => {
+                        // Zombie check: if attached but no activity for 24 hours, kill it
+                        let last_active = session.last_active_at();
+                        if now.signed_duration_since(last_active).num_seconds() > 86400 {
+                            candidates.push(*key);
+                            let _ = session.close_tx.send(());
+                        }
                     }
                 }
-                SessionState::Closed => {
-                    to_remove.push(*key);
+            }
+            candidates
+        };
+
+        if !candidates.is_empty() {
+            let mut sessions = self.sessions.write().await;
+            let now = Utc::now();
+
+            for key in candidates {
+                // Re-check condition to avoid race where session became active between read and write lock
+                let should_remove = if let Some(session) = sessions.get(&key) {
+                    let state = session.state.read().await;
+                    match *state {
+                        SessionState::Detached { detached_at, timeout } => now > detached_at + timeout,
+                        SessionState::Closed => true,
+                        SessionState::Attached => {
+                            let last_active = session.last_active_at();
+                            now.signed_duration_since(last_active).num_seconds() > 86400
+                        }
+                    }
+                } else {
+                    // Already removed
+                    false
+                };
+
+                if should_remove {
+                    sessions.remove(&key);
                 }
-                _ => {}
+            }
+        }
+    }
+
+    /// Cleanup stale web sessions that haven't been seen in a while (e.g., browser crashed)
+    pub async fn cleanup_stale_web_sessions(&self, timeout_secs: i64) {
+        let mut conns = self.web_connections.write().await;
+        let now = Utc::now();
+        let mut changed_users = Vec::new();
+
+        for (user_id, list) in conns.iter_mut() {
+            let before_count = list.len();
+            list.retain(|meta| {
+                let age = now.signed_duration_since(meta.last_seen).num_seconds();
+                age < timeout_secs
+            });
+            if list.len() != before_count {
+                changed_users.push((*user_id, list.clone()));
             }
         }
 
-        for key in to_remove {
-            sessions.remove(&key);
+        // Remove empty entries
+        conns.retain(|_, list| !list.is_empty());
+        drop(conns);
+
+        // Broadcast presence updates for affected users
+        for (user_id, list) in changed_users {
+            let _ = self.event_tx.send(SessionEvent::Presence(user_id, list));
+        }
+    }
+
+    /// Update last_seen timestamp for a web session (heartbeat)
+    pub async fn heartbeat_web_session(&self, user_id: i64, session_id: &str) {
+        let mut conns = self.web_connections.write().await;
+        if let Some(list) = conns.get_mut(&user_id) {
+            if let Some(meta) = list.iter_mut().find(|m| m.id == session_id) {
+                meta.last_seen = Utc::now();
+            }
         }
     }
 }

@@ -21,6 +21,7 @@ pub fn SessionDock() -> Element {
                     let relay_name = s.relay_name.clone();
                     let minimized = s.minimized;
                     let active_viewers = s.active_viewers;
+                    let attachable = s.attachable;
 
                     rsx! {
                         div {
@@ -35,8 +36,18 @@ pub fn SessionDock() -> Element {
                                     }
                                 }
                                 button {
-                                    class: format!("btn btn-circle shadow-lg border border-gray-600 {}", if minimized { "btn-ghost bg-base-200 opacity-75" } else { "btn-primary" }),
+                                    class: format!(
+                                        "btn btn-circle shadow-lg border border-gray-600 {} {}",
+                                        if minimized { "btn-ghost bg-base-200 opacity-75" } else { "btn-primary" },
+                                        if attachable { "" } else { "cursor-not-allowed opacity-60" }
+                                    ),
+                                    disabled: !attachable,
                                     onclick: move |_| {
+                                        if !attachable {
+                                            #[cfg(feature = "web")]
+                                            web_sys::console::log_1(&"SessionDock: SSH-origin session is view-only in web".into());
+                                            return;
+                                        }
                                         if minimized {
                                             session.restore(&id);
 
@@ -56,6 +67,12 @@ pub fn SessionDock() -> Element {
                                     },
                                     // Use first letter of relay name or title
                                     span { class: "text-xs font-bold", "{relay_name.chars().next().unwrap_or('?')}" }
+                                }
+                                if !attachable {
+                                    span {
+                                        class: "badge badge-xs badge-error ml-[-6px] mt-[-6px]",
+                                        "SSH"
+                                    }
                                 }
                             }
                         }

@@ -12,7 +12,17 @@ async fn test_session_creation_and_retrieval() {
     let (close_tx, _) = broadcast::channel(1);
 
     let (session_number, session) = registry
-        .create_next_session(1, 1, "test-relay".to_string(), input_tx, output_tx, close_tx)
+        .create_next_session(
+            1,
+            1,
+            "test-relay".to_string(),
+            "test-user".to_string(),
+            input_tx,
+            output_tx,
+            close_tx,
+            None,
+            None,
+        )
         .await;
 
     assert_eq!(session_number, 1);
@@ -35,10 +45,30 @@ async fn test_next_session_number() {
     let (close_tx2, _) = broadcast::channel(1);
 
     let (num1, _) = registry
-        .create_next_session(1, 1, "test-relay".to_string(), input_tx1, output_tx1, close_tx1)
+        .create_next_session(
+            1,
+            1,
+            "test-relay".to_string(),
+            "test-user".to_string(),
+            input_tx1,
+            output_tx1,
+            close_tx1,
+            None,
+            None,
+        )
         .await;
     let (num2, _) = registry
-        .create_next_session(1, 1, "test-relay".to_string(), input_tx2, output_tx2, close_tx2)
+        .create_next_session(
+            1,
+            1,
+            "test-relay".to_string(),
+            "test-user".to_string(),
+            input_tx2,
+            output_tx2,
+            close_tx2,
+            None,
+            None,
+        )
         .await;
 
     assert_eq!(num1, 1);
@@ -53,7 +83,17 @@ async fn test_session_cleanup() {
     let (close_tx, _) = broadcast::channel(1);
 
     let (session_number, session) = registry
-        .create_next_session(1, 1, "test-relay".to_string(), input_tx, output_tx, close_tx)
+        .create_next_session(
+            1,
+            1,
+            "test-relay".to_string(),
+            "test-user".to_string(),
+            input_tx,
+            output_tx,
+            close_tx,
+            None,
+            None,
+        )
         .await;
 
     // Detach with 0 timeout (should expire immediately)
@@ -76,7 +116,17 @@ async fn test_history_buffer() {
     let (close_tx, _) = broadcast::channel(1);
 
     let (_, session) = registry
-        .create_next_session(1, 1, "test-relay".to_string(), input_tx, output_tx, close_tx)
+        .create_next_session(
+            1,
+            1,
+            "test-relay".to_string(),
+            "test-user".to_string(),
+            input_tx,
+            output_tx,
+            close_tx,
+            None,
+            None,
+        )
         .await;
 
     // Append some data

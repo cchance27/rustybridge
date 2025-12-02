@@ -4,7 +4,7 @@ use crate::{
     app::{
         auth::context::use_auth_provider, session::{components::global_chrome::SessionGlobalChrome, provider::use_session_provider}
     }, pages::{
-        AccessPage, CredentialsPage, DashboardPage, LoginPage, LogoutPage, NotFoundPage, OidcErrorPage, ProfilePage, RelaysPage, SshSuccessPage
+        AccessPage, CredentialsPage, DashboardPage, LoginPage, LogoutPage, NotFoundPage, OidcErrorPage, ProfilePage, RelaysPage, ServerPage, SshSuccessPage
     }
 };
 
@@ -65,6 +65,8 @@ pub enum Routes {
     ProfilePage {},
     #[route("/access")]
     AccessPage {},
+    #[route("/server")]
+    ServerPage {},
     #[route("/login")]
     LoginPage {},
     #[route("/logout")]

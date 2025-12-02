@@ -291,7 +291,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
             }
         });
 
-        // Effect to send initial minimize state when connected
+        // Effect to send initial ready and minimize state when connected
         use_effect(move || {
             if connected() {
                 let is_minimized = props.minimized;
@@ -299,8 +299,18 @@ pub fn Terminal(props: TerminalProps) -> Element {
                     let socket = socket.clone();
                     async move {
                         if let Some(ws) = socket.read().as_ref() {
+                            use rb_types::ssh::{SshClientMsg, SshControl};
+
+                            // Send Ready signal first
+                            web_sys::console::log_1(&"Terminal: sending Ready signal".into());
+                            let ready_msg = SshClientMsg {
+                                cmd: Some(SshControl::Ready),
+                                data: Vec::new(),
+                            };
+                            let _ = ws.send(ready_msg).await;
+
+                            // Then send minimize state if needed
                             if is_minimized {
-                                use rb_types::ssh::{SshClientMsg, SshControl};
                                 web_sys::console::log_1(&format!("Terminal: sending initial minimize state: {}", is_minimized).into());
                                 let msg = SshClientMsg {
                                     cmd: Some(SshControl::Minimize(true)),

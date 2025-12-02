@@ -61,6 +61,7 @@ pub enum ClaimType {
     Groups(ClaimLevel),
     Roles(ClaimLevel),
     Credentials(ClaimLevel),
+    Server(ClaimLevel),
     // Fallback for unknown claims to preserve data
     Custom(String),
 }
@@ -73,6 +74,7 @@ impl fmt::Display for ClaimType {
             ClaimType::Groups(level) => write!(f, "groups:{}", level),
             ClaimType::Roles(level) => write!(f, "roles:{}", level),
             ClaimType::Credentials(level) => write!(f, "credentials:{}", level),
+            ClaimType::Server(level) => write!(f, "server:{}", level),
             ClaimType::Custom(s) => write!(f, "{}", s),
         }
     }
@@ -96,6 +98,7 @@ impl FromStr for ClaimType {
             ("groups", Ok(level)) => Ok(ClaimType::Groups(level)),
             ("roles", Ok(level)) => Ok(ClaimType::Roles(level)),
             ("credentials", Ok(level)) => Ok(ClaimType::Credentials(level)),
+            ("server", Ok(level)) => Ok(ClaimType::Server(level)),
             // If it looks like a standard claim but has an invalid level, or is an unknown prefix, treat as custom
             _ => Ok(ClaimType::Custom(s.to_string())),
         }
@@ -136,6 +139,7 @@ impl ClaimType {
             ClaimType::Groups(level) => ClaimType::compare_parts("groups", level, other),
             ClaimType::Roles(level) => ClaimType::compare_parts("roles", level, other),
             ClaimType::Credentials(level) => ClaimType::compare_parts("credentials", level, other),
+            ClaimType::Server(level) => ClaimType::compare_parts("server", level, other),
         }
     }
 
@@ -165,6 +169,7 @@ impl ClaimType {
             (ClaimType::Groups(ClaimLevel::Wildcard), ClaimType::Groups(_)) => true,
             (ClaimType::Roles(ClaimLevel::Wildcard), ClaimType::Roles(_)) => true,
             (ClaimType::Credentials(ClaimLevel::Wildcard), ClaimType::Credentials(_)) => true,
+            (ClaimType::Server(ClaimLevel::Wildcard), ClaimType::Server(_)) => true,
 
             // Check level hierarchy for same resource type
             (ClaimType::Relays(have), ClaimType::Relays(need)) => Self::level_satisfies(have, need),
@@ -172,6 +177,7 @@ impl ClaimType {
             (ClaimType::Groups(have), ClaimType::Groups(need)) => Self::level_satisfies(have, need),
             (ClaimType::Roles(have), ClaimType::Roles(need)) => Self::level_satisfies(have, need),
             (ClaimType::Credentials(have), ClaimType::Credentials(need)) => Self::level_satisfies(have, need),
+            (ClaimType::Server(have), ClaimType::Server(need)) => Self::level_satisfies(have, need),
 
             // Different resource types or custom claims don't satisfy each other
             _ => false,
@@ -212,6 +218,9 @@ impl ClaimType {
         }
         for level in &levels {
             claims.push(ClaimType::Credentials(*level));
+        }
+        for level in &levels {
+            claims.push(ClaimType::Server(*level));
         }
         claims
     }

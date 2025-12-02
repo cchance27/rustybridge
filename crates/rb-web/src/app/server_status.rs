@@ -70,7 +70,18 @@ fn ServerStatusMonitor(state: Signal<ConnectionState>) -> Element {
     let toast = use_toast();
 
     // Base connection; we'll manage reconnection ourselves.
-    let mut ws = use_websocket(move || async move { ssh_web_events("status-monitor".to_string(), WebSocketOptions::new()).await });
+    // Use a fixed client ID for status monitor to prevent duplicate registrations
+    let mut ws = use_websocket(move || async move {
+        #[cfg(feature = "web")]
+        web_sys::console::log_1(&"ServerStatusMonitor: Opening WebSocket connection".into());
+        ssh_web_events("status-monitor".to_string(), None, WebSocketOptions::new()).await
+    });
+
+    // Log component lifecycle for debugging
+    use_effect(move || {
+        #[cfg(feature = "web")]
+        web_sys::console::log_1(&"ServerStatusMonitor mounted, WebSocket connection active".into());
+    });
 
     use_coroutine(move |_rx: UnboundedReceiver<()>| async move {
         let mut delay_secs = 1u64;
@@ -95,7 +106,7 @@ fn ServerStatusMonitor(state: Signal<ConnectionState>) -> Element {
 
                     // Actively retry with exponential backoff until we can recreate the socket.
                     loop {
-                        match ssh_web_events("status-monitor".to_string(), WebSocketOptions::new()).await {
+                        match ssh_web_events("status-monitor".to_string(), None, WebSocketOptions::new()).await {
                             Ok(socket) => {
                                 ws.set(Ok::<_, dioxus::fullstack::ServerFnError>(socket));
                                 // We'll wait for the next Ok from `recv` before marking Connected.

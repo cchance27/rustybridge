@@ -6,7 +6,11 @@ use dioxus::prelude::*;
 
 /// Start the Dioxus fullstack web server with Axum integration.
 #[cfg(feature = "server")]
-pub async fn run_web_server(config: rb_types::config::WebServerConfig, app: fn() -> Element) -> anyhow::Result<()> {
+pub async fn run_web_server(
+    config: rb_types::config::WebServerConfig,
+    app: fn() -> Element,
+    registry: std::sync::Arc<server_core::sessions::SessionRegistry>,
+) -> anyhow::Result<()> {
     use axum_session::{SameSite, SessionLayer, SessionStore};
     use axum_session_auth::AuthSessionLayer;
     use axum_session_sqlx::SessionSqlitePool;
@@ -56,7 +60,7 @@ pub async fn run_web_server(config: rb_types::config::WebServerConfig, app: fn()
         )
         .serve_dioxus_application(ServeConfig::new(), app)
         .layer(axum::Extension(pool.clone()))
-        .layer(axum::Extension(server_core::sessions::SessionRegistry::new()))
+        .layer(axum::Extension(registry))
         .layer(auth_layer)
         .layer(session_layer)
         .into_make_service();
