@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::relay::RelayHandle;
@@ -20,51 +21,24 @@ pub enum SessionError {
     ResizeFailed(String),
 }
 
-/// Mouse event for terminal interaction (future use)
-#[derive(Debug, Clone)]
-pub struct MouseEvent {
-    pub x: u16,
-    pub y: u16,
-    pub button: MouseButton,
-    pub action: MouseAction,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MouseButton {
-    Left,
-    Middle,
-    Right,
-    WheelUp,
-    WheelDown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MouseAction {
-    Press,
-    Release,
-    Move,
-}
-
 /// Trait for session I/O backends (Web, SSH, or unified)
 ///
 /// This trait abstracts the underlying transport mechanism, allowing sessions
 /// to work with both WebSocket and SSH channel backends transparently.
+#[async_trait]
 pub trait SessionBackend: Send + Sync {
     /// Send data to the backend (user input -> relay)
-    fn send(&self, data: Vec<u8>) -> Result<(), SessionError>;
+    async fn send(&self, data: Vec<u8>) -> Result<(), SessionError>;
 
     /// Subscribe to data from the backend (relay output -> clients)
     /// Returns a broadcast receiver that can be cloned for multiple viewers
     fn subscribe(&self) -> broadcast::Receiver<Vec<u8>>;
 
     /// Send resize event to the backend
-    fn resize(&self, cols: u32, rows: u32) -> Result<(), SessionError>;
-
-    /// Send mouse event (for future TUI mouse support)
-    fn mouse_event(&self, event: MouseEvent) -> Result<(), SessionError>;
+    async fn resize(&self, cols: u32, rows: u32) -> Result<(), SessionError>;
 
     /// Close the backend connection
-    fn close(&self) -> Result<(), SessionError>;
+    async fn close(&self) -> Result<(), SessionError>;
 }
 
 /// Legacy backend that wraps existing mpsc/broadcast channels for backward compatibility
@@ -80,29 +54,23 @@ impl LegacyChannelBackend {
     }
 }
 
+#[async_trait]
 impl SessionBackend for LegacyChannelBackend {
-    fn send(&self, data: Vec<u8>) -> Result<(), SessionError> {
-        self.input_tx
-            .blocking_send(data)
-            .map_err(|e| SessionError::SendFailed(e.to_string()))
+    async fn send(&self, data: Vec<u8>) -> Result<(), SessionError> {
+        self.input_tx.send(data).await.map_err(|e| SessionError::SendFailed(e.to_string()))
     }
 
     fn subscribe(&self) -> broadcast::Receiver<Vec<u8>> {
         self.output_tx.subscribe()
     }
 
-    fn resize(&self, _cols: u32, _rows: u32) -> Result<(), SessionError> {
+    async fn resize(&self, _cols: u32, _rows: u32) -> Result<(), SessionError> {
         // Legacy backend doesn't support resize
         // This will be handled by the old code path
         Ok(())
     }
 
-    fn mouse_event(&self, _event: MouseEvent) -> Result<(), SessionError> {
-        // Legacy backend doesn't support mouse events
-        Ok(())
-    }
-
-    fn close(&self) -> Result<(), SessionError> {
+    async fn close(&self) -> Result<(), SessionError> {
         // Closing handled by old code path
         Ok(())
     }
@@ -148,8 +116,9 @@ impl RelayBackend {
     }
 }
 
+#[async_trait]
 impl SessionBackend for RelayBackend {
-    fn send(&self, data: Vec<u8>) -> Result<(), SessionError> {
+    async fn send(&self, data: Vec<u8>) -> Result<(), SessionError> {
         self.relay_handle
             .input_tx
             .send(data)
@@ -160,19 +129,14 @@ impl SessionBackend for RelayBackend {
         self.output_broadcast.subscribe()
     }
 
-    fn resize(&self, cols: u32, rows: u32) -> Result<(), SessionError> {
+    async fn resize(&self, cols: u32, rows: u32) -> Result<(), SessionError> {
         self.resize_tx
-            .blocking_send((cols, rows))
+            .send((cols, rows))
+            .await
             .map_err(|e| SessionError::ResizeFailed(e.to_string()))
     }
 
-    fn mouse_event(&self, _event: MouseEvent) -> Result<(), SessionError> {
-        // TODO: Implement mouse event forwarding when needed
-        // For now, this is a no-op as mouse events aren't yet supported
-        Ok(())
-    }
-
-    fn close(&self) -> Result<(), SessionError> {
+    async fn close(&self) -> Result<(), SessionError> {
         // Signal EOF to all subscribers and close input to stop the relay loop
         let _ = self.output_broadcast.send(Vec::new());
         let _ = self.relay_handle.input_tx.send(Vec::new());

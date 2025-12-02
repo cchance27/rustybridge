@@ -125,12 +125,6 @@ pub fn ProfilePage() -> Element {
             Layout {
 
                 div { class: "flex flex-col gap-6",
-                    // Header
-                    div { class: "prose",
-                        h1 { "Profile" }
-                        p { "Manage your account settings and preferences." }
-                    }
-
                     // OIDC Section
                     div { class: "card bg-base-200 shadow-xl self-start w-full",
                         div { class: "card-body",

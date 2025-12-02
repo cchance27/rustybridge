@@ -6,7 +6,7 @@ use rb_types::ssh::SessionEvent;
 
 use crate::app::{
     api::{
-        sessions::{attach_to_session, close_session, list_my_sessions}, ws::session_events::ssh_web_events
+        sessions::{close_session, list_my_sessions}, ws::session_events::ssh_web_events
     }, auth::context::AuthState, components::{
         StructuredTooltip, Table, TooltipSection, icons::{BrowserIcon, TerminalIcon}, use_toast
     }, session::provider::use_session
@@ -148,40 +148,6 @@ pub fn SessionsSection() -> Element {
                                                                 } }
                                                             }
                                                             td { class: "text-right space-x-2",
-                                                                button {
-                                                                    class: "btn btn-xs btn-primary",
-                                                                    onclick: move |_| {
-                                                                        let toast = toast;
-                                                                        let session_ctx = session_ctx;
-                                                                        let relay_name = session.relay_name.clone();
-                                                                        let relay_id = session.relay_id;
-                                                                        let session_number = session.session_number;
-                                                                        let connections = session.connections;
-                                                                        let viewers = session.viewers;
-                                                                        let auth_user = auth.read().user.clone();
-                                                                        spawn(async move {
-                                                                            if let Some(user) = auth_user {
-                                                                                match attach_to_session(user.id, relay_id, session_number).await {
-                                                                                    Ok(_) => {
-                                                                                        session_ctx.open_restored(
-                                                                                            user.id,
-                                                                                            relay_name,
-                                                                                            relay_id,
-                                                                                            session_number,
-                                                                                            false,
-                                                                                        connections,
-                                                                                        viewers,
-                                                                                        true,
-                                                                                    );
-                                                                                        toast.info("Attached in browser");
-                                                                                    }
-                                                                                    Err(e) => toast.error(&format!("Attach failed: {e}")),
-                                                                                }
-                                                                            }
-                                                                        });
-                                                                    },
-                                                                    "Attach"
-                                                                }
                                                                 button {
                                                                     class: "btn btn-xs btn-error",
                                                                     onclick: move |_| handle_close(session.relay_id, session.session_number),

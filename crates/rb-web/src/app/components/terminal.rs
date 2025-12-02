@@ -295,16 +295,46 @@ pub fn Terminal(props: TerminalProps) -> Element {
         use_effect(move || {
             if connected() {
                 let is_minimized = props.minimized;
+                let term_id = id.clone();
                 spawn({
                     let socket = socket.clone();
                     async move {
                         if let Some(ws) = socket.read().as_ref() {
                             use rb_types::ssh::{SshClientMsg, SshControl};
 
-                            // Send Ready signal first
-                            web_sys::console::log_1(&"Terminal: sending Ready signal".into());
+                            // Get terminal dimensions from xterm
+                            let mut dims_eval = dioxus::document::eval(&format!(
+                                r#"
+                                if (window.getTerminalDimensions) {{
+                                    dioxus.send(window.getTerminalDimensions("{}"));
+                                }} else {{
+                                    dioxus.send(null);
+                                }}
+                                "#,
+                                term_id
+                            ));
+
+                            #[derive(serde::Deserialize)]
+                            struct Dims {
+                                cols: u32,
+                                rows: u32,
+                            }
+
+                            let (cols, rows) = match dims_eval.recv::<Dims>().await {
+                                Ok(dims) => {
+                                    web_sys::console::log_1(&format!("Terminal: got dimensions {}x{}", dims.cols, dims.rows).into());
+                                    (dims.cols, dims.rows)
+                                }
+                                Err(_) => {
+                                    web_sys::console::warn_1(&"Terminal: failed to get dimensions, using default 80x24".into());
+                                    (80, 24)
+                                }
+                            };
+
+                            // Send Ready signal with dimensions
+                            web_sys::console::log_1(&format!("Terminal: sending Ready signal with {}x{}", cols, rows).into());
                             let ready_msg = SshClientMsg {
-                                cmd: Some(SshControl::Ready),
+                                cmd: Some(SshControl::Ready { cols, rows }),
                                 data: Vec::new(),
                             };
                             let _ = ws.send(ready_msg).await;
@@ -491,15 +521,13 @@ pub fn Terminal(props: TerminalProps) -> Element {
 
                             let data = msg.data;
                             if !data.is_empty() {
-                                let script = if let Ok(s) = String::from_utf8(data.clone()) {
-                                    // Escape backticks and backslashes for JS template string
-                                    let escaped = s.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${");
-                                    format!("window.writeToTerminal(\"{}\", `{}`);", terminal_id, escaped)
-                                } else {
-                                    let json_data = serde_json::to_string(&data).unwrap_or_else(|_| "[]".to_string());
-                                    format!("window.writeToTerminal(\"{}\", new Uint8Array({}));", terminal_id, json_data)
-                                };
-
+                                // Always send raw bytes to xterm as Uint8Array to avoid
+                                // any Rust-side text conversion affecting escape sequences.
+                                let json_data = serde_json::to_string(&data).unwrap_or_else(|_| "[]".to_string());
+                                let script = format!(
+                                    "window.writeToTerminal(\"{}\", new Uint8Array({}));",
+                                    terminal_id, json_data
+                                );
                                 let _ = dioxus::document::eval(&script).await;
                             }
                         }
@@ -528,6 +556,90 @@ pub fn Terminal(props: TerminalProps) -> Element {
                         }
                     }
                 }
+            });
+        });
+
+        // Effect to handle resize events
+        let value_resize = ws_id.clone();
+        use_effect(move || {
+            if !connected_read() {
+                return;
+            }
+
+            let terminal_id = value_resize.clone();
+            let socket_for_send = socket.clone();
+
+            spawn(async move {
+                let Some(socket_tx_handle) = socket_for_send.read().as_ref().cloned() else {
+                    return;
+                };
+
+                let socket_tx = socket_tx_handle.clone();
+                let terminal_id_resize = terminal_id.clone();
+
+                spawn(async move {
+                    let mut eval = loop {
+                        let mut result = dioxus::document::eval(&format!(
+                            r#"
+                            if (window.setupTerminalResize) {{
+                                try {{
+                                    let res = window.setupTerminalResize("{0}", (data) => {{
+                                        dioxus.send(data);
+                                    }});
+                                    dioxus.send(res);
+                                }} catch (e) {{
+                                    console.error("Eval: setupTerminalResize error", e);
+                                    dioxus.send(false);
+                                }}
+                            }} else {{
+                                dioxus.send(false);
+                            }}
+                            "#,
+                            terminal_id_resize
+                        ));
+
+                        match result.recv::<bool>().await {
+                            Ok(true) => {
+                                web_sys::console::log_1(&format!("Rust: Resize setup successful for {}", terminal_id_resize).into());
+                                break result;
+                            }
+                            Ok(false) => {
+                                // Retry if not ready
+                            }
+                            Err(e) => {
+                                web_sys::console::warn_1(&format!("Rust: Resize setup recv error: {}", e).into());
+                            }
+                        }
+                        gloo_timers::future::TimeoutFuture::new(500).await;
+                    };
+
+                    while let Ok(json_val) = eval.recv().await {
+                        #[derive(serde::Deserialize)]
+                        struct ResizeData {
+                            cols: u32,
+                            rows: u32,
+                        }
+
+                        if let Ok(resize) = serde_json::from_value::<ResizeData>(json_val) {
+                            use rb_types::ssh::{SshClientMsg, SshControl};
+
+                            web_sys::console::log_1(&format!("Rust: Sending resize {}x{}", resize.cols, resize.rows).into());
+
+                            let msg = SshClientMsg {
+                                cmd: Some(SshControl::Resize {
+                                    cols: resize.cols,
+                                    rows: resize.rows,
+                                }),
+                                data: Vec::new(),
+                            };
+
+                            if let Err(err) = socket_tx.send(msg).await {
+                                web_sys::console::error_1(&format!("WebSocket send error (resize): {}", err).into());
+                                break;
+                            }
+                        }
+                    }
+                });
             });
         });
     }

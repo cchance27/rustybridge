@@ -145,18 +145,20 @@ impl ServerHandler {
 
         // Send data to relay backend if we have an active relay session
         if let (Some(user_id), Some(relay_id), Some(session_number)) = (self.user_id, self.active_relay_id, self.session_number)
-            && relay_id > 0 && !data.is_empty() {
-                // Get the session and send data via backend
-                let registry = self.registry.clone();
-                let data_to_send = data.to_vec();
-                tokio::spawn(async move {
-                    if let Some(session) = registry.get_session(user_id, relay_id, session_number).await {
-                        let _ = session.backend.send(data_to_send);
-                    }
-                });
-                self.touch_session();
-                return Ok(());
-            }
+            && relay_id > 0
+            && !data.is_empty()
+        {
+            // Get the session and send data via backend
+            let registry = self.registry.clone();
+            let data_to_send = data.to_vec();
+            tokio::spawn(async move {
+                if let Some(session) = registry.get_session(user_id, relay_id, session_number).await {
+                    let _ = session.backend.send(data_to_send).await;
+                }
+            });
+            self.touch_session();
+            return Ok(());
+        }
 
         if let Some(app_session) = self.app_session.as_mut() {
             // Normalize incoming SSH bytes to canonical TUI sequences

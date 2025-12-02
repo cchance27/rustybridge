@@ -247,7 +247,7 @@ pub enum SshControl {
     Close,
     Resize { cols: u32, rows: u32 },
     Minimize(bool),
-    Ready,
+    Ready { cols: u32, rows: u32 },
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]

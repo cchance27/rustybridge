@@ -86,7 +86,7 @@ pub type SshWebSocket = Websocket<SshClientMsg, SshServerMsg, JsonEncoding>;
 #[cfg(feature = "server")]
 async fn wait_for_client_ready(
     mut socket: TypedWebsocket<SshClientMsg, SshServerMsg, JsonEncoding>,
-) -> Result<(TypedWebsocket<SshClientMsg, SshServerMsg, JsonEncoding>, bool), ()> {
+) -> Result<(TypedWebsocket<SshClientMsg, SshServerMsg, JsonEncoding>, bool, (u32, u32)), ()> {
     use rb_types::ssh::SshControl;
     let mut is_minimized = false;
     loop {
@@ -94,7 +94,7 @@ async fn wait_for_client_ready(
             Ok(msg) => {
                 if let Some(cmd) = msg.cmd {
                     match cmd {
-                        SshControl::Ready => return Ok((socket, is_minimized)),
+                        SshControl::Ready { cols, rows } => return Ok((socket, is_minimized, (cols, rows))),
                         SshControl::Close => return Err(()),
                         SshControl::Minimize(val) => is_minimized = val,
                         SshControl::Resize { .. } => {}
@@ -148,7 +148,7 @@ pub async fn ssh_terminal_ws(
                 session_number = num,
                 "WebSocket upgrade callback started (reattach)"
             );
-            if let Ok((socket, is_minimized)) = wait_for_client_ready(socket).await {
+            if let Ok((socket, is_minimized, _dims)) = wait_for_client_ready(socket).await {
                 let registry_for_upgrade = registry_inner.clone();
                 handle_reattach(socket, existing, registry_for_upgrade, is_minimized).await;
             } else {
@@ -183,7 +183,7 @@ pub async fn ssh_terminal_ws(
 
     Ok(options.on_upgrade(move |socket| async move {
         tracing::info!(relay = %relay_for_upgrade, user = %username, "WebSocket upgrade callback started (new session)");
-        if let Ok((socket, is_minimized)) = wait_for_client_ready(socket).await {
+        if let Ok((socket, is_minimized, term_dims)) = wait_for_client_ready(socket).await {
             let registry_for_new = registry_inner.clone();
             handle_new_session(
                 socket,
@@ -195,6 +195,7 @@ pub async fn ssh_terminal_ws(
                 ip_address,
                 user_agent_str,
                 is_minimized,
+                term_dims,
             )
             .await;
         } else {
@@ -305,12 +306,12 @@ async fn handle_reattach(
                     Ok(client_msg) => {
                         if let Some(cmd) = &client_msg.cmd {
                             match cmd {
-                                SshControl::Ready => {} // Already ready
+                                SshControl::Ready { .. } => {} // Already ready
                                 SshControl::Close => {
                                     // User explicitly closed the shell
                                     explicit_close = true;
                                     // Close backend for everyone and remove the session
-                                    let _ = backend.close();
+                                    let _ = backend.close().await;
                                     session.close().await;
                                     registry
                                         .remove_session(session.user_id, session.relay_id, session.session_number)
@@ -318,7 +319,7 @@ async fn handle_reattach(
                                     break;
                                 }
                                 SshControl::Resize { cols, rows } => {
-                                    let _ = backend.resize(*cols, *rows);
+                                    let _ = backend.resize(*cols, *rows).await;
                                 }
                                 SshControl::Minimize(minimized) => {
                                     if *minimized != is_minimized {
@@ -333,7 +334,7 @@ async fn handle_reattach(
                             }
                         }
                         if !client_msg.data.is_empty() {
-                            let _ = backend.send(client_msg.data);
+                            let _ = backend.send(client_msg.data).await;
                         }
                     }
                     Err(_) => break,
@@ -400,6 +401,7 @@ async fn handle_new_session(
     ip_address: Option<String>,
     user_agent: Option<String>,
     is_minimized: bool,
+    term_dims: (u32, u32),
 ) {
     use tokio::sync::{Mutex, mpsc::unbounded_channel};
 
@@ -413,7 +415,7 @@ async fn handle_new_session(
     let mut connect_fut = Box::pin(connect_to_relay_backend(
         &relay_name,
         &username_for_connect,
-        (80, 24),
+        term_dims,
         Some(prompt_tx.clone()),
         Some(auth_rx_mutex),
     ));

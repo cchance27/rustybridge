@@ -1,3 +1,20 @@
+
+// Initialize globals
+window.terminals = window.terminals || {};
+
+// Debounce helper to prevent spamming
+window.debounce = (func, wait) => {
+    let timeout;
+    return function (...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func.apply(this, args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+};
+
 window.initRustyBridgeTerminal = async function (terminalId, options) {
     try {
         const container = document.getElementById(terminalId);
@@ -46,7 +63,7 @@ window.initRustyBridgeTerminal = async function (terminalId, options) {
             fitAddon.fit();
 
             // Use ResizeObserver to handle container resizing
-            const resizeObserver = new ResizeObserver(() => {
+            const debouncedFit = window.debounce(() => {
                 // Only fit if the container is visible and has dimensions
                 if (container.clientWidth > 0 && container.clientHeight > 0) {
                     try {
@@ -56,6 +73,10 @@ window.initRustyBridgeTerminal = async function (terminalId, options) {
                         console.warn('ResizeObserver failed to fit terminal:', e);
                     }
                 }
+            }, 250); // 250ms debounce for layout fitting
+
+            const resizeObserver = new ResizeObserver(() => {
+                debouncedFit();
             });
             resizeObserver.observe(container);
 
@@ -63,7 +84,6 @@ window.initRustyBridgeTerminal = async function (terminalId, options) {
             term._fitAddon = fitAddon;
         }
 
-        window.terminals = window.terminals || {};
         window.terminals[terminalId] = term;
 
         term.write('Loading Session...\r\n');
@@ -73,35 +93,37 @@ window.initRustyBridgeTerminal = async function (terminalId, options) {
     }
 }
 
-// Function to write data to the terminal from Rust
+// Function to write data to a terminal (called from Rust)
 window.writeToTerminal = function (terminalId, data) {
     const term = window.terminals[terminalId];
-    if (term) {
-        // data can be a UTF-8 string or raw bytes (Uint8Array)
-        if (typeof data === 'string') {
-            term.write(data);
-            return;
-        }
-
-        if (data instanceof Uint8Array) {
-            window._rbTextDecoder = window._rbTextDecoder || new TextDecoder('utf-8', { fatal: false });
-            const decoded = window._rbTextDecoder.decode(data);
-            term.write(decoded);
-            return;
-        }
-
-        // Fallback for plain arrays or unexpected types
-        if (Array.isArray(data)) {
-            window._rbTextDecoder = window._rbTextDecoder || new TextDecoder('utf-8', { fatal: false });
-            const decoded = window._rbTextDecoder.decode(new Uint8Array(data));
-            term.write(decoded);
-            return;
-        }
-
-        term.write(String(data));
-    } else {
+    if (!term) {
         console.warn(`writeToTerminal: Terminal ${terminalId} not found`);
+        return false;
     }
+
+    // Handle string input
+    if (typeof data === 'string') {
+        term.write(data);
+        return true;
+    }
+
+    if (data instanceof Uint8Array) {
+        window._rbTextDecoder = window._rbTextDecoder || new TextDecoder('utf-8', { fatal: false });
+        let decoded = window._rbTextDecoder.decode(data);
+        term.write(decoded);
+        return true;
+    }
+
+    // Fallback for plain arrays or unexpected types
+    if (Array.isArray(data)) {
+        window._rbTextDecoder = window._rbTextDecoder || new TextDecoder('utf-8', { fatal: false });
+        let decoded = window._rbTextDecoder.decode(new Uint8Array(data));
+        term.write(decoded);
+        return true;
+    }
+
+    term.write(data);
+    return true;
 };
 
 // Function to setup input handling to send data back to Rust
@@ -117,7 +139,6 @@ window.setupTerminalInput = function (terminalId, onDataCallback) {
             const bytes = encoder.encode(data);
             onDataCallback(Array.from(bytes));
         });
-        console.log(`Input handling setup for terminal ${terminalId}`);
         return true;
     } else {
         console.warn(`setupTerminalInput: Terminal ${terminalId} not found`);
@@ -142,5 +163,39 @@ window.fitTerminal = function (terminalId) {
         } catch (e) {
             console.warn(`fitTerminal: Failed to fit terminal ${terminalId}`, e);
         }
+    }
+};
+
+// Function to get current terminal dimensions
+window.getTerminalDimensions = function (terminalId) {
+    const term = window.terminals[terminalId];
+    if (term) {
+        return {
+            cols: term.cols,
+            rows: term.rows
+        };
+    }
+    return null;
+};
+
+// Function to setup resize handling to send dimensions back to Rust
+window.setupTerminalResize = function (terminalId, onResizeCallback) {
+    const term = window.terminals[terminalId];
+    if (term) {
+        if (term._resizeDisposable) {
+            term._resizeDisposable.dispose();
+        }
+
+        // Debounce resize events by 250
+        const debouncedResize = window.debounce((size) => {
+            onResizeCallback({ cols: size.cols, rows: size.rows });
+        }, 250);
+
+        term._resizeDisposable = term.onResize(debouncedResize);
+        console.log(`Resize handling setup for terminal ${terminalId} (debounced)`);
+        return true;
+    } else {
+        console.warn(`setupTerminalResize: Terminal ${terminalId} not found`);
+        return false;
     }
 };

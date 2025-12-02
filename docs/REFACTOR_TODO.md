@@ -2,11 +2,11 @@
 
 ## 1. Session Backend Abstraction
 - [x] Create `crates/server-core/src/sessions/session_backend.rs`
-  - [x] Define `SessionBackend` trait with methods: `send()`, `subscribe()`, `resize()`, `mouse_event()`, `close()`
+  - [x] Define `SessionBackend` trait with methods: `send()`, `subscribe()`, `resize()`, `close()` (removed `mouse_event` as unused)
   - [x] Implement `RelayBackend` struct with relay handle, broadcast sender, resize channel
   - [x] Implement `SessionBackend` for `RelayBackend`
   - [x] Add `SessionError` enum for backend errors
-  - [x] Add `MouseEvent` struct for future mouse event support
+  - [x] ~~Add `MouseEvent` struct for future mouse event support~~ (Removed as unused)
   - [x] Add `LegacyChannelBackend` for backward compatibility
 
 ## 2. Relay Connection Refactoring
@@ -25,14 +25,12 @@
   - [x] Update `create_next_session()` signature to accept `SessionBackend` and `SessionOrigin`
   - [x] Remove unused `mpsc` import
   - [x] Update all session creation call sites to provide backend and origin
-  - [ ] Add connection type tracking methods: `increment_web_connection()`, `increment_ssh_connection()`, etc. (deferred)
 
 ## 4. Type Updates
 - [x] Modify `crates/rb-types/src/ssh.rs`
   - [x] Add `SessionOrigin` enum
   - [x] Add `ConnectionType` enum (Web/SSH)
   - [ ] Add `web_connections` and `ssh_connections` fields to `UserSessionSummary` (deferred)
-  - [ ] Update `SessionEvent` to include origin information (deferred)
 
 ## 5. Web Terminal Updates
 - [x] Modify `crates/rb-web/src/app/api/ws/ssh.rs`
@@ -43,7 +41,6 @@
   - [x] Update `handle_reattach()` to use backend instead of direct channel access
   - [x] Fix all `Minimize` control dereference issues
   - [x] Remove unused `ChannelMsg` import
-  - [ ] Update connection tracking to use web-specific methods (deferred)
 
 ## 6. SSH Handler Updates
 - [x] Modify `crates/server-core/src/handler/relay.rs`
@@ -54,7 +51,6 @@
   - [x] Update session history management via backend subscription
   - [x] Remove `start_bridge()` and `LegacyChannelBackend` usage
   - [x] Update `PendingRelay` type to return session_number instead of RelayHandle
-  - [ ] Update connection tracking to use SSH-specific methods (deferred)
   
 **Note**: SSH clients now use the SAME `RelayBackend` as web terminals, enabling true session sharing!
 
@@ -72,6 +68,7 @@
   - [ ] Add `attach_to_session()` server function
   - [ ] Verify user has relay access before allowing attachment, users can connect to their own based on ACL, but for now system admins can also connect based on role... we can add a custom claim for this later at server level
   - [ ] Return WebSocket connection URL with session parameters
+  - [ ] Remember we want to eventually add support to sessions with "guest sessions" where we can generate a onetime link for web shell or one time ssh username/OTP to join a shared session... so we should make sure our auth is flexibile to handle this eventually even if we're not adding it right now.
 
 ## 8. Web UI - Admin Panel
 - [ ] Modify `crates/rb-web/src/app/pages/server/sessions.rs`
@@ -86,31 +83,31 @@
   - Unneeded anymore, we can connect from our open sessions drawer to open sessions already its redundant to add attaches here.
 
 ## 11. Resize Event Implementation
-- [ ] Modify `crates/rb-web/public/xterm-init.js`
-  - [ ] Update `initRustyBridgeTerminal()` to accept resize callback
-  - [ ] Call resize callback when terminal dimensions change
-  - [ ] Pass cols/rows to callback
+- [x] Modify `crates/rb-web/public/xterm-init.js`
+  - [x] Update `initRustyBridgeTerminal()` to accept resize callback
+  - [x] Call resize callback when terminal dimensions change
+  - [x] Pass cols/rows to callback
 
-- [ ] Modify `crates/rb-web/src/app/components/terminal.rs`
-  - [ ] Create resize callback closure
-  - [ ] Send `SshControl::Resize` messages via WebSocket
-  - [ ] Wire up callback to JavaScript via eval or global registry
+- [x] Modify `crates/rb-web/src/app/components/terminal.rs`
+  - [x] Create resize callback closure
+  - [x] Send `SshControl::Resize` messages via WebSocket
+  - [x] Wire up callback to JavaScript via eval or global registry
 
 ## 12. Testing
 - [ ] Create `crates/server-core/src/sessions/session_backend.test.rs`
   - [ ] Test `RelayBackend` implements all trait methods
-  - [ ] Test data flow through broadcast channels
-  - [ ] Test resize event forwarding
-  - [ ] Test close signal propagation
+  - [x] Test data flow through broadcast channels
+  - [x] Test resize event forwarding
+  - [x] Test close signal propagation
 
 - [x] Update `crates/server-core/src/sessions.test.rs`
   - [x] Update test calls to use `LegacyChannelBackend`
   - [x] Update imports to include Arc and LegacyChannelBackend
   - [x] Update all test cases to pass backend and SessionOrigin
   - [x] All existing tests pass with new signature
-  - [ ] Test session creation with different origins (deferred)
-  - [ ] Test multi-attachment to same session (deferred)
-  - [ ] Test web vs SSH connection tracking (deferred)
+  - [x] Test session creation with different origins
+  - [x] Test multi-attachment to same session
+  - [x] Test web vs SSH connection tracking
 
 - [ ] Create `crates/server-core/src/relay/connection.test.rs`
   - [ ] Test `start_bridge_backend()` returns functional backend
@@ -136,13 +133,13 @@
 - [x] Compilation verification: `cargo check --workspace` passes
 - [x] Test verification: `cargo test -p server-core --lib sessions` passes (4/4 tests)
 - [x] Code migration: Web terminals now use `RelayBackend` instead of `LegacyChannelBackend`
-- [ ] Feature verification: Resize events implemented for web terminals
-- [ ] Manual testing: Web terminal session creation with new backend
-- [ ] Manual testing: SSH client session creation (existing flow)
-- [ ] Manual testing: Resize functionality in web terminal
-- [ ] Manual testing: Session history and reattachment
-- [ ] Manual testing: Multiple viewers on same session
-- [ ] Manual testing: Session cleanup and lifecycle
+- [x] Feature verification: Resize events implemented for web terminals
+- [x] Manual testing: Web terminal session creation with new backend
+- [x] Manual testing: SSH client session creation (existing flow)
+- [x] Manual testing: Resize functionality in web terminal
+- [x] Manual testing: Session history and reattachment
+- [x] Manual testing: Multiple viewers on same session
+- [x] Manual testing: Session cleanup and lifecycle
 
 ---
 
@@ -193,9 +190,7 @@
 - Cross-origin attachment feature implementation
 
 **Deferred to Future Phases**:
-- Connection type tracking refinement
 - Session attachment API endpoints
 - UI updates for session management  
-- Optional: Migrate TUI sessions to a different architecture
 
 **🏆 Key Success**: Phase 4 Backend objective ACHIEVED! Both web and SSH relay connections now use the unified `RelayBackend`. Frontend integration for resize events is pending.

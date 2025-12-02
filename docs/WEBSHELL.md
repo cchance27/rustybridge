@@ -531,23 +531,27 @@ Check Server side code with `cargo check -p rb-web --features server`
 
 ---
 
-## ✅ Phase 4: Session Unification and Event Unification (BACKEND COMPLETE)
+## ✅ Phase 4: Session Unification and Event Unification (COMPLETE)
 
 ### What’s implemented
 - ✅ **Unified session backend**: `SessionBackend` trait + `RelayBackend` now power both web and SSH relay sessions; sessions store `Arc<dyn SessionBackend>` and `SessionOrigin` (Web/SSH).
 - ✅ **Web + SSH share the same path**: `rb-web` uses `connect_to_relay_backend`, SSH handler uses `start_bridge_backend`; both register sessions through the registry with the same backend abstraction.
 - ✅ **Resize support**: `SshControl::Resize` is handled end-to-end and forwarded via `RelayBackend` to the relay PTY.
+- ✅ **Frontend Resize Integration**: `xterm.js` resize events are captured and sent to Rust via `setupTerminalResize` bridge, ensuring PTY size matches browser window.
 - ✅ **History/reattach** runs through the backend subscription for both origins.
+- ✅ **Mouse Support**: Standard VT mouse tracking works via the unified backend (xterm.js captures mouse events -> sends as escape 
+- ✅  **Connection-type counters**: finer-grained web vs SSH connection/viewer counts surfaced in types/UI.
 
-### Deferred / next-up
+### Deferred / next-upsequences -> backend -> PTY).
 - ⏳ **Attach API & UI**: web attach to SSH-origin sessions (server function + UI hooks) still to build.
-- ⏳ **Mouse events**: wire xterm.js mouse tracking to backend `mouse_event` (trait stub exists, not plumbed).
 - ⏳ **Additional SSH event polish**: review/control messages beyond resize/close; ensure parity across origins.
-- ⏳ **Connection-type counters**: finer-grained web vs SSH connection/viewer counts surfaced in types/UI.
+
 
 ### Notes
 - The remaining work is primarily API/UI surface and richer telemetry; the backend unification is done.
-- **Pending**: Frontend resize event integration (xterm.js -> Rust) is not yet implemented.
+- **Fixed**: "Clean bytes" issue where `xterm.js` received raw bytes causing newline artifacts. Now properly decoding `Uint8Array` before writing to terminal.
+- **Mouse Support**: Standard mouse support works out-of-the-box because xterm.js sends mouse reporting sequences as standard input bytes. The unused `mouse_event` method and `MouseEvent` structs were removed from the backend to keep the API clean.
+- **Fixed**: SSH input regression where `session.backend.send()` was not awaited in `handle_data`, causing input from SSH clients to be dropped. Added missing `.await`.
 
 ---
 
