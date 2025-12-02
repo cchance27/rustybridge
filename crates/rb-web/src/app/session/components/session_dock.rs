@@ -20,7 +20,7 @@ pub fn SessionDock() -> Element {
                     let title = s.title.clone();
                     let relay_name = s.relay_name.clone();
                     let minimized = s.minimized;
-                    let active_viewers = s.active_viewers;
+                    let active_viewers = s.viewers.web + s.viewers.ssh;
                     let attachable = s.attachable;
 
                     rsx! {

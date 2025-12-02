@@ -185,6 +185,12 @@ pub enum TUIApplication {
     RelaySelector,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ConnectionAmounts {
+    pub web: u32,
+    pub ssh: u32,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct UserSessionSummary {
     pub relay_id: i64,
@@ -206,8 +212,8 @@ pub struct UserSessionSummary {
     /// Timeout for detached sessions in seconds (if applicable)
     #[serde(default)]
     pub detached_timeout_secs: Option<u32>,
-    pub active_connections: u32,
-    pub active_viewers: u32,
+    pub connections: ConnectionAmounts,
+    pub viewers: ConnectionAmounts,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub last_active_at: chrono::DateTime<chrono::Utc>,
 }
@@ -218,6 +224,22 @@ pub struct AdminSessionSummary {
     pub username: String,
     #[serde(flatten)]
     pub session: UserSessionSummary,
+}
+
+/// Session origin tracking - where the session was created from
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum SessionOrigin {
+    /// Session created from web UI
+    Web { user_id: i64 },
+    /// Session created from SSH client
+    Ssh { user_id: i64 },
+}
+
+/// Connection type for tracking web vs SSH connections
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionType {
+    Web,
+    Ssh,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]

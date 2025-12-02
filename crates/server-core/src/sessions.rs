@@ -1,3 +1,5 @@
+pub mod session_backend;
+
 use std::{
     collections::{HashMap, VecDeque}, sync::{
         Arc, atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering}
@@ -5,8 +7,11 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use rb_types::ssh::{SessionEvent, SessionKind, SessionStateSummary, TUIApplication, UserSessionSummary, WebSessionMeta};
-use tokio::sync::{RwLock, broadcast, mpsc};
+use rb_types::ssh::{
+    ConnectionAmounts, ConnectionType, SessionEvent, SessionKind, SessionOrigin, SessionStateSummary, TUIApplication, UserSessionSummary, WebSessionMeta
+};
+use session_backend::SessionBackend;
+use tokio::sync::{RwLock, broadcast};
 
 #[derive(Debug, Clone)]
 pub enum SessionState {
@@ -46,10 +51,15 @@ pub struct SshSession {
     pub active_connections: AtomicU32,
     // Number of connections with the window OPEN (not minimized)
     pub active_viewers: AtomicU32,
-    // Channel to send input to the SSH loop
-    pub input_tx: mpsc::Sender<Vec<u8>>,
-    // Broadcast channel to send output to attached WebSockets
-    pub output_tx: broadcast::Sender<Vec<u8>>,
+    // Connection counts by type
+    pub web_connections: AtomicU32,
+    pub ssh_connections: AtomicU32,
+    pub web_viewers: AtomicU32,
+    pub ssh_viewers: AtomicU32,
+    // Session origin (Web or SSH)
+    pub origin: SessionOrigin,
+    // Backend for I/O operations (unified interface)
+    pub backend: Arc<dyn SessionBackend>,
     // Close signal
     pub close_tx: broadcast::Sender<()>,
     // Event channel
@@ -67,8 +77,8 @@ impl SshSession {
         relay_id: i64,
         relay_name: String,
         username: String,
-        input_tx: mpsc::Sender<Vec<u8>>,
-        output_tx: broadcast::Sender<Vec<u8>>,
+        backend: Arc<dyn SessionBackend>,
+        origin: SessionOrigin,
         close_tx: broadcast::Sender<()>,
         event_tx: broadcast::Sender<SessionEvent>,
         ip_address: Option<String>,
@@ -92,8 +102,12 @@ impl SshSession {
             history: RwLock::new(VecDeque::with_capacity(65536)), // 64KB
             active_connections: AtomicU32::new(0),
             active_viewers: AtomicU32::new(0),
-            input_tx,
-            output_tx,
+            web_connections: AtomicU32::new(0),
+            ssh_connections: AtomicU32::new(0),
+            web_viewers: AtomicU32::new(0),
+            ssh_viewers: AtomicU32::new(0),
+            origin,
+            backend,
             close_tx,
             event_tx,
         }
@@ -122,8 +136,14 @@ impl SshSession {
             detached_at,
             detached_timeout_secs: None, // TODO: Implement timeout config
             active_app: self.active_app.read().await.clone(),
-            active_connections: self.active_connections.load(Ordering::Relaxed),
-            active_viewers: self.active_viewers.load(Ordering::Relaxed),
+            connections: ConnectionAmounts {
+                web: self.web_connections.load(Ordering::Relaxed),
+                ssh: self.ssh_connections.load(Ordering::Relaxed),
+            },
+            viewers: ConnectionAmounts {
+                web: self.web_viewers.load(Ordering::Relaxed),
+                ssh: self.ssh_viewers.load(Ordering::Relaxed),
+            },
             created_at: self.created_at,
             last_active_at: self.last_active_at(),
         }
@@ -147,7 +167,16 @@ impl SshSession {
         DateTime::from_timestamp_millis(last_activity_ms).unwrap_or_default()
     }
 
-    pub async fn increment_connections(&self) -> u32 {
+    pub async fn increment_connection(&self, conn_type: ConnectionType) -> u32 {
+        match conn_type {
+            ConnectionType::Web => {
+                self.web_connections.fetch_add(1, Ordering::SeqCst);
+            }
+            ConnectionType::Ssh => {
+                self.ssh_connections.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
         let count = self.active_connections.fetch_add(1, Ordering::SeqCst) + 1;
         // Broadcast the updated connection count to all listeners
         if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
@@ -163,7 +192,16 @@ impl SshSession {
         count
     }
 
-    pub async fn decrement_connections(&self) -> u32 {
+    pub async fn decrement_connection(&self, conn_type: ConnectionType) -> u32 {
+        match conn_type {
+            ConnectionType::Web => {
+                let _ = self.web_connections.fetch_sub(1, Ordering::SeqCst).saturating_sub(1);
+            }
+            ConnectionType::Ssh => {
+                let _ = self.ssh_connections.fetch_sub(1, Ordering::SeqCst).saturating_sub(1);
+            }
+        }
+
         let count = self.active_connections.fetch_sub(1, Ordering::SeqCst).saturating_sub(1);
         // Broadcast the updated connection count to all listeners
         if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
@@ -179,8 +217,16 @@ impl SshSession {
         count
     }
 
-    pub async fn increment_viewers(&self) -> u32 {
+    pub async fn increment_viewers(&self, conn_type: ConnectionType) -> u32 {
         let count = self.active_viewers.fetch_add(1, Ordering::SeqCst) + 1;
+        match conn_type {
+            ConnectionType::Web => {
+                let _ = self.web_viewers.fetch_add(1, Ordering::SeqCst);
+            }
+            ConnectionType::Ssh => {
+                let _ = self.ssh_viewers.fetch_add(1, Ordering::SeqCst);
+            }
+        }
         // Broadcast updates
         if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
             // Only warn if there are subscribers (otherwise it's expected)
@@ -195,8 +241,16 @@ impl SshSession {
         count
     }
 
-    pub async fn decrement_viewers(&self) -> u32 {
+    pub async fn decrement_viewers(&self, conn_type: ConnectionType) -> u32 {
         let count = self.active_viewers.fetch_sub(1, Ordering::SeqCst).saturating_sub(1);
+        match conn_type {
+            ConnectionType::Web => {
+                let _ = self.web_viewers.fetch_sub(1, Ordering::SeqCst).saturating_sub(1);
+            }
+            ConnectionType::Ssh => {
+                let _ = self.ssh_viewers.fetch_sub(1, Ordering::SeqCst).saturating_sub(1);
+            }
+        }
         // Broadcast updates
         if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
             // Only warn if there are subscribers (otherwise it's expected)
@@ -213,6 +267,22 @@ impl SshSession {
 
     pub fn connection_count(&self) -> u32 {
         self.active_connections.load(Ordering::SeqCst)
+    }
+
+    pub fn web_connection_count(&self) -> u32 {
+        self.web_connections.load(Ordering::SeqCst)
+    }
+
+    pub fn ssh_connection_count(&self) -> u32 {
+        self.ssh_connections.load(Ordering::SeqCst)
+    }
+
+    pub fn web_viewer_count(&self) -> u32 {
+        self.web_viewers.load(Ordering::SeqCst)
+    }
+
+    pub fn ssh_viewer_count(&self) -> u32 {
+        self.ssh_viewers.load(Ordering::SeqCst)
     }
 
     pub async fn append_to_history(&self, data: &[u8]) {
@@ -378,9 +448,8 @@ impl SessionRegistry {
         relay_id: i64,
         relay_name: String,
         username: String,
-        input_tx: mpsc::Sender<Vec<u8>>,
-        output_tx: broadcast::Sender<Vec<u8>>,
-        close_tx: broadcast::Sender<()>,
+        backend: Arc<dyn SessionBackend>,
+        origin: SessionOrigin,
         ip_address: Option<String>,
         user_agent: Option<String>,
     ) -> (u32, Arc<SshSession>) {
@@ -389,14 +458,16 @@ impl SessionRegistry {
         // Use atomic counter for O(1) ID generation
         let session_number = self.next_session_id.fetch_add(1, Ordering::Relaxed);
 
+        let (close_tx, _) = broadcast::channel(1);
+
         let session = Arc::new(SshSession::new(
             session_number,
             user_id,
             relay_id,
             relay_name,
             username,
-            input_tx,
-            output_tx,
+            backend,
+            origin,
             close_tx,
             self.event_tx.clone(),
             ip_address,
@@ -544,11 +615,10 @@ impl SessionRegistry {
     /// Update last_seen timestamp for a web session (heartbeat)
     pub async fn heartbeat_web_session(&self, user_id: i64, session_id: &str) {
         let mut conns = self.web_connections.write().await;
-        if let Some(list) = conns.get_mut(&user_id) {
-            if let Some(meta) = list.iter_mut().find(|m| m.id == session_id) {
+        if let Some(list) = conns.get_mut(&user_id)
+            && let Some(meta) = list.iter_mut().find(|m| m.id == session_id) {
                 meta.last_seen = Utc::now();
             }
-        }
     }
 }
 

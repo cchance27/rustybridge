@@ -15,7 +15,12 @@ pub fn NavBar() -> Element {
     let time_fmt = "%H:%M:%S %Y-%m-%d";
 
     // Count sessions with multiple viewers (for tooltip context)
-    let shared_ssh_count = session.sessions().read().iter().filter(|s| s.active_viewers > 1).count();
+    let shared_ssh_count = session
+        .sessions()
+        .read()
+        .iter()
+        .filter(|s| (s.viewers.web + s.viewers.ssh) > 1)
+        .count();
 
     rsx! {
         div { class: "navbar bg-base-200 shadow-sm",

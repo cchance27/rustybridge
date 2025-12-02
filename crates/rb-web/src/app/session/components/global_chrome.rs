@@ -179,7 +179,7 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                                             let id = s.id.clone();
                                             let relay_name = s.relay_name.clone();
                                             let minimized = s.minimized;
-                                            let active_viewers = s.active_viewers;
+                                            let active_viewers = s.viewers.web + s.viewers.ssh;
                                             let attachable = s.attachable;
 
                                             // Use a stable label based on relay and backend session number

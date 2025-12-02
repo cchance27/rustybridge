@@ -7,7 +7,9 @@ use rb_types::ssh::SessionEvent;
 use crate::app::{
     api::{
         sessions::{close_session, list_all_sessions}, ws::session_events::ssh_web_events
-    }, components::{StructuredTooltip, Table, TooltipSection, use_toast}, session::provider::use_session
+    }, components::{
+        StructuredTooltip, Table, TooltipSection, icons::{BrowserIcon, TerminalIcon}, use_toast
+    }, session::provider::use_session
 };
 
 #[component]
@@ -106,7 +108,10 @@ pub fn SessionsSection() -> Element {
 
                         if matches!(
                             event,
-                            SessionEvent::Created(_, _) | SessionEvent::Updated(_, _) | SessionEvent::Removed { .. } | SessionEvent::Presence(_, _)
+                            SessionEvent::Created(_, _)
+                                | SessionEvent::Updated(_, _)
+                                | SessionEvent::Removed { .. }
+                                | SessionEvent::Presence(_, _)
                         ) {
                             pending_refresh = true;
                         }
@@ -172,7 +177,7 @@ pub fn SessionsSection() -> Element {
                                     h3 { class: "text-lg font-semibold mb-2", "Relay Sessions" }
                                     Table {
                                         class: "table table-zebra",
-                                        headers: vec!["User", "Origin", "Relay", "Session #", "IP", "State", "Conns", "Viewers", "Created", "Last Active", "Actions"],
+                                        headers: vec!["User", "Relay", "Session #", "IP", "State", "Conns (S/W)", "Viewers (total)", "Created", "Last Active", "Actions"],
                                         for session in relay_sessions {
                                             {
                                                 let created = format_local(session.session.created_at);
@@ -180,11 +185,9 @@ pub fn SessionsSection() -> Element {
                                                 let last_active = format_relative(session.session.last_active_at);
                                                 let detached_tip = detached_tooltip(&session.session, tick());
                                                 let active_tip = active_tooltip(session.session.created_at, tick());
-                                                let origin = if session.session.user_agent.is_some() { "Web" } else { "SSH" };
                                                 rsx! {
                                                     tr {
                                                         td { class: "text-center", "{session.username}" }
-                                                        td { class: "text-center", "{origin}" }
                                                         td { class: "text-center", "{session.session.relay_name}" }
                                                         td { class: "text-center", "{session.session.session_number}" }
                                                         td { class: "text-center text-sm",
@@ -207,8 +210,17 @@ pub fn SessionsSection() -> Element {
                                                                 rb_types::ssh::SessionStateSummary::Closed => rsx! { span { class: "badge badge-ghost", "Closed" } },
                                                             }
                                                         }
-                                                        td { class: "text-center", "{session.session.active_connections}" }
-                                                        td { class: "text-center", "{session.session.active_viewers}" }
+                                                            td { class: "text-center",
+                                                                div { class: "flex flex-row items-center gap-1 justify-center",
+                                                                div { class: "w-5 h-5 inline-flex", TerminalIcon {} } span { "{session.session.connections.ssh}" }
+                                                                div { class: "w-5 h-5 mt-1 inline-flex ml-2", BrowserIcon {} } span { "{session.session.connections.web}" }
+                                                        }
+                                                    }
+                                                        td { class: "text-center",
+                                                                div { class: "flex flex-row items-center gap-1 justify-center",
+                                                                div { class: "w-5 h-5 inline-flex", TerminalIcon {} } span { "{session.session.viewers.ssh}" }
+                                                                div { class: "w-5 h-5 mt-1 inline-flex ml-2", BrowserIcon {} } span { "{session.session.viewers.web}" }
+                                                        }}
                                                         td { class: "text-sm text-center", "{created}" }
                                                         td { class: "text-sm text-center", title: "{last_active_abs}",
                                                             { if session.session.active_recent {
@@ -280,8 +292,8 @@ pub fn SessionsSection() -> Element {
                                                                 rb_types::ssh::SessionStateSummary::Closed => rsx! { span { class: "badge badge-ghost", "Closed" } },
                                                             }
                                                         }
-                                                        td { class: "text-center", "{session.session.active_connections}" }
-                                                        td { class: "text-center", "{session.session.active_viewers}" }
+                                                        td { class: "text-center", "{session.session.connections.web + session.session.connections.ssh}" }
+                                                        td { class: "text-center", "{session.session.viewers.web + session.session.viewers.ssh}" }
                                                         td { class: "text-sm text-center", "{created}" }
                                                         td { class: "text-sm text-center", title: "{last_active_abs}",
                                                             { if session.session.active_recent {

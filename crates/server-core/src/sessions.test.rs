@@ -1,15 +1,16 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use tokio::sync::{broadcast, mpsc};
 
 use super::*;
+use crate::sessions::session_backend::LegacyChannelBackend;
 
 #[tokio::test]
 async fn test_session_creation_and_retrieval() {
     let registry = SessionRegistry::new();
     let (input_tx, _) = mpsc::channel(1);
     let (output_tx, _) = broadcast::channel(1);
-    let (close_tx, _) = broadcast::channel(1);
+    let backend = Arc::new(LegacyChannelBackend::new(input_tx, output_tx));
 
     let (session_number, session) = registry
         .create_next_session(
@@ -17,10 +18,9 @@ async fn test_session_creation_and_retrieval() {
             1,
             "test-relay".to_string(),
             "test-user".to_string(),
-            input_tx,
-            output_tx,
-            close_tx,
-            None,
+            backend,
+            rb_types::ssh::SessionOrigin::Ssh { user_id: 1 },
+            Some("127.0.0.1".to_string()),
             None,
         )
         .await;
@@ -38,11 +38,11 @@ async fn test_next_session_number() {
     let registry = SessionRegistry::new();
     let (input_tx1, _) = mpsc::channel(1);
     let (output_tx1, _) = broadcast::channel(1);
-    let (close_tx1, _) = broadcast::channel(1);
+    let backend1 = Arc::new(LegacyChannelBackend::new(input_tx1, output_tx1));
 
     let (input_tx2, _) = mpsc::channel(1);
     let (output_tx2, _) = broadcast::channel(1);
-    let (close_tx2, _) = broadcast::channel(1);
+    let backend2 = Arc::new(LegacyChannelBackend::new(input_tx2, output_tx2));
 
     let (num1, _) = registry
         .create_next_session(
@@ -50,10 +50,9 @@ async fn test_next_session_number() {
             1,
             "test-relay".to_string(),
             "test-user".to_string(),
-            input_tx1,
-            output_tx1,
-            close_tx1,
-            None,
+            backend1,
+            rb_types::ssh::SessionOrigin::Ssh { user_id: 1 },
+            Some("127.0.0.1".to_string()),
             None,
         )
         .await;
@@ -63,10 +62,9 @@ async fn test_next_session_number() {
             1,
             "test-relay".to_string(),
             "test-user".to_string(),
-            input_tx2,
-            output_tx2,
-            close_tx2,
-            None,
+            backend2,
+            rb_types::ssh::SessionOrigin::Ssh { user_id: 1 },
+            Some("127.0.0.1".to_string()),
             None,
         )
         .await;
@@ -80,7 +78,7 @@ async fn test_session_cleanup() {
     let registry = SessionRegistry::new();
     let (input_tx, _) = mpsc::channel(1);
     let (output_tx, _) = broadcast::channel(1);
-    let (close_tx, _) = broadcast::channel(1);
+    let backend = Arc::new(LegacyChannelBackend::new(input_tx, output_tx));
 
     let (session_number, session) = registry
         .create_next_session(
@@ -88,10 +86,9 @@ async fn test_session_cleanup() {
             1,
             "test-relay".to_string(),
             "test-user".to_string(),
-            input_tx,
-            output_tx,
-            close_tx,
-            None,
+            backend,
+            rb_types::ssh::SessionOrigin::Ssh { user_id: 1 },
+            Some("127.0.0.1".to_string()),
             None,
         )
         .await;
@@ -113,7 +110,7 @@ async fn test_history_buffer() {
     let registry = SessionRegistry::new();
     let (input_tx, _) = mpsc::channel(1);
     let (output_tx, _) = broadcast::channel(1);
-    let (close_tx, _) = broadcast::channel(1);
+    let backend = Arc::new(LegacyChannelBackend::new(input_tx, output_tx));
 
     let (_, session) = registry
         .create_next_session(
@@ -121,10 +118,9 @@ async fn test_history_buffer() {
             1,
             "test-relay".to_string(),
             "test-user".to_string(),
-            input_tx,
-            output_tx,
-            close_tx,
-            None,
+            backend,
+            rb_types::ssh::SessionOrigin::Ssh { user_id: 1 },
+            Some("127.0.0.1".to_string()),
             None,
         )
         .await;

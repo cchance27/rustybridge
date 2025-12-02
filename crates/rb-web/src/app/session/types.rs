@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use rb_types::ssh::ConnectionAmounts;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -35,10 +36,9 @@ pub struct Session {
     pub z_index: usize,
     // Optional backend SSH session number used for detach/reattach across browsers
     pub session_number: Option<u32>,
-    // Track number of active connections to this session (for multi-viewer support)
-    pub active_connections: u32,
-    // Track number of active viewers (non-minimized windows)
-    pub active_viewers: u32,
+    // Track connections and viewers broken down by origin
+    pub connections: ConnectionAmounts,
+    pub viewers: ConnectionAmounts,
     // Whether this session can be attached to from the web (web-origin vs ssh-origin)
     pub attachable: bool,
 }
@@ -64,9 +64,9 @@ impl Session {
             last_focused_at: Utc::now(),
             z_index: 60, // Default base z-index
             session_number: None,
-            active_connections: 1, // Default to 1 (this connection)
-            active_viewers: 1,     // Default to 1 (this connection)
-            attachable: true,      // New windows opened from web are attachable
+            connections: ConnectionAmounts { web: 1, ssh: 0 },
+            viewers: ConnectionAmounts { web: 1, ssh: 0 },
+            attachable: true, // New windows opened from web are attachable
         }
     }
 }

@@ -19,8 +19,8 @@ impl ServerHandler {
         // If a relay connect is pending, poll its completion
         if let Some(rx) = self.pending_relay.as_mut() {
             match rx.try_recv() {
-                Ok(Ok((handle, auth_tx))) => {
-                    self.relay_handle = Some(handle);
+                Ok(Ok((session_number, auth_tx))) => {
+                    self.session_number = Some(session_number);
                     self.auth_tx = Some(auth_tx);
                     self.pending_relay = None;
                     self.prompt_sink_active = false; // relay established; prompts will come from remote shell now
@@ -143,13 +143,20 @@ impl ServerHandler {
             return Ok(());
         }
 
-        if let Some(relay) = self.relay_handle.as_ref() {
-            if !data.is_empty() {
-                relay.send(data.to_vec());
+        // Send data to relay backend if we have an active relay session
+        if let (Some(user_id), Some(relay_id), Some(session_number)) = (self.user_id, self.active_relay_id, self.session_number)
+            && relay_id > 0 && !data.is_empty() {
+                // Get the session and send data via backend
+                let registry = self.registry.clone();
+                let data_to_send = data.to_vec();
+                tokio::spawn(async move {
+                    if let Some(session) = registry.get_session(user_id, relay_id, session_number).await {
+                        let _ = session.backend.send(data_to_send);
+                    }
+                });
+                self.touch_session();
+                return Ok(());
             }
-            self.touch_session();
-            return Ok(());
-        }
 
         if let Some(app_session) = self.app_session.as_mut() {
             // Normalize incoming SSH bytes to canonical TUI sequences

@@ -146,8 +146,8 @@ pub fn use_session_provider() -> SessionContext {
             let in_progress = *restoration_in_progress.read();
 
             // Only proceed if we have both pending sessions and auth, and not already restoring
-            if let (Some(summaries), Some(user)) = (pending, user) {
-                if !in_progress {
+            if let (Some(summaries), Some(user)) = (pending, user)
+                && !in_progress {
                     // Mark as in progress and clear pending
                     restoration_in_progress.set(true);
                     pending_restores.set(None);
@@ -179,15 +179,16 @@ pub fn use_session_provider() -> SessionContext {
                             let key = context.get_session_storage_key(user.id, session_summary.relay_id, session_summary.session_number);
                             active_session_keys.insert(key);
 
-                            let attachable = session_summary.user_agent.is_some();
+                            // Relay sessions (web or ssh origin) are attachable; TUI/web presence are not
+                            let attachable = matches!(session_summary.kind, rb_types::ssh::SessionKind::Relay);
                             context.open_restored(
                                 user.id,
                                 session_summary.relay_name.clone(),
                                 session_summary.relay_id,
                                 session_summary.session_number,
                                 false,
-                                session_summary.active_connections,
-                                session_summary.active_viewers,
+                                session_summary.connections,
+                                session_summary.viewers,
                                 attachable,
                             );
                             restored_relay_names.push(session_summary.relay_name);
@@ -221,7 +222,6 @@ pub fn use_session_provider() -> SessionContext {
                         restoration_in_progress.set(false);
                     });
                 }
-            }
         });
     }
     // WebSocket connection with proper lifecycle management
@@ -260,9 +260,9 @@ pub fn use_session_provider() -> SessionContext {
                         .find(|s| s.relay_id == Some(summary.relay_id) && s.session_number == Some(summary.session_number));
 
                     if let Some(existing) = found_by_ids {
-                        // Session already exists in this browser - just update active_connections and active_viewers
-                        existing.active_connections = summary.active_connections;
-                        existing.active_viewers = summary.active_viewers;
+                        // Session already exists in this browser - just update counts
+                        existing.connections = summary.connections;
+                        existing.viewers = summary.viewers;
                     } else {
                         // Second check: do we have a session that's still connecting (no session_number yet)
                         // for the same relay name? This handles the race where SessionEvent::Created arrives
@@ -277,8 +277,8 @@ pub fn use_session_provider() -> SessionContext {
                             // This is our session that's still connecting - update it with the IDs
                             existing.relay_id = Some(summary.relay_id);
                             existing.session_number = Some(summary.session_number);
-                            existing.active_connections = summary.active_connections;
-                            existing.active_viewers = summary.active_viewers;
+                            existing.connections = summary.connections;
+                            existing.viewers = summary.viewers;
                             existing.status = SessionStatus::Connected;
 
                             #[cfg(feature = "web")]
@@ -296,15 +296,15 @@ pub fn use_session_provider() -> SessionContext {
                             // Get user_id from auth context
                             if let Some(user) = auth.read().user.as_ref() {
                                 // This is a new session created elsewhere - open minimized
-                                let attachable = summary.user_agent.is_some();
+                                let attachable = matches!(summary.kind, rb_types::ssh::SessionKind::Relay);
                                 context.open_restored(
                                     user.id,
                                     summary.relay_name.clone(),
                                     summary.relay_id,
                                     summary.session_number,
                                     true,
-                                    summary.active_connections,
-                                    summary.active_viewers,
+                                    summary.connections,
+                                    summary.viewers,
                                     attachable,
                                 );
                             }
@@ -325,8 +325,8 @@ pub fn use_session_provider() -> SessionContext {
                         .find(|s| s.relay_id == Some(summary.relay_id) && s.session_number == Some(summary.session_number))
                     {
                         // Update active connections and viewers count
-                        session.active_connections = summary.active_connections;
-                        session.active_viewers = summary.active_viewers;
+                        session.connections = summary.connections;
+                        session.viewers = summary.viewers;
 
                         // Update status based on state
                         if let SessionStateSummary::Closed = summary.state {
@@ -406,15 +406,15 @@ pub fn use_session_provider() -> SessionContext {
                             active_session_keys.insert(key);
 
                             // Restore the session with proper user_id
-                            let attachable = session_summary.user_agent.is_some();
+                            let attachable = matches!(session_summary.kind, rb_types::ssh::SessionKind::Relay);
                             context.open_restored(
                                 user.id,
                                 session_summary.relay_name.clone(),
                                 session_summary.relay_id,
                                 session_summary.session_number,
                                 false, // Don't force minimized on restore
-                                session_summary.active_connections,
-                                session_summary.active_viewers,
+                                session_summary.connections,
+                                session_summary.viewers,
                                 attachable,
                             );
                             restored_relay_names.push(session_summary.relay_name);
@@ -639,8 +639,8 @@ impl SessionContext {
         relay_id: i64,
         session_number: u32,
         force_minimized: bool,
-        active_connections: u32,
-        active_viewers: u32,
+        connections: rb_types::ssh::ConnectionAmounts,
+        viewers: rb_types::ssh::ConnectionAmounts,
         attachable: bool,
     ) {
         let mut sessions = self.sessions;
@@ -652,9 +652,9 @@ impl SessionContext {
                 .iter_mut()
                 .find(|s| s.relay_id == Some(relay_id) && s.session_number == Some(session_number))
             {
-                // Session already exists - just update active_connections
-                existing.active_connections = active_connections;
-                existing.active_viewers = active_viewers;
+                // Session already exists - just update counts
+                existing.connections = connections;
+                existing.viewers = viewers;
                 return;
             }
         }
@@ -662,8 +662,8 @@ impl SessionContext {
         let mut new_session = Session::new(relay_name);
         new_session.session_number = Some(session_number);
         new_session.relay_id = Some(relay_id);
-        new_session.active_connections = active_connections;
-        new_session.active_viewers = active_viewers;
+        new_session.connections = connections;
+        new_session.viewers = viewers;
         new_session.attachable = attachable;
 
         // Load saved state if available
@@ -1156,10 +1156,10 @@ impl SessionContext {
         self.sessions.read().len() >= MAX_SESSIONS
     }
 
-    pub fn set_active_connections(&self, id: &str, count: u32) {
+    pub fn set_active_connections(&self, id: &str, web: u32, ssh: u32) {
         let mut sessions = self.sessions;
         if let Some(session) = sessions.write().iter_mut().find(|s| s.id == id) {
-            session.active_connections = count;
+            session.connections = rb_types::ssh::ConnectionAmounts { web, ssh };
         }
     }
 

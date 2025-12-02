@@ -2,6 +2,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use rb_types::relay::RelayInfo;
 use russh::{ChannelId, CryptoVec, server::Session};
 use secrecy::ExposeSecret;
 use tokio::sync::{mpsc::unbounded_channel, oneshot};
@@ -9,7 +10,7 @@ use tracing::warn;
 
 use super::{ServerHandler, display_addr};
 use crate::{
-    relay::start_bridge, secrets::{SecretBoxedString, decrypt_string_if_encrypted, encrypt_string}
+    relay::start_bridge_backend, secrets::{SecretBoxedString, decrypt_string_if_encrypted, encrypt_string}
 };
 
 impl ServerHandler {
@@ -91,41 +92,23 @@ impl ServerHandler {
                                     }
                                 };
                                 let server_handle = session.handle();
-                                let server_handle_for_prompt = server_handle.clone();
                                 let server_handle_for_error = server_handle.clone();
-                                let size_rx = self.size_updates.subscribe();
-                                let initial_size = self.view_size();
+                                let mut size_rx = self.size_updates.subscribe();
+                                let view_size = self.view_size();
+                                let initial_size = (view_size.0 as u32, view_size.1 as u32);
                                 let (auth_tx, auth_rx) = unbounded_channel();
                                 self.auth_tx = Some(auth_tx.clone());
-                                let action_tx = self.action_tx.clone();
-                                let peer = self.peer_addr;
                                 let options_arc = Arc::new(options);
-                                let host_clone = host.clone();
                                 let username_clone = username.clone();
-                                
-                                // Register the session
-                                let (input_tx, _) = tokio::sync::mpsc::channel(100); // Dummy for now
-                                let (output_tx, _) = tokio::sync::broadcast::channel(100);
-                                let (close_tx, _) = tokio::sync::broadcast::channel(1);
                                 let ip_address = self.peer_addr.map(|addr| addr.ip().to_string());
 
-                                let (session_number, _) = self
-                                    .registry
-                                    .create_next_session(
-                                        user_id,
-                                        host.id,
-                                        host.name.clone(),
-                                        username.clone(),
-                                        input_tx,
-                                        output_tx,
-                                        close_tx,
-                                        ip_address,
-                                        None,
-                                    )
-                                    .await;
-                                self.session_number = Some(session_number);
-                                self.user_id = Some(user_id);
-                                self.active_relay_id = Some(host.id);
+                                // Convert to RelayInfo for start_bridge_backend
+                                let relay_info = RelayInfo {
+                                    id: host.id,
+                                    name: host.name.clone(),
+                                    ip: host.ip.clone(),
+                                    port: host.port,
+                                };
 
                                 // We are transitioning out of the TUI; drop any existing TUI session (relay_id = 0)
                                 // so dashboards don't show both the TUI and the active relay at once.
@@ -133,26 +116,86 @@ impl ServerHandler {
 
                                 // Spawn background connect; result delivered via oneshot
                                 let (tx_done, rx_done) = oneshot::channel();
+                                let registry_clone = self.registry.clone();
+                                let server_handle_for_bridge = server_handle.clone();
+
                                 tokio::spawn(async move {
-                                    let res = start_bridge(
-                                        server_handle,
-                                        channel,
-                                        &host_clone,
+                                    // Connect using unified backend
+                                    let backend_result = start_bridge_backend(
+                                        &relay_info,
                                         &username_clone,
                                         initial_size,
-                                        size_rx,
                                         options_arc.as_ref(),
-                                        peer,
-                                        Some(action_tx),
-                                        Some(tokio::sync::Mutex::new(auth_rx)),
-                                        Some((server_handle_for_prompt, channel)),
+                                        None, // No prompt_tx for SSH clients (prompts handled via action_tx)
+                                        Some(Arc::new(tokio::sync::Mutex::new(auth_rx))),
                                     )
-                                    .await
-                                    .map(|h| (h, auth_tx));
+                                    .await;
 
-                                    match res {
-                                        Ok(ok) => {
-                                            let _ = tx_done.send(Ok(ok));
+                                    match backend_result {
+                                        Ok(backend) => {
+                                            let backend = Arc::new(backend);
+
+                                            // Register session with unified backend
+                                            let (session_number, ssh_session) = registry_clone
+                                                .create_next_session(
+                                                    user_id,
+                                                    relay_info.id,
+                                                    relay_info.name.clone(),
+                                                    username_clone.clone(),
+                                                    backend.clone(),
+                                                    rb_types::ssh::SessionOrigin::Ssh { user_id },
+                                                    ip_address,
+                                                    None,
+                                                )
+                                                .await;
+
+                                            // Track SSH connection + viewer
+                                            ssh_session.increment_connection(rb_types::ssh::ConnectionType::Ssh).await;
+                                            ssh_session.increment_viewers(rb_types::ssh::ConnectionType::Ssh).await;
+
+                                            // Spawn bridge task to connect backend to SSH channel
+                                            use crate::sessions::session_backend::SessionBackend;
+                                            let backend_for_bridge = backend.clone();
+                                            let session_for_bridge = ssh_session.clone();
+
+                                            tokio::spawn(async move {
+                                                let mut output_rx = backend_for_bridge.subscribe();
+
+                                                loop {
+                                                    tokio::select! {
+                                                        // Backend output -> SSH channel
+                                                        Ok(data) = output_rx.recv() => {
+                                                            if data.is_empty() {
+                                                                // EOF - close the SSH channel
+                                                                let _ = server_handle_for_bridge.close(channel).await;
+                                                                break;
+                                                            }
+                                                            let mut payload = CryptoVec::new();
+                                                            payload.extend(&data);
+                                                            if server_handle_for_bridge.data(channel, payload).await.is_err() {
+                                                                break;
+                                                            }
+                                                            // Append to history
+                                                            session_for_bridge.touch().await;
+                                                            session_for_bridge.append_to_history(&data).await;
+                                                        }
+                                                        // Resize events
+                                                        Ok(_) = size_rx.changed() => {
+                                                            let (cols, rows) = *size_rx.borrow();
+                                                            let _ = backend_for_bridge.resize(cols as u32, rows as u32);
+                                                        }
+                                                    }
+                                                }
+
+                                                // Cleanup on disconnect
+                                                session_for_bridge.close().await;
+                                                // Decrement SSH connection + viewer counts
+                                                session_for_bridge.decrement_connection(rb_types::ssh::ConnectionType::Ssh).await;
+                                                session_for_bridge.decrement_viewers(rb_types::ssh::ConnectionType::Ssh).await;
+                                                registry_clone.remove_session(user_id, relay_info.id, session_number).await;
+                                            });
+
+                                            let _ = tx_done.send(Ok((session_number, auth_tx)));
                                         }
                                         Err(e) => {
                                             // Inform client immediately
@@ -164,6 +207,10 @@ impl ServerHandler {
                                         }
                                     }
                                 });
+
+                                // Store session info locally (will be set after backend connects)
+                                self.user_id = Some(user_id);
+                                self.active_relay_id = Some(host.id);
 
                                 self.prompt_sink_active = true;
                                 self.pending_relay = Some(rx_done);

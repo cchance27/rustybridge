@@ -1,7 +1,10 @@
 //! Terminal session and TUI management.
 
+use std::sync::Arc;
+
 use rb_types::{relay::HostkeyReview, ssh::TUIApplication};
 use russh::{ChannelId, Pty, server::Session};
+use tokio::sync::{broadcast, mpsc};
 use tracing::info;
 use tui_core::{AppSession, backend::RemoteBackend, utils::desired_rect};
 
@@ -91,27 +94,27 @@ impl ServerHandler {
         info!(app_name, username, peer_addr, "tui launched");
 
         // Register the session
-        let (input_tx, _) = tokio::sync::mpsc::channel(100); // Dummy channel for now, as we handle input directly
-        let (output_tx, _) = tokio::sync::broadcast::channel(100);
-        let (close_tx, _) = tokio::sync::broadcast::channel(1);
+        // Create channels for the TUI session
+        let (input_tx, _input_rx) = mpsc::channel(100);
+        let (output_tx, _output_rx) = broadcast::channel(100);
 
-        // Extract IP and User Agent
+        // Use legacy backend for TUI sessions (relay_id = 0)
+        let backend = Arc::new(crate::sessions::session_backend::LegacyChannelBackend::new(input_tx, output_tx));
+
+        let user_id_value = user_id.unwrap_or(0);
         let ip_address = self.peer_addr.map(|addr| addr.ip().to_string());
-        // TODO: Extract client version string from russh session if possible, for now None
-        let user_agent = None;
 
-        let (session_number, _) = self
+        let (session_number, _session) = self
             .registry
             .create_next_session(
-                self.user_id.unwrap_or(0),
-                0, // System/Shell relay ID
-                "Shell".to_string(),
+                user_id_value,
+                0, // relay_id = 0 for TUI sessions
+                "Management".to_string(),
                 username.to_string(),
-                input_tx,
-                output_tx,
-                close_tx,
+                backend,
+                rb_types::ssh::SessionOrigin::Ssh { user_id: user_id_value },
                 ip_address,
-                user_agent,
+                None,
             )
             .await;
         self.session_number = Some(session_number);

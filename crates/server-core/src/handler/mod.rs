@@ -17,7 +17,7 @@ mod input;
 mod relay;
 mod session;
 
-pub(crate) type PendingRelay = tokio::sync::oneshot::Receiver<Result<(RelayHandle, UnboundedSender<String>), russh::Error>>;
+pub(crate) type PendingRelay = tokio::sync::oneshot::Receiver<Result<(u32, UnboundedSender<String>), russh::Error>>;
 
 pub(crate) struct AuthPromptState {
     pub(crate) buffer: Vec<u8>,

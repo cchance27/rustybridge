@@ -8,11 +8,9 @@ use dioxus::{
 #[cfg(feature = "server")]
 use rb_types::auth::AuthPromptEvent;
 use rb_types::ssh::{SshClientMsg, SshServerMsg};
-#[cfg(feature = "server")]
-use russh::ChannelMsg;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "server")]
-use server_core::relay::connect_to_relay_channel;
+use server_core::relay::connect_to_relay_backend;
 #[cfg(feature = "server")]
 use server_core::sessions::{SessionRegistry, SshSession};
 #[cfg(feature = "server")]
@@ -252,16 +250,15 @@ async fn handle_reattach(
             .await;
     }
 
-    // Subscribe to output
-    let mut output_rx = session.output_tx.subscribe();
-    let input_tx = session.input_tx.clone();
-    let mut close_rx = session.close_tx.subscribe();
+    // Subscribe to output via backend
+    let mut output_rx = session.backend.subscribe();
+    let backend = session.backend.clone();
 
-    // Increment connection count
-    let conn_count = session.increment_connections().await;
+    // Increment connection count (web)
+    let conn_count = session.increment_connection(rb_types::ssh::ConnectionType::Web).await;
     // Increment viewers only if not minimized
     if !is_minimized {
-        session.increment_viewers().await;
+        session.increment_viewers(rb_types::ssh::ConnectionType::Web).await;
     }
 
     tracing::info!(
@@ -312,43 +309,43 @@ async fn handle_reattach(
                                 SshControl::Close => {
                                     // User explicitly closed the shell
                                     explicit_close = true;
+                                    // Close backend for everyone and remove the session
+                                    let _ = backend.close();
                                     session.close().await;
+                                    registry
+                                        .remove_session(session.user_id, session.relay_id, session.session_number)
+                                        .await;
                                     break;
                                 }
-                                SshControl::Resize { .. } => {
-                                    // TODO: implement resize
+                                SshControl::Resize { cols, rows } => {
+                                    let _ = backend.resize(*cols, *rows);
                                 }
                                 SshControl::Minimize(minimized) => {
                                     if *minimized != is_minimized {
                                         is_minimized = *minimized;
                                         if is_minimized {
-                                            session.decrement_viewers().await;
+                                            session.decrement_viewers(rb_types::ssh::ConnectionType::Web).await;
                                         } else {
-                                            session.increment_viewers().await;
+                                            session.increment_viewers(rb_types::ssh::ConnectionType::Web).await;
                                         }
                                     }
                                 }
                             }
                         }
                         if !client_msg.data.is_empty() {
-                            let _ = input_tx.send(client_msg.data).await;
+                            let _ = backend.send(client_msg.data);
                         }
                     }
                     Err(_) => break,
                 }
             }
-            Ok(_) = close_rx.recv() => {
-                // Session closed remotely (SSH EOF)
-                explicit_close = true;
-                break;
-            }
         }
     }
 
-    // Decrement connection count
-    let remaining = session.decrement_connections().await;
+    // Decrement connection count (web)
+    let remaining = session.decrement_connection(rb_types::ssh::ConnectionType::Web).await;
     if !is_minimized {
-        session.decrement_viewers().await;
+        session.decrement_viewers(rb_types::ssh::ConnectionType::Web).await;
     }
 
     tracing::info!(
@@ -404,7 +401,7 @@ async fn handle_new_session(
     user_agent: Option<String>,
     is_minimized: bool,
 ) {
-    use tokio::sync::{Mutex, broadcast, mpsc, mpsc::unbounded_channel};
+    use tokio::sync::{Mutex, mpsc::unbounded_channel};
 
     // Channels for interactive auth prompts
     let (prompt_tx, mut prompt_rx) = unbounded_channel::<AuthPromptEvent>();
@@ -413,7 +410,7 @@ async fn handle_new_session(
 
     // Drive interactive auth prompts over the WebSocket while connecting
     let username_for_connect = username.clone();
-    let mut connect_fut = Box::pin(connect_to_relay_channel(
+    let mut connect_fut = Box::pin(connect_to_relay_backend(
         &relay_name,
         &username_for_connect,
         (80, 24),
@@ -430,15 +427,15 @@ async fn handle_new_session(
     // Track minimize state update if any arrived during handshake (unlikely given wait_for_client_ready)
     let mut current_minimized = is_minimized;
 
-    let mut channel = loop {
+    let backend: server_core::sessions::session_backend::RelayBackend = loop {
         use rb_types::ssh::SshControl;
 
         tokio::select! {
             res = &mut connect_fut => {
                 match res {
-                    Ok(ch) => {
+                    Ok(backend) => {
                         tracing::info!("Successfully connected to relay: {}", relay_name);
-                        break ch;
+                        break backend;
                     }
                     Err(e) => {
                         tracing::error!("Failed to connect to relay {}: {}", relay_name, e);
@@ -513,14 +510,9 @@ async fn handle_new_session(
         }
     };
 
-    // Connected! Create session channels
-    let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(1024);
-    let (output_tx, _) = broadcast::channel::<Vec<u8>>(1024);
-    let (close_tx, _) = broadcast::channel::<()>(1);
-
-    // Spawn SSH loop
-    let relay_name_for_ssh = relay_name.clone();
-    let close_tx_clone = close_tx.clone();
+    // Connected! Backend is already managing the relay I/O
+    use std::sync::Arc;
+    let backend = Arc::new(backend);
 
     // Register session and get session number
     let (session_number, session) = registry
@@ -529,81 +521,51 @@ async fn handle_new_session(
             relay_id,
             relay_name.clone(),
             username,
-            input_tx.clone(),
-            output_tx.clone(),
-            close_tx,
+            backend.clone(),
+            rb_types::ssh::SessionOrigin::Web { user_id },
             ip_address,
             user_agent,
         )
         .await;
 
-    tracing::info!(session_number = session_number, relay = %relay_name, "Created new session");
+    tracing::info!(session_number = session_number, relay = %relay_name, "Created new session with RelayBackend");
 
-    // Clone session for history appending and cleanup
+    // Clone session for history appending
     let session_for_history = session.clone();
     let registry_for_cleanup = registry.clone();
     let user_id_for_cleanup = user_id;
     let relay_id_for_cleanup = relay_id;
     let session_number_for_cleanup = session_number;
+    let relay_name_for_logging = relay_name.clone();
 
-    // Update SSH loop to append to history
-    let output_tx_for_history = output_tx.clone();
+    // Spawn task to append backend output to session history
     tokio::spawn(async move {
-        let mut close_rx = close_tx_clone.subscribe();
+        use server_core::sessions::session_backend::SessionBackend;
+        let mut output_rx = backend.as_ref().subscribe();
         loop {
-            tokio::select! {
-                Some(msg) = channel.wait() => {
-                    match msg {
-                        ChannelMsg::Data { ref data } => {
-                            // Append to history
-                            session_for_history.touch().await;
-                            session_for_history.append_to_history(data).await;
-                            if output_tx_for_history.send(data.to_vec()).is_err() { break; }
-                        }
-                        ChannelMsg::ExtendedData { ref data, .. } => {
-                            // Append to history
-                            session_for_history.touch().await;
-                            session_for_history.append_to_history(data).await;
-                            if output_tx_for_history.send(data.to_vec()).is_err() { break; }
-                        }
-                        ChannelMsg::ExitStatus { exit_status } => {
-                            tracing::info!("SSH exit status: {}", exit_status);
-                            session_for_history.close().await; // Mark session as closed
-                            let _ = output_tx_for_history.send(Vec::new()); // EOF marker
-                            break;
-                        }
-                        ChannelMsg::Eof | ChannelMsg::Close => {
-                            tracing::info!("SSH closed");
-                            session_for_history.close().await; // Mark session as closed
-                            let _ = output_tx_for_history.send(Vec::new()); // EOF marker
-                            break;
-                        }
-                        _ => {}
+            match output_rx.recv().await {
+                Ok(data) => {
+                    if data.is_empty() {
+                        // EOF marker
+                        tracing::info!("SSH connection closed");
+                        session_for_history.close().await;
+                        break;
                     }
+                    // Append to history
+                    session_for_history.touch().await;
+                    session_for_history.append_to_history(&data).await;
                 }
-                msg = input_rx.recv() => {
-                    match msg {
-                        Some(data) => {
-                            let mut cursor = std::io::Cursor::new(data);
-                            if channel.data(&mut cursor).await.is_err() { break; }
-                        }
-                        None => {
-                            // Input closed (session closed)
-                            let _ = channel.close().await;
-                            break;
-                        }
-                    }
-                }
-                Ok(_) = close_rx.recv() => {
-                    // Explicit close signal
-                    let _ = channel.close().await;
+                Err(_) => {
+                    // Channel closed
+                    tracing::info!("Backend output channel closed");
+                    session_for_history.close().await;
                     break;
                 }
             }
         }
-        tracing::info!(relay = %relay_name_for_ssh, "ssh output history loop terminated");
+        tracing::info!(relay = %relay_name_for_logging, "session history loop terminated");
 
-        // Remove the session from the registry after shutdown so it disappears from admin/user lists.
+        // Remove the session from the registry after shutdown
         registry_for_cleanup
             .remove_session(user_id_for_cleanup, relay_id_for_cleanup, session_number_for_cleanup)
             .await;

@@ -17,6 +17,10 @@ pub fn SessionWindow(session_id: String) -> Element {
         if !s.attachable {
             return rsx! {};
         }
+
+        let active_viewers = s.viewers.web + s.viewers.ssh;
+        let web_viewers = s.viewers.web;
+        let ssh_viewers = s.viewers.ssh;
         // Use pre-calculated z-index from session state
         let z_index = if s.fullscreen {
             // When fullscreen, add 40 to ensure it's always on top of windowed sessions
@@ -70,7 +74,7 @@ pub fn SessionWindow(session_id: String) -> Element {
                         h3 { class: "font-bold text-lg text-warning", "Close Shared Session?" }
                         p { class: "py-4",
                             "This session has "
-                            span { class: "font-bold text-white", "{s.active_viewers}" }
+                            span { class: "font-bold text-white", "{active_viewers}" }
                             " active viewers. Closing it will disconnect everyone."
                         }
                         div { class: "modal-action flex-wrap",
@@ -306,7 +310,7 @@ pub fn SessionWindow(session_id: String) -> Element {
                                 evt.stop_propagation();
 
                                 // If multiple viewers (active windows), confirm before closing
-                                if s.active_viewers > 1 {
+                                if active_viewers > 1 {
                                     show_close_confirm.set(true);
                                 } else {
                                     session.close_with_command(&session_id_close);
@@ -319,22 +323,33 @@ pub fn SessionWindow(session_id: String) -> Element {
                 // Terminal Content
                 div { class: "flex-1 min-h-0 relative bg-black",
                     // Multi-session warning bar - only show if multiple viewers have window open
-                    if s.active_viewers > 1 {
+                    if active_viewers > 1 {
                         div {
-                            class: "bg-yellow-600 text-black text-xs px-3 py-1.5 flex items-center gap-2 border-b border-yellow-700",
-                            svg {
-                                class: "w-4 h-4 flex-shrink-0",
-                                view_box: "0 0 20 20",
-                                fill: "currentColor",
-                                path {
-                                    fill_rule: "evenodd",
-                                    d: "M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z",
-                                    clip_rule: "evenodd"
+                            class: "bg-yellow-600 items-center text-black text-xs px-3 py-1.5 flex justify-between gap-2 border-b border-yellow-700",
+                            div {
+                                class: "flex flex-row",
+                                svg {
+                                    class: "w-4 h-4 flex-shrink-0",
+                                    view_box: "0 0 20 20",
+                                    fill: "currentColor",
+                                    path {
+                                        fill_rule: "evenodd",
+                                        d: "M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z",
+                                        clip_rule: "evenodd"
+                                    }
+                                }
+                                span {
+                                    class: "font-semibold",
+                                    "{active_viewers} viewers connected to this shell"
                                 }
                             }
-                            span {
-                                class: "font-semibold",
-                                "{s.active_viewers} viewers connected to this shell"
+                            div {
+                                div { class: "flex items-center gap-1 font-semibold",
+                                    div { class: "w-5 h-5 inline-flex", crate::app::components::icons::TerminalIcon {} }
+                                    span { "{ssh_viewers}" }
+                                    div { class: "ml-2 w-5 h-5 mt-1inline-flex", crate::app::components::icons::BrowserIcon {} }
+                                    span { "{web_viewers}" }
+                                }
                             }
                         }
                     }

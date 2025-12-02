@@ -1,6 +1,6 @@
 # Web Shell Implementation Status
 
-> **Last Updated**: 2025-11-30
+> **Last Updated**: 2025-12-02
 > **Branch**: `webshell-refactor`
 
 ## Executive Summary
@@ -531,28 +531,23 @@ Check Server side code with `cargo check -p rb-web --features server`
 
 ---
 
-## 📋 Phase 4: Future Improvements
+## ✅ Phase 4: Session Unification and Event Unification (BACKEND COMPLETE)
 
-### Advanced Terminal Features
-> **Reminder**: Reuse components where possible to avoid code duplication, plan ahead and check for components and how we store svg components and other items that we reuse, make components as needed.
+### What’s implemented
+- ✅ **Unified session backend**: `SessionBackend` trait + `RelayBackend` now power both web and SSH relay sessions; sessions store `Arc<dyn SessionBackend>` and `SessionOrigin` (Web/SSH).
+- ✅ **Web + SSH share the same path**: `rb-web` uses `connect_to_relay_backend`, SSH handler uses `start_bridge_backend`; both register sessions through the registry with the same backend abstraction.
+- ✅ **Resize support**: `SshControl::Resize` is handled end-to-end and forwarded via `RelayBackend` to the relay PTY.
+- ✅ **History/reattach** runs through the backend subscription for both origins.
 
-#### Remaining Work
-- 
-- [ ] **Web Terminal resize support**:
-  - Implement `SshControl::Resize` handling in server
-  - Send resize commands when window/terminal size changes
-  - Proper PTY resize via russh
-- [ ] **Web Mouse events**:
-  - Enable xterm.js mouse tracking
-  - Forward mouse events to SSH for TUI support
-  - Add toggle for mouse mode (some users may prefer text selection)
-- [ ] **Additional Web SSH events**:
-  - Review `SshClientMsg` and `SshServerMsg` for missing functionality
-  - Implement best practices for SSH event handling
+### Deferred / next-up
+- ⏳ **Attach API & UI**: web attach to SSH-origin sessions (server function + UI hooks) still to build.
+- ⏳ **Mouse events**: wire xterm.js mouse tracking to backend `mouse_event` (trait stub exists, not plumbed).
+- ⏳ **Additional SSH event polish**: review/control messages beyond resize/close; ensure parity across origins.
+- ⏳ **Connection-type counters**: finer-grained web vs SSH connection/viewer counts surfaced in types/UI.
 
-**Files to Modify**:
-- [crates/rb-web/src/app/api/ws/ssh.rs](../crates/rb-web/src/app/api/ws/ssh.rs)
-- [crates/rb-web/public/xterm-init.js](../crates/rb-web/public/xterm-init.js)
+### Notes
+- The remaining work is primarily API/UI surface and richer telemetry; the backend unification is done.
+- **Pending**: Frontend resize event integration (xterm.js -> Rust) is not yet implemented.
 
 ---
 

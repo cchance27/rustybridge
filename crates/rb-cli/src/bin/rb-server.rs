@@ -68,7 +68,11 @@ async fn main() -> Result<()> {
                     }
                 }
             } else {
-                run_ssh_server(args.to_run_config(), std::sync::Arc::new(server_core::sessions::SessionRegistry::new())).await?;
+                run_ssh_server(
+                    args.to_run_config(),
+                    std::sync::Arc::new(server_core::sessions::SessionRegistry::new()),
+                )
+                .await?;
             }
         }
         Some(ServerSubcommand::Hosts { cmd }) => match cmd {

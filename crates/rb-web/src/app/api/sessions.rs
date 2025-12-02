@@ -6,6 +6,9 @@ use server_core::sessions::SessionRegistry;
 type SharedRegistry = std::sync::Arc<SessionRegistry>;
 
 #[cfg(feature = "server")]
+use state_store::user_has_relay_access;
+
+#[cfg(feature = "server")]
 use crate::server::auth::guards::{WebAuthSession, ensure_authenticated, ensure_claim};
 
 #[get(
@@ -51,8 +54,8 @@ pub async fn list_all_sessions() -> Result<Vec<AdminSessionSummary>, ServerFnErr
                 active_app: None,
                 detached_at: None,
                 detached_timeout_secs: None,
-                active_connections: 1,
-                active_viewers: 1,
+                connections: rb_types::ssh::ConnectionAmounts { web: 1, ssh: 0 },
+                viewers: rb_types::ssh::ConnectionAmounts { web: 1, ssh: 0 },
                 created_at: web_session.connected_at,
                 last_active_at: web_session.connected_at,
             },
@@ -95,8 +98,8 @@ pub async fn list_my_sessions() -> Result<Vec<UserSessionSummary>, ServerFnError
             active_app: None,
             detached_at: None,
             detached_timeout_secs: None,
-            active_connections: 1,
-            active_viewers: 1,
+            connections: rb_types::ssh::ConnectionAmounts { web: 1, ssh: 0 },
+            viewers: rb_types::ssh::ConnectionAmounts { web: 1, ssh: 0 },
             created_at: web_session.connected_at,
             last_active_at: web_session.connected_at,
         });
@@ -128,4 +131,43 @@ pub async fn close_session(user_id: i64, relay_id: i64, session_number: u32) -> 
     }
 
     Ok(())
+}
+
+/// Return a WebSocket URL for attaching to an existing SSH session.
+/// Validates user ownership and relay access before returning the URL.
+#[post(
+    "/api/sessions/attach",
+    auth: WebAuthSession,
+    pool: axum::Extension<sqlx::SqlitePool>,
+    registry: axum::Extension<SharedRegistry>
+)]
+pub async fn attach_to_session(user_id: i64, relay_id: i64, session_number: u32) -> Result<String, ServerFnError> {
+    let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    // Only allow attaching to your own sessions
+    if user.id != user_id {
+        return Err(ServerFnError::new("Cannot attach to another user's session"));
+    }
+
+    // Verify relay access
+    let has_access = user_has_relay_access(&*pool, user.id, relay_id)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    if !has_access {
+        return Err(ServerFnError::new("Relay access denied"));
+    }
+
+    // Ensure the session exists and matches the relay/user
+    let session = registry
+        .0
+        .get_session(user_id, relay_id, session_number)
+        .await
+        .ok_or_else(|| ServerFnError::new("Session not found"))?;
+
+    let url = format!(
+        "/api/ws/ssh_connection/{}?session_number={}",
+        session.relay_name, session.session_number
+    );
+
+    Ok(url)
 }

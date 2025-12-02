@@ -24,10 +24,7 @@ use crate::{
 /// This configures russh with our crypto preferences, enables only password auth,
 /// and defers to `ServerManager` (and ultimately `handler::ServerHandler`) for per-connection
 /// state machines.
-pub async fn run_ssh_server(
-    config: ServerConfig,
-    registry: Arc<crate::sessions::SessionRegistry>,
-) -> ServerResult<()> {
+pub async fn run_ssh_server(config: ServerConfig, registry: Arc<crate::sessions::SessionRegistry>) -> ServerResult<()> {
     // Refuse to start without a non-empty master secret configured
     secrets::require_master_secret()?;
 

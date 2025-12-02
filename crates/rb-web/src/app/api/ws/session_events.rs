@@ -182,12 +182,11 @@ pub async fn ssh_web_events(
                             }
                         };
 
-                        if should_send {
-                            if let Err(e) = socket.send(event).await {
+                        if should_send
+                            && let Err(e) = socket.send(event).await {
                                 tracing::warn!(user_id, client_id, "Failed to send event, connection likely closed: {}", e);
                                 break;
                             }
-                        }
                     }
                     result = socket.recv() => {
                         match result {
