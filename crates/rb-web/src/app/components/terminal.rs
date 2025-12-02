@@ -524,10 +524,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
                                 // Always send raw bytes to xterm as Uint8Array to avoid
                                 // any Rust-side text conversion affecting escape sequences.
                                 let json_data = serde_json::to_string(&data).unwrap_or_else(|_| "[]".to_string());
-                                let script = format!(
-                                    "window.writeToTerminal(\"{}\", new Uint8Array({}));",
-                                    terminal_id, json_data
-                                );
+                                let script = format!("window.writeToTerminal(\"{}\", new Uint8Array({}));", terminal_id, json_data);
                                 let _ = dioxus::document::eval(&script).await;
                             }
                         }

@@ -168,6 +168,10 @@ impl SshSession {
     }
 
     pub async fn increment_connection(&self, conn_type: ConnectionType) -> u32 {
+        let conn_kind = match conn_type {
+            ConnectionType::Web => "web",
+            ConnectionType::Ssh => "ssh",
+        };
         match conn_type {
             ConnectionType::Web => {
                 self.web_connections.fetch_add(1, Ordering::SeqCst);
@@ -178,6 +182,16 @@ impl SshSession {
         }
 
         let count = self.active_connections.fetch_add(1, Ordering::SeqCst) + 1;
+        tracing::debug!(
+            user_id = self.user_id,
+            relay_id = self.relay_id,
+            session_number = self.session_number,
+            conn_type = conn_kind,
+            active_connections = count,
+            web_connections = self.web_connections.load(Ordering::SeqCst),
+            ssh_connections = self.ssh_connections.load(Ordering::SeqCst),
+            "session_connection_incremented"
+        );
         // Broadcast the updated connection count to all listeners
         if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
             // Only warn if there are subscribers (otherwise it's expected)
@@ -193,16 +207,57 @@ impl SshSession {
     }
 
     pub async fn decrement_connection(&self, conn_type: ConnectionType) -> u32 {
+        let conn_kind = match conn_type {
+            ConnectionType::Web => "web",
+            ConnectionType::Ssh => "ssh",
+        };
         match conn_type {
             ConnectionType::Web => {
-                let _ = self.web_connections.fetch_sub(1, Ordering::SeqCst).saturating_sub(1);
+                // Prevent underflow: only decrement if > 0
+                self.web_connections
+                    .fetch_update(
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                        |cur| {
+                            if cur > 0 { Some(cur - 1) } else { Some(0) }
+                        },
+                    )
+                    .ok();
             }
             ConnectionType::Ssh => {
-                let _ = self.ssh_connections.fetch_sub(1, Ordering::SeqCst).saturating_sub(1);
+                self.ssh_connections
+                    .fetch_update(
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                        |cur| {
+                            if cur > 0 { Some(cur - 1) } else { Some(0) }
+                        },
+                    )
+                    .ok();
             }
         }
 
-        let count = self.active_connections.fetch_sub(1, Ordering::SeqCst).saturating_sub(1);
+        // Prevent underflow on the total active count as well.
+        let count = self
+            .active_connections
+            .fetch_update(
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+                |cur| {
+                    if cur > 0 { Some(cur - 1) } else { Some(0) }
+                },
+            )
+            .unwrap_or_else(|cur| cur); // unwrap_or_else gives us the last observed value
+        tracing::debug!(
+            user_id = self.user_id,
+            relay_id = self.relay_id,
+            session_number = self.session_number,
+            conn_type = conn_kind,
+            active_connections = count,
+            web_connections = self.web_connections.load(Ordering::SeqCst),
+            ssh_connections = self.ssh_connections.load(Ordering::SeqCst),
+            "session_connection_decremented"
+        );
         // Broadcast the updated connection count to all listeners
         if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
             // Only warn if there are subscribers (otherwise it's expected)
@@ -219,6 +274,10 @@ impl SshSession {
 
     pub async fn increment_viewers(&self, conn_type: ConnectionType) -> u32 {
         let count = self.active_viewers.fetch_add(1, Ordering::SeqCst) + 1;
+        let conn_kind = match conn_type {
+            ConnectionType::Web => "web",
+            ConnectionType::Ssh => "ssh",
+        };
         match conn_type {
             ConnectionType::Web => {
                 let _ = self.web_viewers.fetch_add(1, Ordering::SeqCst);
@@ -227,6 +286,16 @@ impl SshSession {
                 let _ = self.ssh_viewers.fetch_add(1, Ordering::SeqCst);
             }
         }
+        tracing::debug!(
+            user_id = self.user_id,
+            relay_id = self.relay_id,
+            session_number = self.session_number,
+            conn_type = conn_kind,
+            active_viewers = count,
+            web_viewers = self.web_viewers.load(Ordering::SeqCst),
+            ssh_viewers = self.ssh_viewers.load(Ordering::SeqCst),
+            "session_viewers_incremented"
+        );
         // Broadcast updates
         if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
             // Only warn if there are subscribers (otherwise it's expected)
@@ -242,15 +311,55 @@ impl SshSession {
     }
 
     pub async fn decrement_viewers(&self, conn_type: ConnectionType) -> u32 {
-        let count = self.active_viewers.fetch_sub(1, Ordering::SeqCst).saturating_sub(1);
+        // Prevent underflow on viewer totals and per-type counts.
+        let count = self
+            .active_viewers
+            .fetch_update(
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+                |cur| {
+                    if cur > 0 { Some(cur - 1) } else { Some(0) }
+                },
+            )
+            .unwrap_or_else(|cur| cur);
+        let conn_kind = match conn_type {
+            ConnectionType::Web => "web",
+            ConnectionType::Ssh => "ssh",
+        };
         match conn_type {
             ConnectionType::Web => {
-                let _ = self.web_viewers.fetch_sub(1, Ordering::SeqCst).saturating_sub(1);
+                self.web_viewers
+                    .fetch_update(
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                        |cur| {
+                            if cur > 0 { Some(cur - 1) } else { Some(0) }
+                        },
+                    )
+                    .ok();
             }
             ConnectionType::Ssh => {
-                let _ = self.ssh_viewers.fetch_sub(1, Ordering::SeqCst).saturating_sub(1);
+                self.ssh_viewers
+                    .fetch_update(
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                        |cur| {
+                            if cur > 0 { Some(cur - 1) } else { Some(0) }
+                        },
+                    )
+                    .ok();
             }
         }
+        tracing::debug!(
+            user_id = self.user_id,
+            relay_id = self.relay_id,
+            session_number = self.session_number,
+            conn_type = conn_kind,
+            active_viewers = count,
+            web_viewers = self.web_viewers.load(Ordering::SeqCst),
+            ssh_viewers = self.ssh_viewers.load(Ordering::SeqCst),
+            "session_viewers_decremented"
+        );
         // Broadcast updates
         if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
             // Only warn if there are subscribers (otherwise it's expected)
@@ -442,6 +551,7 @@ impl SessionRegistry {
         self.web_connections.read().await.get(&user_id).cloned().unwrap_or_default()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_next_session(
         &self,
         user_id: i64,
@@ -616,9 +726,10 @@ impl SessionRegistry {
     pub async fn heartbeat_web_session(&self, user_id: i64, session_id: &str) {
         let mut conns = self.web_connections.write().await;
         if let Some(list) = conns.get_mut(&user_id)
-            && let Some(meta) = list.iter_mut().find(|m| m.id == session_id) {
-                meta.last_seen = Utc::now();
-            }
+            && let Some(meta) = list.iter_mut().find(|m| m.id == session_id)
+        {
+            meta.last_seen = Utc::now();
+        }
     }
 }
 

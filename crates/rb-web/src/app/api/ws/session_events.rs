@@ -182,11 +182,26 @@ pub async fn ssh_web_events(
                             }
                         };
 
-                        if should_send
-                            && let Err(e) = socket.send(event).await {
-                                tracing::warn!(user_id, client_id, "Failed to send event, connection likely closed: {}", e);
+                        if should_send {
+                            let kind = match &event {
+                                SessionEvent::Created(_, _) => "Created",
+                                SessionEvent::Updated(_, _) => "Updated",
+                                SessionEvent::Removed { .. } => "Removed",
+                                SessionEvent::Presence(_, _) => "Presence",
+                                SessionEvent::List(_) => "List",
+                            };
+                            tracing::trace!(
+                                user_id,
+                                client_id = %client_id,
+                                event_kind = kind,
+                                "ssh_web_events_forwarding_event"
+                            );
+
+                            if let Err(e) = socket.send(event).await {
+                                tracing::warn!(user_id, client_id = %client_id, "Failed to send event, connection likely closed: {}", e);
                                 break;
                             }
+                        }
                     }
                     result = socket.recv() => {
                         match result {

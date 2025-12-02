@@ -40,6 +40,7 @@ pub async fn run_ssh_server(config: ServerConfig, registry: Arc<crate::sessions:
         ));
     }
 
+    // FIXME: SQLX should be moved to state_core, so we can drop sqlx dependency from this crate and keep sqlx usage centralized.
     if config.roll_hostkey {
         sqlx::query("DELETE FROM server_options WHERE key = 'server_hostkey'")
             .execute(&pool)
@@ -49,12 +50,16 @@ pub async fn run_ssh_server(config: ServerConfig, registry: Arc<crate::sessions:
 
     let host_key = load_or_create_host_key(&pool).await?;
 
+    // FIXME: These should likely drawn from our server config in the database so they can be configured.
     let mut server_config = ssh_server::Config {
         // Inbound server connections must always run with secure defaults
         preferred: ssh_core::crypto::default_preferred(),
         auth_rejection_time: Duration::from_millis(250),
         auth_rejection_time_initial: Some(Duration::from_millis(0)),
         nodelay: true,
+        // Send SSH keepalives to detect dead clients promptly
+        keepalive_interval: Some(Duration::from_secs(30)),
+        keepalive_max: 2,
         ..Default::default()
     };
 

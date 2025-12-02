@@ -148,6 +148,7 @@ impl ServerHandler {
 impl Drop for ServerHandler {
     fn drop(&mut self) {
         if !self.closed {
+            // Handle abrupt SSH disconnects (no channel_close callback).
             self.log_disconnect("connection dropped");
         }
     }

@@ -293,10 +293,18 @@ async fn handle_reattach(
                     relay_id: None,
                 };
                 if socket.send(msg).await.is_err() {
+                    tracing::error!(
+                        session_number = session.session_number,
+                        "ssh_ws_send_failed_to_client; closing reattach loop"
+                    );
                     break;
                 }
                 if is_eof {
-                    // SSH closed, mark as explicit close
+                    // SSH/relay backend closed (EOF), mark as explicit close
+                    tracing::info!(
+                        session_number = session.session_number,
+                        "ssh_ws_backend_eof; closing reattach loop"
+                    );
                     explicit_close = true;
                     break;
                 }
@@ -337,7 +345,14 @@ async fn handle_reattach(
                             let _ = backend.send(client_msg.data).await;
                         }
                     }
-                    Err(_) => break,
+                    Err(e) => {
+                        tracing::info!(
+                            session_number = session.session_number,
+                            error = ?e,
+                            "ssh_ws_client_recv_error; closing reattach loop"
+                        );
+                        break;
+                    }
                 }
             }
         }
@@ -391,6 +406,7 @@ async fn handle_reattach(
 }
 
 #[cfg(feature = "server")]
+#[allow(clippy::too_many_arguments)]
 async fn handle_new_session(
     mut socket: TypedWebsocket<SshClientMsg, SshServerMsg, JsonEncoding>,
     registry: SharedRegistry,

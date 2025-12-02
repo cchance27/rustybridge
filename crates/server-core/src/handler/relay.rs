@@ -160,19 +160,28 @@ impl ServerHandler {
 
                                             tokio::spawn(async move {
                                                 let mut output_rx = backend_for_bridge.subscribe();
+                                                let mut relay_closed = false;
+                                                let mut ping = tokio::time::interval(std::time::Duration::from_secs(5));
+                                                ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
                                                 loop {
                                                     tokio::select! {
                                                         // Backend output -> SSH channel
                                                         Ok(data) = output_rx.recv() => {
                                                             if data.is_empty() {
-                                                                // EOF - close the SSH channel
+                                                                // EOF from backend/relay - close the SSH channel but
+                                                                // keep the shared session so web clients can observe
+                                                                // the closed state and clean up gracefully.
                                                                 let _ = server_handle_for_bridge.close(channel).await;
+                                                                relay_closed = true;
                                                                 break;
                                                             }
                                                             let mut payload = CryptoVec::new();
                                                             payload.extend(&data);
                                                             if server_handle_for_bridge.data(channel, payload).await.is_err() {
+                                                                // SSH channel went away (client dropped) - stop
+                                                                // trying to write to it, but don't treat this as
+                                                                // a relay failure.
                                                                 break;
                                                             }
                                                             // Append to history
@@ -182,17 +191,35 @@ impl ServerHandler {
                                                         // Resize events
                                                         Ok(_) = size_rx.changed() => {
                                                             let (cols, rows) = *size_rx.borrow();
-                                                            let _ = backend_for_bridge.resize(cols as u32, rows as u32);
+                                                            let _ = backend_for_bridge.resize(cols as u32, rows as u32).await;
+                                                        }
+
+                                                        // Periodic ping to detect dropped SSH client channels while idle.
+                                                        _ = ping.tick() => {
+                                                            // Send an empty data packet; if the SSH channel is gone, this write will fail.
+                                                            let payload = CryptoVec::new();
+                                                            if server_handle_for_bridge.data(channel, payload).await.is_err() {
+                                                                tracing::info!(
+                                                                    session_number = session_for_bridge.session_number,
+                                                                    "ssh_bridge_ping_failed; closing ssh side"
+                                                                );
+                                                                break;
+                                                            }
                                                         }
                                                     }
                                                 }
 
-                                                // Cleanup on disconnect
-                                                session_for_bridge.close().await;
-                                                // Decrement SSH connection + viewer counts
+                                                // Decrement SSH connection + viewer counts when the SSH bridge ends.
                                                 session_for_bridge.decrement_connection(rb_types::ssh::ConnectionType::Ssh).await;
                                                 session_for_bridge.decrement_viewers(rb_types::ssh::ConnectionType::Ssh).await;
-                                                registry_clone.remove_session(user_id, relay_info.id, session_number).await;
+
+                                                // If the underlying relay actually closed, or there are no more
+                                                // active connections of any type, then close and remove the session.
+                                                let total_connections = session_for_bridge.connection_count();
+                                                if relay_closed || total_connections == 0 {
+                                                    session_for_bridge.close().await;
+                                                    registry_clone.remove_session(user_id, relay_info.id, session_number).await;
+                                                }
                                             });
 
                                             let _ = tx_done.send(Ok((session_number, auth_tx)));

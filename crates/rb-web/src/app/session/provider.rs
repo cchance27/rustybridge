@@ -135,7 +135,6 @@ pub fn use_session_provider() -> SessionContext {
         let mut pending_restores = pending_restores;
         let mut restoration_in_progress = restoration_in_progress;
         let context = context;
-        let auth = auth;
         #[cfg(feature = "web")]
         let toast = toast;
 
@@ -147,81 +146,82 @@ pub fn use_session_provider() -> SessionContext {
 
             // Only proceed if we have both pending sessions and auth, and not already restoring
             if let (Some(summaries), Some(user)) = (pending, user)
-                && !in_progress {
-                    // Mark as in progress and clear pending
-                    restoration_in_progress.set(true);
-                    pending_restores.set(None);
+                && !in_progress
+            {
+                // Mark as in progress and clear pending
+                restoration_in_progress.set(true);
+                pending_restores.set(None);
 
-                    let context = context;
-                    #[cfg(feature = "web")]
-                    let toast = toast;
-                    let mut restoration_in_progress = restoration_in_progress;
+                let context = context;
+                #[cfg(feature = "web")]
+                let toast = toast;
+                let mut restoration_in_progress = restoration_in_progress;
 
-                    spawn(async move {
-                        let mut restored_relay_names = Vec::new();
-                        let mut active_session_keys = HashSet::new();
+                spawn(async move {
+                    let mut restored_relay_names = Vec::new();
+                    let mut active_session_keys = HashSet::new();
 
-                        for session_summary in summaries {
-                            if let SessionStateSummary::Closed = session_summary.state {
-                                continue;
-                            }
-
-                            #[cfg(feature = "web")]
-                            web_sys::console::log_1(
-                                &format!(
-                                    "Restoring (deferred) session: relay_id={}, session_number={}, user_id={}",
-                                    session_summary.relay_id, session_summary.session_number, user.id
-                                )
-                                .into(),
-                            );
-
-                            // Track active session keys for cleanup
-                            let key = context.get_session_storage_key(user.id, session_summary.relay_id, session_summary.session_number);
-                            active_session_keys.insert(key);
-
-                            // Relay sessions (web or ssh origin) are attachable; TUI/web presence are not
-                            let attachable = matches!(session_summary.kind, rb_types::ssh::SessionKind::Relay);
-                            context.open_restored(
-                                user.id,
-                                session_summary.relay_name.clone(),
-                                session_summary.relay_id,
-                                session_summary.session_number,
-                                false,
-                                session_summary.connections,
-                                session_summary.viewers,
-                                attachable,
-                            );
-                            restored_relay_names.push(session_summary.relay_name);
+                    for session_summary in summaries {
+                        if let SessionStateSummary::Closed = session_summary.state {
+                            continue;
                         }
 
                         #[cfg(feature = "web")]
-                        {
-                            if !restored_relay_names.is_empty() {
-                                let count = restored_relay_names.len();
-                                let message = if count == 1 {
-                                    format!("Reattached to 1 SSH session ({})", restored_relay_names[0])
-                                } else {
-                                    format!("Reattached to {} SSH sessions", count)
-                                };
-                                toast.info(&message);
-                            }
+                        web_sys::console::log_1(
+                            &format!(
+                                "Restoring (deferred) session: relay_id={}, session_number={}, user_id={}",
+                                session_summary.relay_id, session_summary.session_number, user.id
+                            )
+                            .into(),
+                        );
+
+                        // Track active session keys for cleanup
+                        let key = context.get_session_storage_key(user.id, session_summary.relay_id, session_summary.session_number);
+                        active_session_keys.insert(key);
+
+                        // Relay sessions (web or ssh origin) are attachable; TUI/web presence are not
+                        let attachable = matches!(session_summary.kind, rb_types::ssh::SessionKind::Relay);
+                        context.open_restored(
+                            user.id,
+                            session_summary.relay_name.clone(),
+                            session_summary.relay_id,
+                            session_summary.session_number,
+                            false,
+                            session_summary.connections,
+                            session_summary.viewers,
+                            attachable,
+                        );
+                        restored_relay_names.push(session_summary.relay_name);
+                    }
+
+                    #[cfg(feature = "web")]
+                    {
+                        if !restored_relay_names.is_empty() {
+                            let count = restored_relay_names.len();
+                            let message = if count == 1 {
+                                format!("Reattached to 1 SSH session ({})", restored_relay_names[0])
+                            } else {
+                                format!("Reattached to {} SSH sessions", count)
+                            };
+                            toast.info(&message);
                         }
+                    }
 
-                        // Cleanup stale sessions
-                        let storage = context.get_storage();
-                        let all_keys = storage.keys();
-                        let prefix = format!("rb-session-{}-", user.id);
+                    // Cleanup stale sessions
+                    let storage = context.get_storage();
+                    let all_keys = storage.keys();
+                    let prefix = format!("rb-session-{}-", user.id);
 
-                        for key in all_keys {
-                            if key.starts_with(&prefix) && !active_session_keys.contains(&key) {
-                                let _ = storage.remove(&key);
-                            }
+                    for key in all_keys {
+                        if key.starts_with(&prefix) && !active_session_keys.contains(&key) {
+                            let _ = storage.remove(&key);
                         }
+                    }
 
-                        // Mark restoration as complete
-                        restoration_in_progress.set(false);
-                    });
-                }
+                    // Mark restoration as complete
+                    restoration_in_progress.set(false);
+                });
+            }
         });
     }
     // WebSocket connection with proper lifecycle management
