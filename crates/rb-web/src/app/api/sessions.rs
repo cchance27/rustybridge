@@ -143,7 +143,7 @@ pub async fn close_session(user_id: i64, relay_id: i64, session_number: u32) -> 
     pool: axum::Extension<sqlx::SqlitePool>,
     registry: axum::Extension<SharedRegistry>
 )]
-pub async fn attach_to_session(user_id: i64, relay_id: i64, session_number: u32) -> Result<String, ServerFnError> {
+pub async fn attach_to_session(session_user_id: i64, relay_id: i64, session_number: u32) -> Result<String, ServerFnError> {
     let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
 
     // Check for server:attach_any claim
@@ -152,7 +152,7 @@ pub async fn attach_to_session(user_id: i64, relay_id: i64, session_number: u32)
 
     if !has_attach_any {
         // Only allow attaching to your own sessions
-        if user.id != user_id {
+        if user.id != session_user_id {
             return Err(ServerFnError::new("Cannot attach to another user's session"));
         }
 
@@ -168,14 +168,20 @@ pub async fn attach_to_session(user_id: i64, relay_id: i64, session_number: u32)
     // Ensure the session exists and matches the relay/user
     let session = registry
         .0
-        .get_session(user_id, relay_id, session_number)
+        .get_session(session_user_id, relay_id, session_number)
         .await
         .ok_or_else(|| ServerFnError::new("Session not found"))?;
 
-    let url = format!(
+    let mut url = format!(
         "/api/ws/ssh_connection/{}?session_number={}",
         session.relay_name, session.session_number
     );
+
+    // If admin is attaching to another session_user_id, include target_user_id
+    if user.id != session_user_id {
+        use std::fmt::Write;
+        let _ = write!(url, "&target_user_id={}", session_user_id);
+    }
 
     Ok(url)
 }
