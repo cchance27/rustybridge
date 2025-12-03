@@ -242,7 +242,7 @@ impl SshSession {
         }
 
         // Prevent underflow on the total active count as well.
-        let count = self
+        let old_count = self
             .active_connections
             .fetch_update(
                 Ordering::SeqCst,
@@ -252,6 +252,9 @@ impl SshSession {
                 },
             )
             .unwrap_or_else(|cur| cur); // unwrap_or_else gives us the last observed value
+
+        let count = if old_count > 0 { old_count - 1 } else { 0 };
+
         tracing::debug!(
             user_id = self.user_id,
             relay_id = self.relay_id,
@@ -316,7 +319,7 @@ impl SshSession {
 
     pub async fn decrement_viewers(&self, conn_type: ConnectionType) -> u32 {
         // Prevent underflow on viewer totals and per-type counts.
-        let count = self
+        let old_count = self
             .active_viewers
             .fetch_update(
                 Ordering::SeqCst,
@@ -326,6 +329,9 @@ impl SshSession {
                 },
             )
             .unwrap_or_else(|cur| cur);
+
+        let count = if old_count > 0 { old_count - 1 } else { 0 };
+
         let conn_kind = match conn_type {
             ConnectionType::Web => "web",
             ConnectionType::Ssh => "ssh",
@@ -410,14 +416,14 @@ impl SshSession {
         );
         // Broadcast session update with new admin viewer
         drop(admin_viewers); // Release lock before broadcasting
-        if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
-            if self.event_tx.receiver_count() > 0 {
-                tracing::warn!(
-                    session_number = self.session_number,
-                    error = ?e,
-                    "Failed to broadcast admin viewer addition"
-                );
-            }
+        if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await))
+            && self.event_tx.receiver_count() > 0
+        {
+            tracing::warn!(
+                session_number = self.session_number,
+                error = ?e,
+                "Failed to broadcast admin viewer addition"
+            );
         }
     }
 
@@ -433,14 +439,14 @@ impl SshSession {
         );
         // Broadcast session update with removed admin viewer
         drop(admin_viewers); // Release lock before broadcasting
-        if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
-            if self.event_tx.receiver_count() > 0 {
-                tracing::warn!(
-                    session_number = self.session_number,
-                    error = ?e,
-                    "Failed to broadcast admin viewer removal"
-                );
-            }
+        if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await))
+            && self.event_tx.receiver_count() > 0
+        {
+            tracing::warn!(
+                session_number = self.session_number,
+                error = ?e,
+                "Failed to broadcast admin viewer removal"
+            );
         }
     }
 
@@ -743,8 +749,13 @@ impl SessionRegistry {
                     false
                 };
 
-                if should_remove {
-                    sessions.remove(&key);
+                if should_remove && sessions.remove(&key).is_some() {
+                    let (uid, rid, snum) = key;
+                    let _ = self.event_tx.send(SessionEvent::Removed {
+                        user_id: uid,
+                        relay_id: rid,
+                        session_number: snum,
+                    });
                 }
             }
         }

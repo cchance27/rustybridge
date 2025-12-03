@@ -109,6 +109,7 @@ async fn wait_for_client_ready(
 // TODO(security): Migrate to UUID-based session identifiers
 // Current implementation uses sequential integers which are easily guessable.
 // This creates a potential attack vector for session enumeration.
+#[allow(clippy::too_many_arguments)]
 #[get(
     "/api/ws/ssh_connection/{relay_name}?session_number&target_user_id",
     auth: WebAuthSession,
@@ -124,6 +125,7 @@ pub async fn ssh_terminal_ws(
 ) -> Result<SshWebSocket, ServerFnError> {
     // Extract state and auth
     let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
+    let authenticated_user_id = user.id;
 
     // Check for server:attach_any claim
     use rb_types::auth::ClaimType;
@@ -150,10 +152,10 @@ pub async fn ssh_terminal_ws(
         }
     } else {
         // Regular user
-        if let Some(target_id) = target_user_id {
-            if target_id != user.id {
-                return Err(ServerFnError::new("Unauthorized to attach to other users"));
-            }
+        if let Some(target_id) = target_user_id
+            && target_id != user.id
+        {
+            return Err(ServerFnError::new("Unauthorized to attach to other users"));
         }
 
         // Check relay access
@@ -195,7 +197,7 @@ pub async fn ssh_terminal_ws(
             if let Ok((socket, is_minimized, _dims)) = wait_for_client_ready(socket).await {
                 let registry_for_upgrade = registry_inner.clone();
                 let is_admin_viewer = target_user_id.is_some();
-                let admin_user_id_for_attach = if is_admin_viewer { Some(user_id) } else { None };
+                let admin_user_id_for_attach = if is_admin_viewer { Some(authenticated_user_id) } else { None };
                 handle_reattach(
                     socket,
                     existing,
@@ -293,10 +295,8 @@ async fn handle_reattach(
     session.attach().await;
 
     // Track admin viewer if this is an admin attachment
-    if is_admin_viewer {
-        if let Some(admin_id) = admin_user_id {
-            session.add_admin_viewer(admin_id).await;
-        }
+    if is_admin_viewer && let Some(admin_id) = admin_user_id {
+        session.add_admin_viewer(admin_id).await;
     }
 
     // Replay scrollback history so a reattached client sees the existing shell state
@@ -428,10 +428,8 @@ async fn handle_reattach(
     }
 
     // Remove admin viewer tracking if this was an admin attachment
-    if is_admin_viewer {
-        if let Some(admin_id) = admin_user_id {
-            session.remove_admin_viewer(admin_id).await;
-        }
+    if is_admin_viewer && let Some(admin_id) = admin_user_id {
+        session.remove_admin_viewer(admin_id).await;
     }
 
     tracing::info!(
