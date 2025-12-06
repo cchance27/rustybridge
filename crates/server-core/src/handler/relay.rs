@@ -146,6 +146,7 @@ impl ServerHandler {
                                                     rb_types::ssh::SessionOrigin::Ssh { user_id },
                                                     ip_address,
                                                     None,
+                                                    Some(initial_size),
                                                 )
                                                 .await;
 

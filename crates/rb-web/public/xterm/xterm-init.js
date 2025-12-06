@@ -15,7 +15,7 @@ window.debounce = (func, wait) => {
     };
 };
 
-window.initRustyBridgeTerminal = async function (terminalId, options) {
+window.initRustyBridgeTerminal = async (terminalId, options) => {
     try {
         const container = document.getElementById(terminalId);
         if (!container) {
@@ -28,7 +28,7 @@ window.initRustyBridgeTerminal = async function (terminalId, options) {
 
         container.innerHTML = '';
 
-        const term = new window.Terminal({
+        const termOptions = {
             cursorBlink: true,
             convertEol: true,
             fontFamily: 'Menlo, Monaco, "Courier New", monospace',
@@ -36,8 +36,19 @@ window.initRustyBridgeTerminal = async function (terminalId, options) {
             theme: {
                 background: '#1e1e1e',
                 foreground: '#ffffff',
-            }
-        });
+            },
+        };
+
+        // If explicit cols/rows were provided (e.g. from a recording),
+        // include them; otherwise let xterm use its defaults.
+        if (options && typeof options.cols === 'number' && options.cols > 0) {
+            termOptions.cols = options.cols;
+        }
+        if (options && typeof options.rows === 'number' && options.rows > 0) {
+            termOptions.rows = options.rows;
+        }
+
+        const term = new window.Terminal(termOptions);
 
         let fitAddon = null;
         if (options.fit && window.FitAddon) {
@@ -58,6 +69,40 @@ window.initRustyBridgeTerminal = async function (terminalId, options) {
         }
 
         term.open(container);
+
+        // If explicit cols/rows were provided and fit is disabled,
+        // size the container based on the actual cell dimensions so
+        // the terminal geometry matches the recording instead of the layout.
+        if (options && typeof options.cols === 'number' && typeof options.rows === 'number' && !options.fit) {
+            const setSize = () => {
+                try {
+                    const core = term._core;
+                    const dims = core?._renderService?._dimensions;
+                    if (dims?.actualCellWidth && dims.actualCellHeight) {
+                        const width = dims.actualCellWidth * options.cols;
+                        const height = dims.actualCellHeight * options.rows;
+                        container.style.width = `${width}px`;
+                        container.style.height = `${height}px`;
+                        container.style.display = 'block';
+                        return true;
+                    }
+                } catch (e) {
+                    console.warn('Failed to apply fixed terminal size from recording:', e);
+                }
+                return false;
+            };
+
+            // Try immediately and then retry for a short period if needed
+            if (!setSize()) {
+                let attempts = 0;
+                const interval = setInterval(() => {
+                    attempts++;
+                    if (setSize() || attempts > 20) { // Retry for up to ~400ms
+                        clearInterval(interval);
+                    }
+                }, 20);
+            }
+        }
 
         if (fitAddon) {
             fitAddon.fit();
@@ -94,7 +139,7 @@ window.initRustyBridgeTerminal = async function (terminalId, options) {
 }
 
 // Function to write data to a terminal (called from Rust)
-window.writeToTerminal = function (terminalId, data) {
+window.writeToTerminal = (terminalId, data) => {
     const term = window.terminals[terminalId];
     if (!term) {
         console.warn(`writeToTerminal: Terminal ${terminalId} not found`);
@@ -109,7 +154,7 @@ window.writeToTerminal = function (terminalId, data) {
 
     if (data instanceof Uint8Array) {
         window._rbTextDecoder = window._rbTextDecoder || new TextDecoder('utf-8', { fatal: false });
-        let decoded = window._rbTextDecoder.decode(data);
+        const decoded = window._rbTextDecoder.decode(data);
         term.write(decoded);
         return true;
     }
@@ -117,7 +162,7 @@ window.writeToTerminal = function (terminalId, data) {
     // Fallback for plain arrays or unexpected types
     if (Array.isArray(data)) {
         window._rbTextDecoder = window._rbTextDecoder || new TextDecoder('utf-8', { fatal: false });
-        let decoded = window._rbTextDecoder.decode(new Uint8Array(data));
+        const decoded = window._rbTextDecoder.decode(new Uint8Array(data));
         term.write(decoded);
         return true;
     }
@@ -127,7 +172,7 @@ window.writeToTerminal = function (terminalId, data) {
 };
 
 // Function to setup input handling to send data back to Rust
-window.setupTerminalInput = function (terminalId, onDataCallback) {
+window.setupTerminalInput = (terminalId, onDataCallback) => {
     const term = window.terminals[terminalId];
     if (term) {
         if (term._inputDisposable) {
@@ -140,13 +185,13 @@ window.setupTerminalInput = function (terminalId, onDataCallback) {
             onDataCallback(Array.from(bytes));
         });
         return true;
-    } else {
-        console.warn(`setupTerminalInput: Terminal ${terminalId} not found`);
-        return false;
     }
+
+    console.warn(`setupTerminalInput: Terminal ${terminalId} not found`);
+    return false;
 };
 
-window.focusTerminal = function (terminalId) {
+window.focusTerminal = (terminalId) => {
     const term = window.terminals[terminalId];
     if (term) {
         term.focus();
@@ -155,9 +200,9 @@ window.focusTerminal = function (terminalId) {
     }
 };
 
-window.fitTerminal = function (terminalId) {
+window.fitTerminal = (terminalId) => {
     const term = window.terminals[terminalId];
-    if (term && term._fitAddon) {
+    if (term?._fitAddon) {
         try {
             term._fitAddon.fit();
         } catch (e) {
@@ -167,7 +212,7 @@ window.fitTerminal = function (terminalId) {
 };
 
 // Function to get current terminal dimensions
-window.getTerminalDimensions = function (terminalId) {
+window.getTerminalDimensions = (terminalId) => {
     const term = window.terminals[terminalId];
     if (term) {
         return {
@@ -179,7 +224,7 @@ window.getTerminalDimensions = function (terminalId) {
 };
 
 // Function to setup resize handling to send dimensions back to Rust
-window.setupTerminalResize = function (terminalId, onResizeCallback) {
+window.setupTerminalResize = (terminalId, onResizeCallback) => {
     const term = window.terminals[terminalId];
     if (term) {
         if (term._resizeDisposable) {
@@ -194,8 +239,8 @@ window.setupTerminalResize = function (terminalId, onResizeCallback) {
         term._resizeDisposable = term.onResize(debouncedResize);
         console.log(`Resize handling setup for terminal ${terminalId} (debounced)`);
         return true;
-    } else {
-        console.warn(`setupTerminalResize: Terminal ${terminalId} not found`);
-        return false;
     }
+
+    console.warn(`setupTerminalResize: Terminal ${terminalId} not found`);
+    return false;
 };

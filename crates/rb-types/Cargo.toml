@@ -20,3 +20,4 @@ clap = { workspace = true, optional = true }
 openidconnect = { workspace = true, optional = true }
 ssh-key = { workspace = true, optional = true }
 chrono = { workspace = true, features = ["serde"] }
+uuid = { version = "1", features = ["v7", "serde"] }

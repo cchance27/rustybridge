@@ -610,18 +610,21 @@ Check Server side code with `cargo check -p rb-web --features server`
 
 #### Current State
 - ✅ History buffer stores last 64KB for reconnect
-- ❌ No persistent recording
-- ❌ No replay UI
+- ✅ Persistent recording implemented (Audit DB)
+- ✅ Replay UI implemented (Admin Panel)
 
 #### Remaining Work
-- [ ] **Persistent session recording**:
-  - Store all SSH I/O to database or file
-  - Include timestamps for each chunk, and where it came from we need to handle if it came from relay, from ssh, from webssh, and from what ip at least on client side it could come from different webshells per chunk.
-  - active sessions stored so we don't lose them, once closed maybe we gzip or zstd compress the actual data to minimize size?
-  - Metadata: user, relay, session_number, start/end time, ip's (support many since they could be connected and sending commands from multiple webshells or possibly webshell+ssh at same time eventually (we dont support mixing webshell+ssh yet but may in future.))
-- [ ] **Replay UI**:
-  - Admin view: Replay any session (with right claims, we should probably add a replay:view,delete)
-  - User view: Replay own sessions 
+> [!NOTE]
+> For detailed status, see [AUDIT_TODO.md](../AUDIT_TODO.md)
+
+- [x] **Persistent session recording**:
+  - ✅ Store all SSH I/O to database (audit.db)
+  - ✅ Include timestamps for each chunk
+  - ✅ Metadata: user, relay, session_number, start/end time, ip's
+- [x] **Replay UI**:
+  - ✅ Admin view: Replay any session
+  - ⏳ User view: Replay own sessions (In Progress)
+- [ ] **Eventlog recording**: we want to also plan for well structured event loging for all user activities and admin activities, so that we can clearly see all user type activities, how they progress through session usage and what they do at all ponts, and quickly jump to our session recordings from the events. we want great UX/UI but also clean and easily useable event recording DX.
 - [ ] **Retention policy**:
   - Configurable retention period
   - Automatic cleanup of old recordings

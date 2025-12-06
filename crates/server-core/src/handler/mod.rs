@@ -27,6 +27,7 @@ pub(crate) struct AuthPromptState {
 /// Tracks the lifecycle of a single SSH session, including authentication, PTY events, and TUI I/O.
 pub(super) struct ServerHandler {
     pub(super) registry: Arc<SessionRegistry>,
+    pub(super) connection_session_id: Option<String>, // UUIDv7 for this SSH connection
     pub(super) session_number: Option<u32>,
     pub(super) tui_session_number: Option<u32>,
     pub(super) peer_addr: Option<SocketAddr>,
@@ -70,6 +71,7 @@ impl ServerHandler {
         let (action_tx, action_rx) = unbounded_channel();
         Self {
             registry,
+            connection_session_id: None, // Set on successful auth
             session_number: None,
             tui_session_number: None,
             peer_addr,

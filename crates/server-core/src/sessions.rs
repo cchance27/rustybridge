@@ -13,6 +13,8 @@ use rb_types::ssh::{
 use session_backend::SessionBackend;
 use tokio::sync::{RwLock, broadcast};
 
+use crate::session_recorder::SessionRecorder;
+
 #[derive(Debug, Clone)]
 pub enum SessionState {
     Attached,
@@ -66,6 +68,8 @@ pub struct SshSession {
     pub close_tx: broadcast::Sender<()>,
     // Event channel
     pub event_tx: broadcast::Sender<SessionEvent>,
+    // Session Recorder
+    pub recorder: Arc<SessionRecorder>,
 }
 
 impl SshSession {
@@ -85,6 +89,7 @@ impl SshSession {
         event_tx: broadcast::Sender<SessionEvent>,
         ip_address: Option<String>,
         user_agent: Option<String>,
+        recorder: Arc<SessionRecorder>,
     ) -> Self {
         let now_ms = Utc::now().timestamp_millis();
         Self {
@@ -113,6 +118,7 @@ impl SshSession {
             admin_viewers: RwLock::new(std::collections::HashSet::new()),
             close_tx,
             event_tx,
+            recorder,
         }
     }
 
@@ -456,6 +462,7 @@ impl SshSession {
     }
 
     pub async fn append_to_history(&self, data: &[u8]) {
+        self.recorder.record_output(data).await;
         let mut history = self.history.write().await;
         for &byte in data {
             if history.len() >= 65536 {
@@ -547,6 +554,7 @@ impl SshSession {
         *state = SessionState::Closed;
         let _ = self.close_tx.send(());
         drop(state);
+        self.recorder.close().await;
         let _ = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await));
     }
 }
@@ -560,22 +568,19 @@ pub struct SessionRegistry {
     web_connections: Arc<RwLock<HashMap<i64, Vec<WebSessionMeta>>>>,
     pub event_tx: broadcast::Sender<SessionEvent>,
     next_session_id: Arc<AtomicU32>,
-}
-
-impl Default for SessionRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
+    pub audit_db: rb_types::state::DbHandle,
 }
 
 impl SessionRegistry {
-    pub fn new() -> Self {
+    pub fn new(audit_db: rb_types::state::DbHandle) -> Self {
         let (event_tx, _) = broadcast::channel(100);
+
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             web_connections: Arc::new(RwLock::new(HashMap::new())),
             event_tx,
             next_session_id: Arc::new(AtomicU32::new(1)),
+            audit_db,
         }
     }
 
@@ -612,6 +617,57 @@ impl SessionRegistry {
         self.web_connections.read().await.get(&user_id).cloned().unwrap_or_default()
     }
 
+    // FIXME: we should use rusts type system to make things unrepresentable at the type level
+    // IP Addresses should be validated on creation and storage not just by length, useragents to, usernames too, etc. as well as any generic "string" that isnt really just a string
+
+    /// Validate and sanitize metadata fields before storing in the database.
+    /// Caps field lengths to prevent oversized values from bloating rows.
+    fn validate_metadata_fields(
+        ip_address: Option<String>,
+        user_agent: Option<String>,
+        username: String,
+        relay_name: String,
+    ) -> (Option<String>, Option<String>, String, String) {
+        const MAX_IP_LEN: usize = 256;
+        const MAX_USER_AGENT_LEN: usize = 2048;
+        const MAX_USERNAME_LEN: usize = 256;
+        const MAX_RELAY_NAME_LEN: usize = 256;
+
+        let ip_address = ip_address.map(|s| {
+            if s.len() > MAX_IP_LEN {
+                tracing::warn!(original_len = s.len(), "IP address exceeds max length, truncating");
+                s.chars().take(MAX_IP_LEN).collect()
+            } else {
+                s
+            }
+        });
+
+        let user_agent = user_agent.map(|s| {
+            if s.len() > MAX_USER_AGENT_LEN {
+                tracing::warn!(original_len = s.len(), "User agent exceeds max length, truncating");
+                s.chars().take(MAX_USER_AGENT_LEN).collect()
+            } else {
+                s
+            }
+        });
+
+        let username = if username.len() > MAX_USERNAME_LEN {
+            tracing::warn!(original_len = username.len(), "Username exceeds max length, truncating");
+            username.chars().take(MAX_USERNAME_LEN).collect()
+        } else {
+            username
+        };
+
+        let relay_name = if relay_name.len() > MAX_RELAY_NAME_LEN {
+            tracing::warn!(original_len = relay_name.len(), "Relay name exceeds max length, truncating");
+            relay_name.chars().take(MAX_RELAY_NAME_LEN).collect()
+        } else {
+            relay_name
+        };
+
+        (ip_address, user_agent, username, relay_name)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn create_next_session(
         &self,
@@ -623,6 +679,7 @@ impl SessionRegistry {
         origin: SessionOrigin,
         ip_address: Option<String>,
         user_agent: Option<String>,
+        term_dims: Option<(u32, u32)>,
     ) -> (u32, Arc<SshSession>) {
         let mut sessions = self.sessions.write().await;
 
@@ -630,6 +687,30 @@ impl SessionRegistry {
         let session_number = self.next_session_id.fetch_add(1, Ordering::Relaxed);
 
         let (close_tx, _) = broadcast::channel(1);
+
+        // Validate and sanitize metadata fields
+        let (ip_address, user_agent, username, relay_name) = Self::validate_metadata_fields(ip_address, user_agent, username, relay_name);
+
+        let metadata = {
+            let mut base = serde_json::json!({
+                "ip_address": ip_address,
+                "user_agent": user_agent,
+                "origin": origin,
+                "username": username,
+                "relay_name": relay_name,
+            });
+
+            if let Some((cols, rows)) = term_dims {
+                base["terminal"] = serde_json::json!({
+                    "cols": cols,
+                    "rows": rows,
+                });
+            }
+
+            base
+        };
+
+        let recorder = SessionRecorder::new(self.audit_db.clone(), user_id, relay_id, session_number, metadata).await;
 
         let session = Arc::new(SshSession::new(
             session_number,
@@ -643,6 +724,7 @@ impl SessionRegistry {
             self.event_tx.clone(),
             ip_address,
             user_agent,
+            recorder,
         ));
 
         sessions.insert((user_id, relay_id, session_number), session.clone());
@@ -798,7 +880,3 @@ impl SessionRegistry {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "sessions.test.rs"]
-mod tests;

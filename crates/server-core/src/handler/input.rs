@@ -44,6 +44,35 @@ impl ServerHandler {
             }
         }
 
+        // Send data to relay backend if we have an active relay session
+        if let (Some(user_id), Some(relay_id), Some(session_number)) = (self.user_id, self.active_relay_id, self.session_number)
+            && relay_id > 0
+            && !data.is_empty()
+        {
+            // Record input if we have a connection ID
+            if let Some(conn_id) = &self.connection_session_id {
+                let registry = self.registry.clone();
+                let data_vec = data.to_vec();
+                let conn_id = conn_id.clone();
+                tokio::spawn(async move {
+                    if let Some(session) = registry.get_session(user_id, relay_id, session_number).await {
+                        session.recorder.record_input(&data_vec, conn_id).await;
+                    }
+                });
+            }
+
+            // Get the session and send data via backend
+            let registry = self.registry.clone();
+            let data_to_send = data.to_vec();
+            tokio::spawn(async move {
+                if let Some(session) = registry.get_session(user_id, relay_id, session_number).await {
+                    let _ = session.backend.send(data_to_send).await;
+                }
+            });
+            self.touch_session();
+            return Ok(());
+        }
+
         // If an auth prompt is active, capture input directly and bypass TUI apps
         if self.pending_auth.is_some() {
             let mut done = false;
@@ -143,26 +172,24 @@ impl ServerHandler {
             return Ok(());
         }
 
-        // Send data to relay backend if we have an active relay session
-        if let (Some(user_id), Some(relay_id), Some(session_number)) = (self.user_id, self.active_relay_id, self.session_number)
-            && relay_id > 0
-            && !data.is_empty()
-        {
-            // Get the session and send data via backend
-            let registry = self.registry.clone();
-            let data_to_send = data.to_vec();
-            tokio::spawn(async move {
-                if let Some(session) = registry.get_session(user_id, relay_id, session_number).await {
-                    let _ = session.backend.send(data_to_send).await;
-                }
-            });
-            self.touch_session();
-            return Ok(());
-        }
-
         if let Some(app_session) = self.app_session.as_mut() {
             // Normalize incoming SSH bytes to canonical TUI sequences
             let canonical = tui_core::input::canonicalize(data);
+
+            // Record input for TUI sessions too
+            if let (Some(user_id), Some(session_number), Some(conn_id)) =
+                (self.user_id, self.tui_session_number, &self.connection_session_id)
+                && !data.is_empty()
+            {
+                let registry = self.registry.clone();
+                let data_vec = data.to_vec();
+                let conn_id = conn_id.clone();
+                tokio::spawn(async move {
+                    if let Some(session) = registry.get_session(user_id, 0, session_number).await {
+                        session.recorder.record_input(&data_vec, conn_id).await;
+                    }
+                });
+            }
 
             // Filter out DSR response if we requested it (cursor position report)
             // \x1b[<row>;<col>R

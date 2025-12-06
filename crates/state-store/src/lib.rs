@@ -15,6 +15,7 @@
 //! - `config`: Server configuration and options management
 //! - `error`: Error types and results
 
+pub mod audit;
 mod auth;
 mod config;
 mod credentials;
@@ -28,6 +29,7 @@ mod error;
 
 // Re-export error types for use by submodules
 // Re-export all public functions and types from submodules
+pub use audit::*;
 pub use auth::*;
 pub use config::*;
 pub use credentials::*;

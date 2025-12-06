@@ -16,7 +16,7 @@ pub async fn run_web_server(
     use axum_session_sqlx::SessionSqlitePool;
     use sqlx::SqlitePool;
 
-    use crate::server::auth::WebUser;
+    use crate::{app::api, server::auth::WebUser};
 
     if config.tls.is_some() {
         tracing::warn!("native TLS requested but not yet implemented; serving HTTP");
@@ -57,6 +57,10 @@ pub async fn run_web_server(
         .route(
             "/api/auth/oidc/callback/link",
             axum::routing::get(auth::oidc_link::oidc_link_callback),
+        )
+        .route(
+            "/api/audit/sessions/{id}/export/{export_type}",
+            axum::routing::get(api::audit::export_session),
         )
         .serve_dioxus_application(ServeConfig::new(), app)
         .layer(axum::Extension(pool.clone()))

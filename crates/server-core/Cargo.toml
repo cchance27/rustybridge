@@ -33,7 +33,8 @@ ssh-key.workspace = true
 ssh-encoding = "0.2"
 reqwest.workspace = true
 chrono = { version = "0.4.42", features = ["serde"] }
-uuid = { version = "1.18.1", features = ["v4", "serde"] }
+uuid = { version = "1.18.1", features = ["v4", "v7", "serde"] }
+zstd = "0.13"
 
 [dev-dependencies]
 anyhow.workspace = true

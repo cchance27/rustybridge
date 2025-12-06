@@ -176,6 +176,24 @@ pub async fn ssh_terminal_ws(
     let relay_for_upgrade = relay_name.clone();
     let registry_inner: SharedRegistry = registry.0.clone();
 
+    // Extract IP and User Agent from headers (needed for both reattach and new session)
+    let ip_address = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
+        .or_else(|| headers.get("x-real-ip").and_then(|v| v.to_str().ok()).map(|s| s.to_string()))
+        .or_else(|| {
+            // Fallback for localhost dev without proxy
+            let host = headers.get("host").and_then(|v| v.to_str().ok()).unwrap_or("");
+            if host.contains("localhost") || host.contains("127.0.0.1") {
+                Some("127.0.0.1".to_string())
+            } else {
+                None
+            }
+        });
+
+    let user_agent_str = headers.get("user-agent").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+
     // If a session_number was provided, try to reattach to an existing session first.
     if let Some(num) = session_number
         && let Some(existing) = registry_inner.get_session(user_id, relay_id, num).await
@@ -205,6 +223,8 @@ pub async fn ssh_terminal_ws(
                     is_minimized,
                     is_admin_viewer,
                     admin_user_id_for_attach,
+                    ip_address.clone(),
+                    user_agent_str.clone(),
                 )
                 .await;
             } else {
@@ -219,23 +239,7 @@ pub async fn ssh_terminal_ws(
     }
 
     // Fallback: create a new session
-    // Extract IP and User Agent from headers
-    let ip_address = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
-        .or_else(|| headers.get("x-real-ip").and_then(|v| v.to_str().ok()).map(|s| s.to_string()))
-        .or_else(|| {
-            // Fallback for localhost dev without proxy
-            let host = headers.get("host").and_then(|v| v.to_str().ok()).unwrap_or("");
-            if host.contains("localhost") || host.contains("127.0.0.1") {
-                Some("127.0.0.1".to_string())
-            } else {
-                None
-            }
-        });
-
-    let user_agent_str = headers.get("user-agent").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+    // IP and UA already extracted above
 
     Ok(options.on_upgrade(move |socket| async move {
         tracing::info!(relay = %relay_for_upgrade, user = %username, "WebSocket upgrade callback started (new session)");
@@ -279,6 +283,7 @@ pub async fn ssh_terminal_status(relay_name: String) -> Result<SshStatusResponse
 }
 
 #[cfg(feature = "server")]
+#[allow(clippy::too_many_arguments)]
 async fn handle_reattach(
     mut socket: TypedWebsocket<SshClientMsg, SshServerMsg, JsonEncoding>,
     session: std::sync::Arc<SshSession>,
@@ -286,8 +291,35 @@ async fn handle_reattach(
     initial_minimized: bool,
     is_admin_viewer: bool,
     admin_user_id: Option<i64>,
+    ip_address: Option<String>,
+    user_agent: Option<String>,
 ) {
     use rb_types::ssh::SshControl;
+    use uuid::Uuid;
+
+    // Generate a connection ID for this WebSocket session
+    let connection_id = Uuid::now_v7().to_string();
+    let connection_id_clone = connection_id.clone();
+
+    // Record the connection
+    let registry_for_audit = registry.clone();
+    let user_id_for_audit = if let Some(uid) = admin_user_id { uid } else { session.user_id };
+    let ip_for_audit = ip_address.clone();
+    let ua_for_audit = user_agent.clone();
+
+    tokio::spawn(async move {
+        if let Err(e) = state_store::audit::connections::record_web_connection(
+            &registry_for_audit.audit_db,
+            connection_id_clone,
+            user_id_for_audit,
+            ip_for_audit,
+            ua_for_audit,
+        )
+        .await
+        {
+            tracing::warn!("Failed to record web connection: {}", e);
+        }
+    });
 
     // Track minimize state for this connection
     let mut is_minimized = initial_minimized;
@@ -405,6 +437,14 @@ async fn handle_reattach(
                             }
                         }
                         if !client_msg.data.is_empty() {
+                            // Record input
+                            let conn_id = connection_id.clone();
+                            let data_vec = client_msg.data.clone();
+                            let session_recorder = session.recorder.clone();
+                            tokio::spawn(async move {
+                                session_recorder.record_input(&data_vec, conn_id).await;
+                            });
+
                             let _ = backend.send(client_msg.data).await;
                         }
                     }
@@ -473,6 +513,14 @@ async fn handle_reattach(
             tracing::info!(session_number = session.session_number, "Client disconnected but others remain");
         }
     }
+    // Record disconnection
+    let registry_for_audit = registry.clone();
+    let connection_id_clone = connection_id.clone();
+    tokio::spawn(async move {
+        if let Err(e) = state_store::audit::connections::record_disconnection(&registry_for_audit.audit_db, &connection_id_clone).await {
+            tracing::warn!("Failed to record web disconnection: {}", e);
+        }
+    });
 }
 
 #[cfg(feature = "server")]
@@ -611,8 +659,9 @@ async fn handle_new_session(
             username,
             backend.clone(),
             rb_types::ssh::SessionOrigin::Web { user_id },
-            ip_address,
-            user_agent,
+            ip_address.clone(),
+            user_agent.clone(),
+            Some(term_dims),
         )
         .await;
 
@@ -672,5 +721,7 @@ async fn handle_new_session(
 
     // Hand off to reattach logic (which handles the WS loop)
     // New sessions are never admin viewers (they own the session)
-    handle_reattach(socket, session, registry, current_minimized, false, None).await;
+    // Hand off to reattach logic (which handles the WS loop)
+    // New sessions are never admin viewers (they own the session)
+    handle_reattach(socket, session, registry, current_minimized, false, None, ip_address, user_agent).await;
 }

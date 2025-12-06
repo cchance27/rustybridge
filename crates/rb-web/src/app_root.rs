@@ -3,8 +3,8 @@ use dioxus::prelude::*;
 use crate::{
     app::{
         auth::context::use_auth_provider, session::{components::global_chrome::SessionGlobalChrome, provider::use_session_provider}
-    }, pages::{
-        AccessPage, CredentialsPage, DashboardPage, LoginPage, LogoutPage, NotFoundPage, OidcErrorPage, ProfilePage, RelaysPage, ServerPage, SshSuccessPage
+    }, components::SessionPlayer, pages::{
+        AccessPage, CredentialsPage, DashboardPage, LoginPage, LogoutPage, NotFoundPage, OidcErrorPage, ProfilePage, RelaysPage, ServerPage, SshSuccessPage, admin::SessionHistory
     }
 };
 
@@ -67,6 +67,10 @@ pub enum Routes {
     AccessPage {},
     #[route("/server")]
     ServerPage {},
+    #[route("/admin/sessions")]
+    SessionHistory {},
+    #[route("/admin/sessions/:session_id/replay")]
+    SessionPlayer { session_id: String },
     #[route("/login")]
     LoginPage {},
     #[route("/logout")]

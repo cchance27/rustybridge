@@ -3,7 +3,9 @@ mod sessions;
 
 use crate::{
     app::{
-        api::ssh_keys::{add_my_ssh_key, delete_my_ssh_key, get_my_ssh_keys}, auth::oidc::get_oidc_link_status, components::{Layout, Modal, Table, use_toast}, session::provider::use_session, storage::{BrowserStorage, StorageType}
+        api::{
+            audit::{RecordedSession, list_my_sessions}, ssh_keys::{add_my_ssh_key, delete_my_ssh_key, get_my_ssh_keys}
+        }, auth::oidc::get_oidc_link_status, components::{Layout, Modal, Table, use_toast}, session::provider::use_session, storage::{BrowserStorage, StorageType}
     }, components::RequireAuth
 };
 
@@ -318,6 +320,9 @@ pub fn ProfilePage() -> Element {
 
                     // Sessions Section
                     sessions::SessionsSection {}
+
+                    // Session History Section
+                    SessionHistorySection {}
                 }
 
                 // Add Key Modal
@@ -424,5 +429,160 @@ pub fn ProfilePage() -> Element {
                 }
             }
         }
+    }
+}
+
+#[component]
+fn SessionHistorySection() -> Element {
+    let sessions = use_resource(|| async move { list_my_sessions().await });
+
+    rsx! {
+        div { class: "card bg-base-200 shadow-xl self-start w-full",
+            div { class: "card-body",
+                h2 { class: "card-title", "Session History" }
+                p { class: "text-sm opacity-70", "View and replay your recorded sessions." }
+
+                match &*sessions.read_unchecked() {
+                    Some(Ok(session_list)) => rsx! {
+                        if session_list.is_empty() {
+                            div { class: "text-center py-8 opacity-50", "No recorded sessions found." }
+                        } else {
+                            div { class: "overflow-x-auto",
+                                table { class: "table table-zebra w-full",
+                                    thead {
+                                        tr {
+                                            th { "Time" }
+                                            th { "Relay" }
+                                            th { "Session #" }
+                                            th { "Duration" }
+                                            th { "Status" }
+                                            th { "Actions" }
+                                        }
+                                    }
+                                    tbody {
+                                        for session in session_list {
+                                            SessionHistoryRow { session: session.clone() }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    Some(Err(e)) => rsx! {
+                        div { class: "alert alert-error",
+                            "Error loading session history: {e}"
+                        }
+                    },
+                    None => rsx! {
+                        div { class: "flex justify-center p-8",
+                            span { class: "loading loading-spinner loading-lg" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn SessionHistoryRow(session: RecordedSession) -> Element {
+    let start_time = format_timestamp(session.start_time);
+    let duration = if let Some(end) = session.end_time {
+        format_duration(end - session.start_time)
+    } else {
+        "Active".to_string()
+    };
+
+    let status = if session.end_time.is_some() { "Completed" } else { "Active" };
+
+    // Export dropdown with format selection
+    let export_dropdown = rsx! {
+        div { class: "dropdown dropdown-end",
+            div {
+                tabindex: "0",
+                role: "button",
+                class: "btn btn-xs btn-ghost",
+                "Export ▼"
+            }
+            ul {
+                tabindex: "0",
+                class: "dropdown-content menu bg-base-100 rounded-box z-[1] w-52 p-2 shadow",
+                li {
+                    a {
+                        href: "/api/audit/sessions/{session.id}/export/cast",
+                        target: "_blank",
+                        rel: "external",
+                        download: "session.cast",
+                        "Asciicinema (.cast)"
+                    }
+                }
+                li {
+                    a {
+                        href: "/api/audit/sessions/{session.id}/export/txt",
+                        target: "_blank",
+                        rel: "external",
+                        download: "session.txt",
+                        "Plain Text (.txt)"
+                    }
+                }
+            }
+        }
+    };
+
+    rsx! {
+        tr {
+            td { "{start_time}" }
+            td {
+                span { class: "font-mono text-sm",
+                    {session.relay_name.as_deref().unwrap_or("Unknown")}
+                }
+            }
+            td {
+                span { class: "badge badge-neutral badge-sm",
+                    "#{session.session_number}"
+                }
+            }
+            td { "{duration}" }
+            td {
+                span {
+                    class: if session.end_time.is_some() { "badge badge-success badge-sm" } else { "badge badge-info badge-sm" },
+                    "{status}"
+                }
+            }
+            td {
+                div { class: "flex gap-2",
+                    Link {
+                        to: "/admin/sessions/{session.id}/replay",
+                        class: "btn btn-xs btn-primary",
+                        "Replay"
+                    }
+                    {export_dropdown}
+                }
+            }
+        }
+    }
+}
+
+fn format_timestamp(ms: i64) -> String {
+    use chrono::{Local, TimeZone};
+
+    if let Some(dt) = Local.timestamp_millis_opt(ms).single() {
+        dt.format("%Y-%m-%d %H:%M:%S").to_string()
+    } else {
+        "Invalid date".to_string()
+    }
+}
+
+fn format_duration(ms: i64) -> String {
+    let seconds = ms / 1000;
+    let minutes = seconds / 60;
+    let hours = minutes / 60;
+
+    if hours > 0 {
+        format!("{}h {}m", hours, minutes % 60)
+    } else if minutes > 0 {
+        format!("{}m {}s", minutes, seconds % 60)
+    } else {
+        format!("{}s", seconds)
     }
 }

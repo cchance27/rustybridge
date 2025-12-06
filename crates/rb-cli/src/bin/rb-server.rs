@@ -48,7 +48,8 @@ async fn main() -> Result<()> {
         None => {
             if let Some(web_cfg) = web_config {
                 let server_cfg = args.to_run_config();
-                let registry = std::sync::Arc::new(server_core::sessions::SessionRegistry::new());
+                let audit_db = state_store::audit::audit_db().await?;
+                let registry = std::sync::Arc::new(server_core::sessions::SessionRegistry::new(audit_db));
 
                 let registry_for_ssh = registry.clone();
                 let registry_for_web = registry.clone();
@@ -68,9 +69,10 @@ async fn main() -> Result<()> {
                     }
                 }
             } else {
+                let audit_db = state_store::audit::audit_db().await?;
                 run_ssh_server(
                     args.to_run_config(),
-                    std::sync::Arc::new(server_core::sessions::SessionRegistry::new()),
+                    std::sync::Arc::new(server_core::sessions::SessionRegistry::new(audit_db)),
                 )
                 .await?;
             }

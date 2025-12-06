@@ -84,7 +84,7 @@ pub fn SessionsSection() -> Element {
 
             loop {
                 // Use a timeout to batch multiple events together
-                #[cfg(feature = "server")]
+                #[cfg(all(feature = "server", not(feature = "web")))]
                 let event_result = tokio::time::timeout(std::time::Duration::from_millis(100), ws.recv()).await;
 
                 #[cfg(feature = "web")]

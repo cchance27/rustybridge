@@ -1,5 +1,7 @@
 pub mod access;
+pub mod admin;
 pub mod credentials;
+
 pub mod dashboard;
 pub mod login;
 pub mod logout;
@@ -11,6 +13,7 @@ pub mod server;
 pub mod ssh_success;
 
 pub use access::AccessPage;
+pub use admin::SessionHistory;
 pub use credentials::CredentialsPage;
 pub use dashboard::DashboardPage;
 pub use login::LoginPage;

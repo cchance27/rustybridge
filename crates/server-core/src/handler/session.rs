@@ -115,6 +115,10 @@ impl ServerHandler {
                 rb_types::ssh::SessionOrigin::Ssh { user_id: user_id_value },
                 ip_address,
                 None,
+                Some({
+                    let (cols, rows) = self.view_size();
+                    (cols as u32, rows as u32)
+                }),
             )
             .await;
         self.session_number = Some(session_number);
@@ -400,6 +404,17 @@ impl ServerHandler {
                 });
             }
             self.log_disconnect("channel closed");
+
+            // Record disconnection in audit DB
+            if let Some(conn_id) = &self.connection_session_id {
+                let registry = self.registry.clone();
+                let conn_id_clone = conn_id.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = state_store::audit::connections::record_disconnection(&registry.audit_db, &conn_id_clone).await {
+                        tracing::warn!("Failed to record SSH disconnection: {}", e);
+                    }
+                });
+            }
         }
         Ok(())
     }

@@ -274,6 +274,31 @@ impl ServerHandler {
             user = %self.username.as_deref().unwrap_or("<unknown>"),
             "user authenticated"
         );
+
+        // Record SSH connection to audit DB
+        if let (Some(user_id), Some(peer_addr)) = (self.user_id, self.peer_addr) {
+            let registry = self.registry.clone();
+            let ip_address = peer_addr.ip().to_string();
+
+            // Generate connection ID and record metadata
+            match state_store::audit::connections::record_ssh_connection(
+                &registry.audit_db,
+                user_id,
+                ip_address,
+                None, // TODO: Extract SSH client version from russh if possible,
+            )
+            .await
+            {
+                Ok(conn_id) => {
+                    tracing::info!("Recorded SSH connection: {}", conn_id);
+                    self.connection_session_id = Some(conn_id);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to record SSH connection: {:?}", e);
+                }
+            }
+        }
+
         Ok(())
     }
 

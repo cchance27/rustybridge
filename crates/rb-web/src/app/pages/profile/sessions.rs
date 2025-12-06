@@ -6,7 +6,7 @@ use rb_types::ssh::SessionEvent;
 
 use crate::app::{
     api::{
-        sessions::{close_session, list_my_sessions}, ws::session_events::ssh_web_events
+        sessions::{close_session, list_my_sessions as list_my_active_sessions}, ws::session_events::ssh_web_events
     }, auth::context::AuthState, components::{
         StructuredTooltip, Table, TooltipSection, icons::{BrowserIcon, TerminalIcon}, use_toast
     }, session::provider::use_session
@@ -14,7 +14,7 @@ use crate::app::{
 
 #[component]
 pub fn SessionsSection() -> Element {
-    let mut sessions = use_resource(|| async move { list_my_sessions().await });
+    let mut sessions = use_resource(|| async move { list_my_active_sessions().await });
     let toast = use_toast();
     let auth = use_context::<Signal<AuthState>>();
     let session_ctx = use_session();
