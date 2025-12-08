@@ -188,7 +188,12 @@ pub fn use_session_provider() -> SessionContext {
                         );
 
                         // Track active session keys for cleanup
-                        let key = context.get_session_storage_key(user.id, session_summary.relay_id, session_summary.session_number);
+                        let key = context.get_session_storage_key(
+                            user.id,
+                            session_summary.relay_id,
+                            session_summary.session_number,
+                            session_summary.created_at.timestamp_millis(),
+                        );
                         active_session_keys.insert(key);
 
                         // Relay sessions (web or ssh origin) are attachable; TUI/web presence are not
@@ -202,6 +207,7 @@ pub fn use_session_provider() -> SessionContext {
                             session_summary.connections,
                             session_summary.viewers,
                             attachable,
+                            session_summary.created_at, // Pass created_at for storage key
                             None,
                             None,
                         );
@@ -320,6 +326,7 @@ pub fn use_session_provider() -> SessionContext {
                                     summary.connections,
                                     summary.viewers,
                                     attachable,
+                                    summary.created_at, // Pass created_at
                                     None,
                                     None,
                                 );
@@ -340,9 +347,10 @@ pub fn use_session_provider() -> SessionContext {
                         .iter_mut()
                         .find(|s| s.relay_id == Some(summary.relay_id) && s.session_number == Some(summary.session_number))
                     {
-                        // Update active connections and viewers count
+                        // Update active connections, viewers, and admin viewers
                         session.connections = summary.connections;
                         session.viewers = summary.viewers;
+                        session.admin_viewers = summary.admin_viewers;
 
                         // Update status based on state
                         if let SessionStateSummary::Closed = summary.state {
@@ -357,17 +365,21 @@ pub fn use_session_provider() -> SessionContext {
                 } => {
                     // Remove session
                     let mut sessions = context.sessions.write();
+                    let mut created_at_ts = 0;
                     if let Some(pos) = sessions
                         .iter()
                         .position(|s| s.relay_id == Some(relay_id) && s.session_number == Some(session_number))
                     {
+                        created_at_ts = sessions[pos].started_at.timestamp_millis();
                         sessions.remove(pos);
                     }
                     drop(sessions); // Drop the lock before calling other methods
 
                     // Also remove storage
                     if let Some(user) = auth.read().user.as_ref() {
-                        context.remove_session_storage(user.id, relay_id, session_number);
+                        if created_at_ts > 0 {
+                            context.remove_session_storage(user.id, relay_id, session_number, created_at_ts);
+                        }
                     }
                 }
                 SessionEvent::List(summaries) => {
@@ -418,20 +430,37 @@ pub fn use_session_provider() -> SessionContext {
                             }
 
                             // Track active session keys for cleanup
-                            let key = context.get_session_storage_key(user.id, session_summary.relay_id, session_summary.session_number);
+                            let key = context.get_session_storage_key(
+                                user.id,
+                                session_summary.relay_id,
+                                session_summary.session_number,
+                                session_summary.created_at.timestamp_millis(),
+                            );
                             active_session_keys.insert(key);
 
                             // Restore the session with proper user_id
                             let attachable = matches!(session_summary.kind, rb_types::ssh::SessionKind::Relay);
+                            // If no saved state exists for this browser, it's a session from another client (SSH)
+                            // Default to minimized for SSH-origin sessions
+                            let has_saved_state = context
+                                .load_session_state(
+                                    user.id,
+                                    session_summary.relay_id,
+                                    session_summary.session_number,
+                                    session_summary.created_at.timestamp_millis(),
+                                )
+                                .is_some();
+                            let should_minimize = !has_saved_state;
                             context.open_restored(
                                 user.id,
                                 session_summary.relay_name.clone(),
                                 session_summary.relay_id,
                                 session_summary.session_number,
-                                false, // Don't force minimized on restore
+                                should_minimize, // Minimize if no local state exists (SSH-origin session)
                                 session_summary.connections,
                                 session_summary.viewers,
                                 attachable,
+                                session_summary.created_at,
                                 None,
                                 None,
                             );
@@ -501,28 +530,37 @@ impl SessionContext {
         auth.read().user.as_ref().map(|u| u.id)
     }
 
-    fn get_session_storage_key(&self, user_id: i64, relay_id: i64, session_number: u32) -> String {
-        format!("rb-session-{}-{}-{}", user_id, relay_id, session_number)
+    fn get_session_storage_key(&self, user_id: i64, relay_id: i64, session_number: u32, created_at: i64) -> String {
+        format!("rb-session-{}-{}-{}-{}", user_id, relay_id, session_number, created_at)
     }
 
-    fn save_session_state(&self, user_id: i64, relay_id: i64, session_number: u32, geometry: WindowGeometry, minimized: bool) {
-        let key = self.get_session_storage_key(user_id, relay_id, session_number);
+    fn save_session_state(
+        &self,
+        user_id: i64,
+        relay_id: i64,
+        session_number: u32,
+        created_at: i64,
+        geometry: WindowGeometry,
+        minimized: bool,
+    ) {
+        let key = self.get_session_storage_key(user_id, relay_id, session_number, created_at);
         let data = SessionStorageData { geometry, minimized };
         let _ = self.get_storage().set_json(&key, &data);
     }
 
-    fn load_session_state(&self, user_id: i64, relay_id: i64, session_number: u32) -> Option<SessionStorageData> {
-        let key = self.get_session_storage_key(user_id, relay_id, session_number);
+    fn load_session_state(&self, user_id: i64, relay_id: i64, session_number: u32, created_at: i64) -> Option<SessionStorageData> {
+        let key = self.get_session_storage_key(user_id, relay_id, session_number, created_at);
         let result: std::option::Option<SessionStorageData> = self.get_storage().get_json(&key);
 
         #[cfg(feature = "web")]
         {
             web_sys::console::log_1(
                 &format!(
-                    "load_session_state: user_id={}, relay_id={}, session_number={}, key={}, found={}",
+                    "load_session_state: user_id={}, relay_id={}, session_number={}, created_at={}, key={}, found={}",
                     user_id,
                     relay_id,
                     session_number,
+                    created_at,
                     key,
                     result.is_some()
                 )
@@ -542,8 +580,8 @@ impl SessionContext {
         result
     }
 
-    pub fn remove_session_storage(&self, user_id: i64, relay_id: i64, session_number: u32) {
-        let key = self.get_session_storage_key(user_id, relay_id, session_number);
+    pub fn remove_session_storage(&self, user_id: i64, relay_id: i64, session_number: u32, created_at: i64) {
+        let key = self.get_session_storage_key(user_id, relay_id, session_number, created_at);
         let _ = self.get_storage().remove(&key);
     }
 
@@ -660,6 +698,7 @@ impl SessionContext {
         connections: rb_types::ssh::ConnectionAmounts,
         viewers: rb_types::ssh::ConnectionAmounts,
         attachable: bool,
+        created_at: chrono::DateTime<chrono::Utc>,
         target_user_id: Option<i64>,
         attached_to_username: Option<String>,
     ) {
@@ -688,9 +727,10 @@ impl SessionContext {
         new_session.target_user_id = target_user_id;
         new_session.is_admin_attached = target_user_id.is_some();
         new_session.attached_to_username = attached_to_username;
+        new_session.started_at = created_at; // Sync started_at with server creation time
 
         // Load saved state if available
-        if let Some(saved_state) = self.load_session_state(user_id, relay_id, session_number) {
+        if let Some(saved_state) = self.load_session_state(user_id, relay_id, session_number, created_at.timestamp_millis()) {
             // Validate geometry is within screen bounds
             new_session.geometry = self.validate_geometry_on_screen(saved_state.geometry);
             new_session.minimized = saved_state.minimized;
@@ -738,7 +778,7 @@ impl SessionContext {
             && let (Some(user_id), Some(relay_id), Some(session_number)) =
                 (self.get_current_user_id(), session.relay_id, session.session_number)
         {
-            self.remove_session_storage(user_id, relay_id, session_number);
+            self.remove_session_storage(user_id, relay_id, session_number, session.started_at.timestamp_millis());
         }
 
         sessions.write().retain(|s| s.id != id);
@@ -794,7 +834,14 @@ impl SessionContext {
             if let (Some(user_id), Some(relay_id), Some(session_number)) =
                 (self.get_current_user_id(), session.relay_id, session.session_number)
             {
-                self.save_session_state(user_id, relay_id, session_number, session.geometry.clone(), true);
+                self.save_session_state(
+                    user_id,
+                    relay_id,
+                    session_number,
+                    session.started_at.timestamp_millis(),
+                    session.geometry.clone(),
+                    true,
+                );
             }
         }
     }
@@ -809,7 +856,14 @@ impl SessionContext {
             if let (Some(user_id), Some(relay_id), Some(session_number)) =
                 (self.get_current_user_id(), session.relay_id, session.session_number)
             {
-                self.save_session_state(user_id, relay_id, session_number, session.geometry.clone(), false);
+                self.save_session_state(
+                    user_id,
+                    relay_id,
+                    session_number,
+                    session.started_at.timestamp_millis(),
+                    session.geometry.clone(),
+                    false,
+                );
             }
         }
     }
@@ -845,7 +899,14 @@ impl SessionContext {
             if let (Some(user_id), Some(relay_id), Some(session_number)) =
                 (self.get_current_user_id(), session.relay_id, session.session_number)
             {
-                self.save_session_state(user_id, relay_id, session_number, validated_geometry, session.minimized);
+                self.save_session_state(
+                    user_id,
+                    relay_id,
+                    session_number,
+                    session.started_at.timestamp_millis(),
+                    validated_geometry,
+                    session.minimized,
+                );
             }
         }
     }
@@ -884,7 +945,14 @@ impl SessionContext {
 
                     // Save initial state now that we have all identifiers
                     if let Some(user_id) = self.get_current_user_id() {
-                        self.save_session_state(user_id, rid, session_number, session.geometry.clone(), session.minimized);
+                        self.save_session_state(
+                            user_id,
+                            rid,
+                            session_number,
+                            session.started_at.timestamp_millis(),
+                            session.geometry.clone(),
+                            session.minimized,
+                        );
                     }
                 }
             }
@@ -1048,7 +1116,14 @@ impl SessionContext {
                 && let (Some(user_id), Some(relay_id), Some(session_number)) =
                     (self.get_current_user_id(), session.relay_id, session.session_number)
             {
-                self.save_session_state(user_id, relay_id, session_number, session.geometry.clone(), session.minimized);
+                self.save_session_state(
+                    user_id,
+                    relay_id,
+                    session_number,
+                    session.started_at.timestamp_millis(),
+                    session.geometry.clone(),
+                    session.minimized,
+                );
             }
         }
 
@@ -1146,7 +1221,14 @@ impl SessionContext {
                 && let (Some(user_id), Some(relay_id), Some(session_number)) =
                     (self.get_current_user_id(), session.relay_id, session.session_number)
             {
-                self.save_session_state(user_id, relay_id, session_number, session.geometry.clone(), session.minimized);
+                self.save_session_state(
+                    user_id,
+                    relay_id,
+                    session_number,
+                    session.started_at.timestamp_millis(),
+                    session.geometry.clone(),
+                    session.minimized,
+                );
             }
         }
 

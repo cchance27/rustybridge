@@ -52,6 +52,10 @@ async fn main() -> Result<()> {
             if let Some(web_cfg) = web_config {
                 let server_cfg = args.to_run_config();
                 let audit_db = audit_db_handle().await?;
+
+                // Clean up any stale sessions from previous server runs
+                server_core::startup_cleanup::cleanup_stale_sessions().await?;
+
                 let registry = std::sync::Arc::new(server_core::sessions::SessionRegistry::new(audit_db));
 
                 let registry_for_ssh = registry.clone();
@@ -73,6 +77,10 @@ async fn main() -> Result<()> {
                 }
             } else {
                 let audit_db = audit_db_handle().await?;
+
+                // Clean up any stale sessions from previous server runs
+                server_core::startup_cleanup::cleanup_stale_sessions().await?;
+
                 run_ssh_server(
                     args.to_run_config(),
                     std::sync::Arc::new(server_core::sessions::SessionRegistry::new(audit_db)),

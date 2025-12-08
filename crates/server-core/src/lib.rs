@@ -24,6 +24,7 @@ pub mod session_recorder;
 pub mod sessions;
 
 pub mod ssh_server;
+pub mod startup_cleanup;
 pub mod tui;
 pub mod user;
 

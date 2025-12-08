@@ -175,7 +175,10 @@ pub async fn ssh_web_events(
                         } else {
                             match &event {
                                 SessionEvent::Created(uid, _) => *uid == user_id,
-                                SessionEvent::Updated(uid, _) => *uid == user_id,
+                                SessionEvent::Updated(uid, summary) => {
+                                    // Send to session owner OR any admin viewers attached to this session
+                                    *uid == user_id || summary.admin_viewers.contains(&user_id)
+                                },
                                 SessionEvent::Removed { user_id: uid, .. } => *uid == user_id,
                                 SessionEvent::List(_) => false, // Should not be broadcasted
                                 SessionEvent::Presence(uid, _) => *uid == user_id,

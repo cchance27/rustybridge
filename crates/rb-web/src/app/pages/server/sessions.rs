@@ -246,6 +246,7 @@ pub fn SessionsSection() -> Element {
                                                                             session.session.connections,
                                                                             session.session.viewers,
                                                                             true,
+                                                                            session.session.created_at,
                                                                             Some(session.user_id),
                                                                             Some(session.username.clone()),
                                                                         );
