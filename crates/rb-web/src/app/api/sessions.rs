@@ -163,8 +163,6 @@ pub async fn close_session(user_id: i64, relay_id: i64, session_number: u32) -> 
     registry: axum::Extension<SharedRegistry>
 )]
 pub async fn attach_to_session(session_user_id: i64, relay_id: i64, session_number: u32) -> Result<String, ServerFnError> {
-    use rb_types::auth::ATTACH_ANY_CLAIM;
-
     let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
 
     // Check permissions using centralized helper
@@ -178,9 +176,6 @@ pub async fn attach_to_session(session_user_id: i64, relay_id: i64, session_numb
         .get_session(session_user_id, relay_id, session_number)
         .await
         .ok_or_else(|| ServerFnError::new("Session not found"))?;
-
-    // Check for admin permission (server:attach_any implies general session management for now)
-    ensure_claim(&auth, &ATTACH_ANY_CLAIM).map_err(|e| ServerFnError::new(e.to_string()))?;
 
     let mut url = format!(
         "/api/ws/ssh_connection/{}?session_number={}",

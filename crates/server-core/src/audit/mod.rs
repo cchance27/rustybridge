@@ -58,5 +58,41 @@ pub async fn log_oidc_failure(ip_address: Option<String>, session_id: String, us
     )
     .await;
 }
+
+/// Helper to log a relay-related audit event, fetching relay info if not already known.
+///
+/// This reduces the common pattern of:
+/// ```ignore
+/// if let Some(relay) = state_store::fetch_relay_host_by_id(&pool, host_id).await? {
+///     crate::audit!(ctx, SomeEvent { relay_name: relay.name, relay_id, ... });
+/// }
+/// ```
+///
+/// Instead:
+/// ```ignore
+/// log_relay_event_if_exists(ctx, host_id, |name| EventType::RelayOptionCleared {
+///     relay_name: name,
+///     relay_id: host_id,
+///     key,
+/// }).await;
+/// ```
+pub async fn log_relay_event_if_exists<F>(ctx: &rb_types::audit::AuditContext, relay_id: i64, event_fn: F)
+where
+    F: FnOnce(String) -> rb_types::audit::EventType,
+{
+    // Best-effort lookup and log - don't propagate errors
+    let relay_result = async {
+        let db = state_store::server_db().await?;
+        let pool = db.into_pool();
+        state_store::fetch_relay_host_by_id(&pool, relay_id).await
+    }
+    .await;
+
+    if let Ok(Some(relay)) = relay_result {
+        let event = event_fn(relay.name);
+        log_event_from_context_best_effort(ctx, event).await;
+    }
+}
+
 // Re-export types from rb-types for convenience
 pub use rb_types::audit::{AuditEvent, AuthMethod, EventCategory, EventFilter, EventType};

@@ -8,3 +8,5 @@ BREAKSEQUENCE.md
 FORWARDING.md
 .agent
 dist
+.gemini-clipboard
+.vscode

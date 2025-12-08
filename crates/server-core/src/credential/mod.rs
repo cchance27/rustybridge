@@ -40,14 +40,13 @@ pub async fn create_password_credential(
     info!(credential = name, kind = "password", context = %ctx, "credential created/updated");
 
     // Log audit event
-    crate::audit::log_event_from_context_best_effort(
+    crate::audit!(
         ctx,
-        rb_types::audit::EventType::CredentialCreated {
+        CredentialCreated {
             name: name.to_string(),
             kind: "password".to_string(),
-        },
-    )
-    .await;
+        }
+    );
 
     Ok(id)
 }
@@ -91,14 +90,13 @@ pub async fn create_ssh_key_credential(
     info!(credential = name, kind = "ssh_key", context = %ctx, "credential created/updated");
 
     // Log audit event
-    crate::audit::log_event_from_context_best_effort(
+    crate::audit!(
         ctx,
-        rb_types::audit::EventType::CredentialCreated {
+        CredentialCreated {
             name: name.to_string(),
             kind: "ssh_key".to_string(),
-        },
-    )
-    .await;
+        }
+    );
 
     Ok(id)
 }
@@ -138,14 +136,13 @@ pub async fn create_agent_credential(
     info!(credential = name, kind = "agent", context = %ctx, "credential created/updated");
 
     // Log audit event
-    crate::audit::log_event_from_context_best_effort(
+    crate::audit!(
         ctx,
-        rb_types::audit::EventType::CredentialCreated {
+        CredentialCreated {
             name: name.to_string(),
             kind: "agent".to_string(),
-        },
-    )
-    .await;
+        }
+    );
 
     Ok(id)
 }
@@ -189,15 +186,14 @@ pub async fn update_password_credential(
     info!(credential = name, kind = "password", context = %ctx, "credential updated");
 
     // Log audit event
-    crate::audit::log_event_from_context_best_effort(
+    crate::audit!(
         ctx,
-        rb_types::audit::EventType::CredentialUpdated {
+        CredentialUpdated {
             name: name.to_string(),
             cred_id: id,
             kind: "password".to_string(),
-        },
-    )
-    .await;
+        }
+    );
 
     Ok(())
 }
@@ -252,15 +248,14 @@ pub async fn update_ssh_key_credential(
     info!(credential = name, kind = "ssh_key", context = %ctx, "credential updated");
 
     // Log audit event
-    crate::audit::log_event_from_context_best_effort(
+    crate::audit!(
         ctx,
-        rb_types::audit::EventType::CredentialUpdated {
+        CredentialUpdated {
             name: name.to_string(),
             cred_id: id,
             kind: "ssh_key".to_string(),
-        },
-    )
-    .await;
+        }
+    );
 
     Ok(())
 }
