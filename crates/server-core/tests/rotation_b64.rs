@@ -22,7 +22,8 @@ async fn rotation_with_base64_master_keys() -> Result<()> {
     let pool: SqlitePool = handle.into_pool();
 
     let host_id = state_store::insert_relay_host(&pool, "b64h", "127.0.0.1", 22).await?;
-    server_core::set_relay_option_by_id(host_id, "secret", "val", true).await?;
+    let ctx = rb_types::audit::AuditContext::server_cli(None, "test-host");
+    server_core::set_relay_option_by_id(&ctx, host_id, "secret", "val", true).await?;
 
     let before: String = sqlx::query("SELECT value FROM relay_host_options WHERE relay_host_id=? AND key='secret'")
         .bind(host_id)

@@ -18,8 +18,10 @@ async fn option_encryption_and_masked_listing() -> Result<()> {
     // Insert host
     let host_id = state_store::insert_relay_host(&pool, "h2", "127.0.0.1", 22).await?;
 
+    let ctx = rb_types::audit::AuditContext::server_cli(None, "test-host");
+
     // Set an option
-    server_core::set_relay_option_by_id(host_id, "api.secret", "supersecret", true).await?;
+    server_core::set_relay_option_by_id(&ctx, host_id, "api.secret", "supersecret", true).await?;
 
     // Verify it's encrypted at rest
     let row = sqlx::query("SELECT value FROM relay_host_options WHERE relay_host_id = ? AND key='api.secret'")

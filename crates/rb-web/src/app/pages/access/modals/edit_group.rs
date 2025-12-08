@@ -1,7 +1,9 @@
 use std::{collections::HashMap, str::FromStr as _};
 
 use dioxus::prelude::*;
-use rb_types::auth::ClaimType;
+use rb_types::{
+    auth::ClaimType, users::{GroupInfo, RoleInfo}
+};
 
 use crate::{
     app::api::{
@@ -15,8 +17,8 @@ pub fn EditGroupModal(
     open: Signal<bool>,
     group_id: Signal<i64>,
     group_name: Signal<String>,
-    roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
-    groups: Resource<Result<Vec<rb_types::users::GroupInfo>, ServerFnError>>,
+    roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>,
+    groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>,
 ) -> Element {
     let name = group_name();
     let group_id_val = group_id();
@@ -167,7 +169,7 @@ pub fn EditGroupModal(
         });
     };
 
-    let remove_claim_handler = move |claim: ClaimType| {
+    let remove_claim_handler = move |claim: ClaimType<'static>| {
         let group_id_for_remove = group_id_val;
         let group = group_name();
         spawn(async move {

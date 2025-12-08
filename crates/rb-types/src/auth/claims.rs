@@ -1,6 +1,9 @@
-use std::{fmt, str::FromStr};
+use std::{borrow::Cow, fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
+
+pub const ATTACH_ANY_STR: &str = "server:attach_any";
+pub const ATTACH_ANY_CLAIM: ClaimType<'static> = ClaimType::Custom(Cow::Borrowed(ATTACH_ANY_STR));
 
 /// CRUD-like claim levels applied to resource types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
@@ -55,7 +58,7 @@ impl FromStr for ClaimLevel {
 /// Claim kinds the RBAC system understands; serialized as `type:level`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(tag = "type", content = "level", rename_all = "lowercase")]
-pub enum ClaimType {
+pub enum ClaimType<'a> {
     Relays(ClaimLevel),
     Users(ClaimLevel),
     Groups(ClaimLevel),
@@ -63,10 +66,10 @@ pub enum ClaimType {
     Credentials(ClaimLevel),
     Server(ClaimLevel),
     // Fallback for unknown claims to preserve data
-    Custom(String),
+    Custom(Cow<'a, str>),
 }
 
-impl fmt::Display for ClaimType {
+impl<'a> fmt::Display for ClaimType<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ClaimType::Relays(level) => write!(f, "relays:{}", level),
@@ -80,13 +83,13 @@ impl fmt::Display for ClaimType {
     }
 }
 
-impl FromStr for ClaimType {
+impl<'a> FromStr for ClaimType<'a> {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.split(':').collect();
         if parts.len() != 2 {
-            return Ok(ClaimType::Custom(s.to_string()));
+            return Ok(ClaimType::Custom(Cow::Owned(s.to_string())));
         }
 
         // Try to parse as a standard claim
@@ -100,37 +103,37 @@ impl FromStr for ClaimType {
             ("credentials", Ok(level)) => Ok(ClaimType::Credentials(level)),
             ("server", Ok(level)) => Ok(ClaimType::Server(level)),
             // If it looks like a standard claim but has an invalid level, or is an unknown prefix, treat as custom
-            _ => Ok(ClaimType::Custom(s.to_string())),
+            _ => Ok(ClaimType::Custom(Cow::Owned(s.to_string()))),
         }
     }
 }
 
 // Allow comparing ClaimType with string slices
-impl PartialEq<str> for ClaimType {
+impl<'a> PartialEq<str> for ClaimType<'a> {
     fn eq(&self, other: &str) -> bool {
         self.eq_str(other)
     }
 }
 
-impl PartialEq<&str> for ClaimType {
+impl<'a> PartialEq<&str> for ClaimType<'a> {
     fn eq(&self, other: &&str) -> bool {
         self.eq_str(other)
     }
 }
 
-impl PartialEq<ClaimType> for str {
-    fn eq(&self, other: &ClaimType) -> bool {
+impl<'a> PartialEq<ClaimType<'a>> for str {
+    fn eq(&self, other: &ClaimType<'a>) -> bool {
         other.eq_str(self)
     }
 }
 
-impl PartialEq<ClaimType> for &str {
-    fn eq(&self, other: &ClaimType) -> bool {
+impl<'a> PartialEq<ClaimType<'a>> for &str {
+    fn eq(&self, other: &ClaimType<'a>) -> bool {
         other.eq_str(self)
     }
 }
 
-impl ClaimType {
+impl<'a> ClaimType<'a> {
     fn eq_str(&self, other: &str) -> bool {
         match self {
             ClaimType::Custom(value) => value == other,
@@ -200,7 +203,7 @@ impl ClaimType {
         }
     }
 
-    pub fn all_variants() -> Vec<ClaimType> {
+    pub fn all_variants() -> Vec<ClaimType<'static>> {
         let levels = vec![ClaimLevel::View, ClaimLevel::Edit, ClaimLevel::Delete, ClaimLevel::Create];
         let mut claims = Vec::new();
 
@@ -222,7 +225,7 @@ impl ClaimType {
         for level in &levels {
             claims.push(ClaimType::Server(*level));
         }
-        claims.push(ClaimType::Custom("server:attach_any".to_string()));
+        claims.push(ATTACH_ANY_CLAIM);
         claims
     }
 }
@@ -237,7 +240,10 @@ mod tests {
         assert_eq!(ClaimType::Relays(ClaimLevel::View).to_string(), "relays:view");
         assert_eq!(ClaimType::Users(ClaimLevel::Edit).to_string(), "users:edit");
         assert_eq!(ClaimType::Groups(ClaimLevel::Delete).to_string(), "groups:delete");
-        assert_eq!(ClaimType::Custom("custom:claim".to_string()).to_string(), "custom:claim");
+        assert_eq!(
+            ClaimType::Custom(Cow::Owned("custom:claim".to_string())).to_string(),
+            "custom:claim"
+        );
 
         // Test FromStr
         assert_eq!(ClaimType::from_str("relays:view").unwrap(), ClaimType::Relays(ClaimLevel::View));
@@ -245,7 +251,7 @@ mod tests {
         assert_eq!(ClaimType::from_str("groups:delete").unwrap(), ClaimType::Groups(ClaimLevel::Delete));
         assert_eq!(
             ClaimType::from_str("custom:claim").unwrap(),
-            ClaimType::Custom("custom:claim".to_string())
+            ClaimType::Custom(Cow::Owned("custom:claim".to_string()))
         );
 
         // Test Wildcards

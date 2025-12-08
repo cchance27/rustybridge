@@ -17,14 +17,15 @@ async fn add_user_public_key_stores_key() -> Result<()> {
     state_store::migrate_server(&handle).await?;
     let pool = handle.into_pool();
 
-    server_core::add_user("alice", "password").await?;
+    let ctx = rb_types::audit::AuditContext::system("test");
+    server_core::add_user(&ctx, "alice", "password").await?;
 
     // Generate a valid OpenSSH public key
     let mut rng = russh::keys::ssh_key::rand_core::OsRng;
     let privk = russh::keys::PrivateKey::random(&mut rng, russh::keys::Algorithm::Ed25519)?;
     let pubk = privk.public_key().to_openssh()?.to_string();
 
-    let key_id = server_core::add_user_public_key("alice", &pubk, Some("laptop")).await?;
+    let key_id = server_core::add_user_public_key(&ctx, "alice", &pubk, Some("laptop")).await?;
 
     let row = sqlx::query("SELECT public_key, comment FROM user_public_keys WHERE id = ?")
         .bind(key_id)
@@ -56,19 +57,20 @@ async fn list_and_remove_user_public_key() -> Result<()> {
     state_store::migrate_server(&handle).await?;
     let pool = handle.into_pool();
 
-    server_core::add_user("bob", "password").await?;
+    let ctx = rb_types::audit::AuditContext::system("test");
+    server_core::add_user(&ctx, "bob", "password").await?;
 
     let mut rng = russh::keys::ssh_key::rand_core::OsRng;
     let privk = russh::keys::PrivateKey::random(&mut rng, russh::keys::Algorithm::Ed25519)?;
     let pubk = privk.public_key().to_openssh()?.to_string();
 
-    let key_id = server_core::add_user_public_key("bob", &pubk, None).await?;
+    let key_id = server_core::add_user_public_key(&ctx, "bob", &pubk, None).await?;
 
     let keys = server_core::list_user_public_keys("bob").await?;
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0].0, key_id);
 
-    server_core::delete_user_public_key("bob", key_id).await?;
+    server_core::delete_user_public_key(&ctx, "bob", key_id).await?;
 
     let keys_after = server_core::list_user_public_keys("bob").await?;
     assert!(keys_after.is_empty());

@@ -6,9 +6,9 @@ use rb_types::auth::{ClaimLevel, ClaimType};
 use rb_types::{
     credentials::CustomAuthRequest, relay::{CreateRelayRequest, HostkeyReview, RelayHostInfo, UpdateRelayRequest}
 };
-#[cfg(feature = "server")]
-use secrecy::ExposeSecret;
 
+#[cfg(feature = "server")]
+use crate::server::audit::WebAuditContext;
 #[cfg(feature = "server")]
 use crate::server::auth::guards::{WebAuthSession, ensure_claim};
 
@@ -20,150 +20,22 @@ fn ensure_relay_claim(auth: &WebAuthSession, level: ClaimLevel) -> Result<()> {
 /// List all relay hosts with credential and hostkey status
 #[get(
     "/api/relays",
-    auth: WebAuthSession,
-    pool: axum::Extension<sqlx::SqlitePool>
+    auth: WebAuthSession
 )]
 pub async fn list_relay_hosts() -> Result<Vec<RelayHostInfo>> {
     ensure_relay_claim(&auth, ClaimLevel::View)?;
-    let hosts = server_core::list_hosts().await.map_err(|e| anyhow!("{}", e))?;
-
-    let mut result = Vec::new();
-
-    for host in hosts {
-        use rb_types::{access::RelayAccessPrincipal, credentials::AuthWebConfig};
-
-        let opts = state_store::fetch_relay_host_options(&*pool, host.id)
-            .await
-            .map_err(|e| anyhow!("{}", e))?;
-
-        let decode_value = |raw: &str, is_secure: bool| {
-            if is_secure {
-                server_core::secrets::decrypt_string_if_encrypted(raw)
-                    .map(|s| s.0.expose_secret().to_string())
-                    .unwrap_or_else(|_| raw.to_string())
-            } else {
-                raw.to_string()
-            }
-        };
-
-        let auth_source = opts.get("auth.source").map(|(v, s)| decode_value(v, *s));
-
-        let credential_id = if let Some((auth_id, is_secure)) = opts.get("auth.id") {
-            if *is_secure {
-                server_core::secrets::decrypt_string_if_encrypted(auth_id)
-                    .ok()
-                    .and_then(|s| s.0.expose_secret().parse::<i64>().ok())
-            } else {
-                auth_id.parse::<i64>().ok()
-            }
-        } else {
-            None
-        };
-
-        let (credential, credential_kind, credential_username_mode, credential_password_required) = match auth_source.as_deref() {
-            Some("credential") => {
-                if let Some(cred_id) = credential_id {
-                    match state_store::get_relay_credential_by_id(&*pool, cred_id).await {
-                        Ok(Some(cred)) => (
-                            Some(cred.name),
-                            Some(cred.kind),
-                            Some(cred.username_mode),
-                            Some(cred.password_required),
-                        ),
-                        Ok(None) => (Some("<unknown>".to_string()), None, None, None),
-                        Err(_) => (None, None, None, None),
-                    }
-                } else {
-                    (None, None, None, None)
-                }
-            }
-            Some("inline") => (None, None, None, None),
-            _ => (None, None, None, None),
-        };
-
-        // Check for hostkey
-        let has_hostkey = opts.contains_key("hostkey.openssh");
-
-        let auth_config = match auth_source.as_deref() {
-            Some("credential") => Some(AuthWebConfig {
-                mode: "saved".to_string(),
-                saved_credential_id: credential_id,
-                custom_type: None,
-                username: None,
-                username_mode: None,
-                has_password: false,
-                has_private_key: false,
-                has_passphrase: false,
-                has_public_key: false,
-                password_required: None,
-            }),
-            Some("inline") => Some(AuthWebConfig {
-                mode: "custom".to_string(),
-                saved_credential_id: None,
-                custom_type: opts.get("auth.method").map(|(v, s)| decode_value(v, *s)),
-                username: opts.get("auth.username").map(|(v, s)| decode_value(v, *s)),
-                username_mode: opts.get("auth.username_mode").map(|(v, s)| decode_value(v, *s)),
-                has_password: opts.contains_key("auth.password"),
-                has_private_key: opts.contains_key("auth.identity"),
-                has_passphrase: opts.contains_key("auth.passphrase"),
-                has_public_key: opts.contains_key("auth.agent_pubkey"),
-                password_required: opts
-                    .get("auth.password_required")
-                    .map(|(v, s)| decode_value(v, *s))
-                    .and_then(|v| v.parse::<bool>().ok()),
-            }),
-            _ => Some(AuthWebConfig {
-                mode: "none".to_string(),
-                saved_credential_id: None,
-                custom_type: None,
-                username: None,
-                username_mode: None,
-                has_password: false,
-                has_private_key: false,
-                has_passphrase: false,
-                has_public_key: false,
-                password_required: None,
-            }),
-        };
-
-        // Fetch access principals for this relay
-        let access_principals = state_store::fetch_relay_access_principals(&*pool, host.id)
-            .await
-            .map_err(|e| anyhow!("{}", e))?
-            .into_iter()
-            .map(|p| RelayAccessPrincipal {
-                kind: p.kind,
-                id: p.id,
-                name: p.name,
-            })
-            .collect();
-
-        result.push(RelayHostInfo {
-            id: host.id,
-            name: host.name,
-            ip: host.ip,
-            port: host.port,
-            credential,
-            credential_kind,
-            credential_username_mode,
-            credential_password_required,
-            has_hostkey,
-            auth_config,
-            access_principals,
-        });
-    }
-
-    Ok(result)
+    Ok(server_core::list_relay_hosts_with_details().await.map_err(|e| anyhow!("{}", e))?)
 }
 
 /// Create a new relay host
 #[post(
     "/api/relays",
-    auth: WebAuthSession
+    auth: WebAuthSession,
+    audit: WebAuditContext
 )]
 pub async fn create_relay_host(req: CreateRelayRequest) -> Result<()> {
     ensure_relay_claim(&auth, ClaimLevel::Create)?;
-    server_core::add_relay_host_without_hostkey(&req.endpoint, &req.name)
+    server_core::add_relay_host_without_hostkey(&audit.0, &req.endpoint, &req.name)
         .await
         .map_err(|e| anyhow!("{}", e))?;
     Ok(())
@@ -173,7 +45,7 @@ pub async fn create_relay_host(req: CreateRelayRequest) -> Result<()> {
 #[put(
     "/api/relays/{id}",
     auth: WebAuthSession,
-    pool: axum::Extension<sqlx::SqlitePool>
+    audit: WebAuditContext
 )]
 pub async fn update_relay_host(id: i64, req: UpdateRelayRequest) -> Result<()> {
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
@@ -181,7 +53,7 @@ pub async fn update_relay_host(id: i64, req: UpdateRelayRequest) -> Result<()> {
     let (ip, port_str) = req.endpoint.rsplit_once(':').ok_or_else(|| anyhow!("Invalid endpoint format"))?;
     let port = port_str.parse::<i64>().map_err(|_| anyhow!("Invalid port"))?;
 
-    state_store::update_relay_host(&*pool, id, &req.name, ip, port)
+    server_core::update_relay_host_by_id(&audit.0, id, &req.name, ip, port)
         .await
         .map_err(|e| anyhow!("{}", e))?;
 
@@ -192,13 +64,13 @@ pub async fn update_relay_host(id: i64, req: UpdateRelayRequest) -> Result<()> {
 #[delete(
     "/api/relays/{id}",
     auth: WebAuthSession,
-    pool: axum::Extension<sqlx::SqlitePool>
+    audit: WebAuditContext
 )]
 pub async fn delete_relay_host(id: i64) -> Result<()> {
     ensure_relay_claim(&auth, ClaimLevel::Delete)?;
 
     // Delete by ID, not name
-    state_store::delete_relay_host_by_id(&*pool, id)
+    server_core::delete_relay_host_by_id(&audit.0, id)
         .await
         .map_err(|e| anyhow!("{}", e))?;
     Ok(())
@@ -208,23 +80,22 @@ pub async fn delete_relay_host(id: i64) -> Result<()> {
 #[post(
     "/api/relays/{id}/credential/{credential_id}",
     auth: WebAuthSession,
-    pool: axum::Extension<sqlx::SqlitePool>
+    audit: WebAuditContext
 )]
 pub async fn assign_relay_credential(id: i64, credential_id: i64) -> Result<()> {
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
 
-    let host = state_store::fetch_relay_host_by_id(&*pool, id)
+    let host = server_core::fetch_relay_by_id(id)
         .await
         .map_err(|e| anyhow!("{}", e))?
         .ok_or_else(|| anyhow!("Relay host not found"))?;
 
-    // Get credential name from ID
-    let cred = state_store::get_relay_credential_by_id(&*pool, credential_id)
+    let cred = server_core::get_relay_credential_by_id(credential_id)
         .await
         .map_err(|e| anyhow!("{}", e))?
         .ok_or_else(|| anyhow!("Credential not found"))?;
 
-    server_core::assign_credential_by_ids(host.id, cred.id)
+    server_core::assign_credential_by_ids(&audit.0, host.id, cred.id)
         .await
         .map_err(|e| anyhow!("{}", e))?;
     Ok(())
@@ -234,17 +105,17 @@ pub async fn assign_relay_credential(id: i64, credential_id: i64) -> Result<()> 
 #[delete(
     "/api/relays/{id}/credential",
     auth: WebAuthSession,
-    pool: axum::Extension<sqlx::SqlitePool>
+    audit: WebAuditContext,
 )]
 pub async fn clear_relay_credential(id: i64) -> Result<()> {
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
 
-    let host = state_store::fetch_relay_host_by_id(&*pool, id)
+    let host = server_core::fetch_relay_by_id(id)
         .await
         .map_err(|e| anyhow!("{}", e))?
         .ok_or_else(|| anyhow!("Relay host not found"))?;
 
-    server_core::unassign_credential_by_id(host.id)
+    server_core::unassign_credential_by_id(&audit.0, host.id)
         .await
         .map_err(|e| anyhow!("{}", e))?;
     Ok(())
@@ -252,12 +123,13 @@ pub async fn clear_relay_credential(id: i64) -> Result<()> {
 
 #[get(
     "/api/relays/{id}/fetch-hostkey",
-    auth: WebAuthSession
+    auth: WebAuthSession,
+    audit: WebAuditContext
 )]
 pub async fn fetch_relay_hostkey_for_review(id: i64) -> Result<HostkeyReview> {
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
     // Use server_core helper that returns a tuple
-    server_core::fetch_relay_hostkey_for_web(id)
+    server_core::fetch_relay_hostkey_for_web(&audit.0, id)
         .await
         .map(|review| HostkeyReview {
             host_id: review.0,
@@ -274,11 +146,12 @@ pub async fn fetch_relay_hostkey_for_review(id: i64) -> Result<HostkeyReview> {
 /// Store hostkey after user approval (step 2 of 2-step process)
 #[post(
     "/api/relays/{id}/store-hostkey",
-    auth: WebAuthSession
+    auth: WebAuthSession,
+    audit: WebAuditContext
 )]
 pub async fn store_relay_hostkey(id: i64, key_pem: String) -> Result<()> {
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
-    server_core::store_relay_hostkey_from_web(id, key_pem)
+    server_core::store_relay_hostkey_from_web(&audit.0, id, key_pem)
         .await
         .map_err(|e| anyhow!("{}", e).into())
 }
@@ -287,13 +160,13 @@ pub async fn store_relay_hostkey(id: i64, key_pem: String) -> Result<()> {
 #[post(
     "/api/relays/{id}/auth/custom",
     auth: WebAuthSession,
-    pool: axum::Extension<sqlx::SqlitePool>
+    audit: WebAuditContext
 )]
 pub async fn set_custom_auth(id: i64, req: CustomAuthRequest) -> Result<()> {
     use rb_types::validation::CredentialValidationInput;
 
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
-    let relay = state_store::fetch_relay_host_by_id(&*pool, id)
+    let relay = server_core::fetch_relay_by_id(id)
         .await
         .map_err(|e| anyhow!("{}", e))?
         .ok_or_else(|| anyhow!("Relay not found"))?;
@@ -325,6 +198,7 @@ pub async fn set_custom_auth(id: i64, req: CustomAuthRequest) -> Result<()> {
                 req.password.as_deref().unwrap_or("")
             };
             server_core::set_custom_password_auth_by_id(
+                &audit.0,
                 relay.id,
                 req.username.as_deref(),
                 password,
@@ -337,6 +211,7 @@ pub async fn set_custom_auth(id: i64, req: CustomAuthRequest) -> Result<()> {
         "ssh_key" => {
             let private_key = req.private_key.as_deref().ok_or_else(|| anyhow!("Private key required"))?;
             server_core::set_custom_ssh_key_auth_by_id(
+                &audit.0,
                 relay.id,
                 req.username.as_deref(),
                 private_key,
@@ -348,7 +223,7 @@ pub async fn set_custom_auth(id: i64, req: CustomAuthRequest) -> Result<()> {
         }
         "agent" => {
             let public_key = req.public_key.as_deref().ok_or_else(|| anyhow!("Public key required"))?;
-            server_core::set_custom_agent_auth_by_id(relay.id, req.username.as_deref(), public_key, &req.username_mode)
+            server_core::set_custom_agent_auth_by_id(&audit.0, relay.id, req.username.as_deref(), public_key, &req.username_mode)
                 .await
                 .map_err(|e| anyhow!("{}", e))?;
         }
@@ -361,16 +236,18 @@ pub async fn set_custom_auth(id: i64, req: CustomAuthRequest) -> Result<()> {
 #[delete(
     "/api/relays/{id}/auth",
     auth: WebAuthSession,
-    pool: axum::Extension<sqlx::SqlitePool>
+    audit: WebAuditContext
 )]
 pub async fn clear_relay_auth(id: i64) -> Result<()> {
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
 
-    let relay = state_store::fetch_relay_host_by_id(&*pool, id)
+    let relay = server_core::fetch_relay_by_id(id)
         .await
         .map_err(|e| anyhow!("{}", e))?
         .ok_or_else(|| anyhow!("Relay not found"))?;
 
-    server_core::clear_all_auth_by_id(relay.id).await.map_err(|e| anyhow!("{}", e))?;
+    server_core::clear_all_auth_by_id(&audit.0, relay.id)
+        .await
+        .map_err(|e| anyhow!("{}", e))?;
     Ok(())
 }

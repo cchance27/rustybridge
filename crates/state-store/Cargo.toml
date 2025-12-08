@@ -20,3 +20,4 @@ rb-types = { path = "../rb-types", features = ["sqlx"] }
 uuid = { version = "1", features = ["v7", "serde"] }
 zstd = "0.13"
 chrono = { workspace = true }
+serde_json = { workspace = true }

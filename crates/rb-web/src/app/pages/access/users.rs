@@ -3,7 +3,7 @@
 
 use dioxus::prelude::*;
 use rb_types::{
-    access::RelayAccessSource, auth::{ClaimLevel, ClaimType}
+    access::RelayAccessSource, auth::{ClaimLevel, ClaimType}, users::{GroupInfo, RoleInfo, UserGroupInfo}
 };
 
 use crate::{
@@ -15,9 +15,9 @@ use crate::{
 /// Main Users Section component
 #[component]
 pub fn UsersSection(
-    users: Resource<Result<Vec<rb_types::users::UserGroupInfo>, ServerFnError>>,
-    roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
-    groups: Resource<Result<Vec<rb_types::users::GroupInfo>, ServerFnError>>,
+    users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>,
+    roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>,
+    groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>,
 ) -> Element {
     // Toast notification state
     let toast = use_toast();
@@ -396,7 +396,7 @@ fn OidcStatusCell(
     user_id: i64,
     username: String,
     oidc_refresh_trigger: Signal<u32>,
-    users: Resource<Result<Vec<rb_types::users::UserGroupInfo>, ServerFnError>>,
+    users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>,
 ) -> Element {
     // Track per-user OIDC status; kept inside its own component to satisfy Dioxus hook ordering rules.
     let mut oidc_status = use_signal(|| None::<OidcLinkStatus>);

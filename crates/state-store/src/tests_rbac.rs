@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use sqlx::SqlitePool;
 
 use crate::*;
@@ -26,7 +28,7 @@ async fn test_role_management() {
     assert!(roles.iter().any(|r| r.name == "test_role"));
 
     // Add claim to role
-    add_claim_to_role_by_id(&pool, role_id, &ClaimType::Custom("test:claim".to_string()))
+    add_claim_to_role_by_id(&pool, role_id, &ClaimType::Custom(Cow::Borrowed("test:claim")))
         .await
         .unwrap();
 
@@ -45,13 +47,13 @@ async fn test_role_management() {
     // Verify claims
     let mut conn = pool.acquire().await.unwrap();
     let claims = get_user_claims_by_id(&mut conn, user_id).await.unwrap();
-    assert!(claims.contains(&ClaimType::Custom("test:claim".to_string())));
+    assert!(claims.contains(&ClaimType::Custom(Cow::Borrowed("test:claim"))));
 
     // Revoke role
     let mut conn = pool.acquire().await.unwrap();
     revoke_role_from_user_by_ids(&mut conn, user_id, role_id).await.unwrap();
     let claims_after = get_user_claims_by_id(&mut conn, user_id).await.unwrap();
-    assert!(!claims_after.contains(&ClaimType::Custom("test:claim".to_string())));
+    assert!(!claims_after.contains(&ClaimType::Custom(Cow::Borrowed("test:claim"))));
 
     // Delete role
     delete_role_by_id(&pool, role_id).await.unwrap();

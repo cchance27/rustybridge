@@ -9,7 +9,7 @@ use crate::{
 
 /// Self-contained Add Group Modal
 #[component]
-pub fn AddGroupModal(open: Signal<bool>, groups: Resource<Result<Vec<GroupInfo>, ServerFnError>>) -> Element {
+pub fn AddGroupModal(open: Signal<bool>, groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>) -> Element {
     let mut group_name = use_signal(String::new);
     let mut validation_errors = use_signal(HashMap::<String, String>::new);
     let toast = use_toast();

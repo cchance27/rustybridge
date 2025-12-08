@@ -1,12 +1,9 @@
 #[cfg(feature = "server")]
+use anyhow::{Result, anyhow};
+#[cfg(feature = "server")]
 use base64::Engine;
-
 #[cfg(feature = "server")]
-use anyhow::Result;
-#[cfg(feature = "server")]
-use secrecy::ExposeSecret;
-#[cfg(feature = "server")]
-use sqlx::Row;
+use server_core::api::SessionChunk;
 
 #[cfg(not(feature = "server"))]
 fn main() {}
@@ -15,41 +12,26 @@ fn main() {}
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
-    let session_id = args
-        .next()
-        .expect("usage: dump_chunk <session_id> <chunk_index>");
+    let session_id = args.next().expect("usage: dump_chunk <session_id> <chunk_index>");
     let chunk_index: i64 = args
         .next()
         .expect("usage: dump_chunk <session_id> <chunk_index>")
         .parse()
         .expect("chunk_index must be integer");
 
-    let audit_db = state_store::audit::audit_db().await?;
-    let row = sqlx::query(
-        r#"
-        SELECT direction, data, timestamp
-        FROM session_chunks
-        WHERE session_id = ? AND chunk_index = ?
-        "#,
-    )
-    .bind(&session_id)
-    .bind(chunk_index)
-    .fetch_one(&audit_db.pool)
-    .await?;
+    let chunks = server_core::api::fetch_session_chunks(&session_id).await?;
+    let chunk: SessionChunk = chunks
+        .into_iter()
+        .find(|c| c.db_chunk_index == Some(chunk_index as usize))
+        .ok_or_else(|| anyhow!("chunk {} not found", chunk_index))?;
 
-    let direction: i32 = row.get("direction");
-    let encrypted: Vec<u8> = row.get("data");
-    let timestamp: i64 = row.get("timestamp");
-
-    let (salt, rest) = encrypted.split_at(16);
-    let (nonce, ciphertext) = rest.split_at(24);
-
-    let (compressed, _) = server_core::secrets::decrypt_secret(salt, nonce, ciphertext)?;
-    let plaintext = zstd::decode_all(compressed.expose_secret().as_slice())?;
+    let plaintext = base64::engine::general_purpose::STANDARD
+        .decode(&chunk.data)
+        .map_err(|e| anyhow::anyhow!("base64 decode failed: {e}"))?;
 
     println!("chunk_index: {chunk_index}");
-    println!("direction: {direction}");
-    println!("timestamp: {timestamp}");
+    println!("direction: {}", chunk.direction);
+    println!("timestamp: {}", chunk.timestamp);
     println!("plaintext_len: {}", plaintext.len());
 
     // show first 300 bytes printable

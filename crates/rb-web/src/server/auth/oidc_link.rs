@@ -1,9 +1,11 @@
 use axum::{
-    extract::{Extension, Query}, response::{IntoResponse, Redirect}
+    extract::Query, response::{IntoResponse, Redirect}
 };
 use openidconnect::{AuthorizationCode, TokenResponse};
 use serde::Deserialize;
-use server_core::auth::oidc::{create_client, generate_auth_url};
+use server_core::{
+    api as sc_api, auth::oidc::{create_client, generate_auth_url}
+};
 use url::Url;
 
 use crate::server::auth::WebAuthSession;
@@ -21,17 +23,13 @@ pub struct LinkStartQuery {
 
 /// Initiate OIDC linking flow for already-authenticated user
 #[cfg(feature = "server")]
-pub async fn oidc_link_start(
-    Query(query): Query<LinkStartQuery>,
-    auth: WebAuthSession,
-    pool: Extension<sqlx::SqlitePool>,
-) -> impl IntoResponse {
+pub async fn oidc_link_start(Query(query): Query<LinkStartQuery>, auth: WebAuthSession) -> impl IntoResponse {
     // Ensure user is authenticated
     if !auth.is_authenticated() {
         return Redirect::to("/login?error=not_authenticated").into_response();
     }
 
-    let config = match super::oidc::get_oidc_config(&pool).await {
+    let config = match super::oidc::get_oidc_config().await {
         Some(c) => c,
         None => {
             tracing::error!("OIDC configuration missing");
@@ -67,11 +65,7 @@ pub async fn oidc_link_start(
 
 /// Handle OIDC callback for linking flow
 #[cfg(feature = "server")]
-pub async fn oidc_link_callback(
-    Query(query): Query<LinkCallbackQuery>,
-    auth: WebAuthSession,
-    pool: Extension<sqlx::SqlitePool>,
-) -> impl IntoResponse {
+pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: WebAuthSession) -> impl IntoResponse {
     // Ensure user is authenticated
     let user_id = match auth.current_user.as_ref() {
         Some(user) => user.id,
@@ -123,7 +117,7 @@ pub async fn oidc_link_callback(
         }
     };
 
-    let config = match super::oidc::get_oidc_config(&pool).await {
+    let config = match super::oidc::get_oidc_config().await {
         Some(c) => c,
         None => {
             tracing::error!("OIDC configuration missing");
@@ -181,7 +175,7 @@ pub async fn oidc_link_callback(
     let _picture: Option<String> = None;
 
     // Check if this OIDC account is already linked to another user
-    match state_store::find_user_id_by_oidc_subject(&*pool, &config.issuer_url, &subject).await {
+    match sc_api::find_user_id_by_oidc_subject(&config.issuer_url, &subject).await {
         Ok(Some(existing_user_id)) if existing_user_id != user_id => {
             tracing::warn!(
                 user_id = %user_id,
@@ -206,7 +200,7 @@ pub async fn oidc_link_callback(
     }
 
     // Insert or update the link
-    if let Err(e) = state_store::upsert_oidc_link(&*pool, user_id, &config.issuer_url, &subject, &email, &_name, &_picture).await {
+    if let Err(e) = sc_api::upsert_oidc_link(user_id, &config.issuer_url, &subject, &email, &_name, &_picture).await {
         tracing::error!("Failed to link OIDC account: {}", e);
         return Redirect::to("/oidc/error?error=link_failed").into_response();
     }

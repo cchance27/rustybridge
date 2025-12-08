@@ -2,11 +2,8 @@
 //!
 //! This module handles creating TUI apps and processing management actions.
 
-use std::collections::HashMap;
-
 use rb_types::relay::HostkeyReview;
 use secrecy::ExposeSecret;
-use sqlx::Row;
 use tracing::info;
 use tui_core::{
     AppAction, apps::{
@@ -15,7 +12,7 @@ use tui_core::{
 };
 
 use crate::{
-    error::{ServerError, ServerResult}, secrets::{SecretBoxedString, decrypt_string_if_encrypted, encrypt_string, is_encrypted_marker}
+    error::{ServerError, ServerResult}, secrets::{SecretBoxedString, decrypt_string_if_encrypted, is_encrypted_marker}
 };
 
 /// Create a ManagementApp with all relay hosts loaded from the database (admin view)
@@ -25,13 +22,9 @@ pub async fn create_management_app(review: Option<HostkeyReview>) -> ServerResul
 
 /// Create a ManagementApp with a specific tab selected
 pub async fn create_management_app_with_tab(selected_tab: usize, review: Option<HostkeyReview>) -> ServerResult<ManagementApp> {
-    let db = state_store::server_db().await?;
-
-    let pool = db.into_pool();
-
     // Admin sees all relay hosts (no filtering)
     use relay_selector::RelayItem;
-    let hosts = state_store::list_relay_hosts(&pool, None).await?;
+    let hosts = crate::relay_host::list_hosts().await?;
     let relay_items: Vec<RelayItem> = hosts
         .into_iter()
         .map(|h| RelayItem {
@@ -42,117 +35,21 @@ pub async fn create_management_app_with_tab(selected_tab: usize, review: Option<
         .collect();
 
     // Credentials with counts
-    let creds_rows = state_store::list_relay_credentials(&pool).await?;
-    // Build assigned counts by scanning relay_host_options auth.id
-    use secrecy::ExposeSecret as _;
-    let mut counts: HashMap<i64, i64> = HashMap::new();
-    let rows = sqlx::query("SELECT relay_host_id, value FROM relay_host_options WHERE key = 'auth.id'")
-        .fetch_all(&pool)
-        .await?;
-    for row in rows {
-        let value: String = row.get("value");
-        let (id_str, is_legacy) = if is_encrypted_marker(&value) {
-            match decrypt_string_if_encrypted(&value) {
-                Ok((s, legacy)) => (s, legacy),
-                Err(_) => continue,
-            }
-        } else {
-            (SecretBoxedString::new(Box::new(value)), false)
-        };
-
-        if is_legacy {
-            tracing::warn!("Upgrading legacy v1 secret for relay option 'auth.id' (management app)");
-            if let Ok(new_enc) = encrypt_string(SecretBoxedString::new(Box::new(id_str.expose_secret().to_string()))) {
-                let _ = sqlx::query("UPDATE relay_host_options SET value = ? WHERE relay_host_id = ? AND key = 'auth.id'")
-                    .bind(new_enc)
-                    .bind(row.get::<i64, _>("relay_host_id"))
-                    .execute(&pool)
-                    .await;
-            }
-        }
-        if let Ok(id) = id_str.expose_secret().parse::<i64>() {
-            *counts.entry(id).or_insert(0) += 1;
-        }
-    }
+    let creds_rows = crate::credential::list_credentials_with_assignments().await?;
     let credentials: Vec<CredentialItem> = creds_rows
         .into_iter()
-        .map(|(id, name, kind, _meta, _username_mode, _password_required)| CredentialItem {
-            id,
-            name,
-            kind,
-            assigned: *counts.get(&id).unwrap_or(&0),
-        })
+        .map(
+            |(id, name, kind, _meta, _username_mode, _password_required, assigned_relays)| CredentialItem {
+                id,
+                name,
+                kind,
+                assigned: assigned_relays.len() as i64,
+            },
+        )
         .collect();
 
     // Build host->credential label mapping
-    let mut host_creds: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
-    // Gather relevant options in one query
-    let opt_rows = sqlx::query(
-        "SELECT relay_host_id, key, value FROM relay_host_options WHERE key IN ('auth.source','auth.id','auth.identity','auth.password')",
-    )
-    .fetch_all(&pool)
-    .await?;
-    // Map host_id -> key -> resolved value
-    let mut host_opts: std::collections::HashMap<i64, std::collections::HashMap<String, SecretBoxedString>> =
-        std::collections::HashMap::new();
-    for row in opt_rows {
-        let host_id: i64 = row.get("relay_host_id");
-        let key: String = row.get("key");
-        let raw: String = row.get("value");
-        let resolved = if is_encrypted_marker(&raw) {
-            match decrypt_string_if_encrypted(&raw) {
-                Ok((s, _)) => s, // Skip upgrade - complex context without direct ID access
-                Err(_) => continue,
-            }
-        } else {
-            SecretBoxedString::new(Box::new(raw))
-        };
-        host_opts.entry(host_id).or_default().insert(key, resolved);
-    }
-    // id -> name
-    let mut cred_name_by_id: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
-    // rebuild from list (we had moved creds_rows)
-    let creds_rows2 = state_store::list_relay_credentials(&pool).await?;
-    for (id, name, _kind, _meta, _username_mode, _password_required) in creds_rows2 {
-        cred_name_by_id.insert(id, name);
-    }
-    // Compute label
-    for (hid, opts) in host_opts.iter() {
-        let label = if let Some(src) = opts.get("auth.source") {
-            if src.expose_secret() == "credential" {
-                if let Some(id_str) = opts.get("auth.id") {
-                    if let Ok(cid) = id_str.expose_secret().parse::<i64>() {
-                        cred_name_by_id.get(&cid).cloned().unwrap_or_else(|| "<credential>".to_string())
-                    } else {
-                        "<credential>".to_string()
-                    }
-                } else {
-                    "<credential>".to_string()
-                }
-            } else {
-                "<custom>".to_string()
-            }
-        } else if opts.contains_key("auth.identity") || opts.contains_key("auth.password") {
-            "<custom>".to_string()
-        } else {
-            "<none>".to_string()
-        };
-        host_creds.insert(*hid, label);
-    }
-
-    // Hostkey presence mapping
-    let mut hostkeys: std::collections::HashMap<i64, bool> = std::collections::HashMap::new();
-    let hk_rows = sqlx::query("SELECT relay_host_id FROM relay_host_options WHERE key = 'hostkey.openssh'")
-        .fetch_all(&pool)
-        .await?;
-    for row in hk_rows {
-        let hid: i64 = row.get("relay_host_id");
-        hostkeys.insert(hid, true);
-    }
-    // Ensure entries exist for all hosts
-    for item in &relay_items {
-        hostkeys.entry(item.id).or_insert(false);
-    }
+    let (host_creds, hostkeys) = crate::relay_host::summarize_relay_auth().await?;
 
     // Pending hostkey review (if any)
     let review_opt = review;
@@ -192,27 +89,22 @@ pub async fn create_app_by_name(user: Option<&str>, name: &str, tab: Option<usiz
 
 /// Apply side effects for management-related AppActions (add/update/delete relay hosts).
 /// Centralizing this logic avoids divergence between local and SSH TUI paths.
-pub async fn handle_management_action(action: tui_core::AppAction) -> ServerResult<Option<tui_core::AppAction>> {
+pub async fn handle_management_action(
+    ctx: &rb_types::audit::AuditContext,
+    action: tui_core::AppAction,
+) -> ServerResult<Option<tui_core::AppAction>> {
     match action {
         AppAction::AddRelay(item) => {
             let (ip, port) = super::relay_host::parse_endpoint(&item.description)?;
-            let db = state_store::server_db().await?;
-
-            let pool = db.into_pool();
-            state_store::insert_relay_host(&pool, &item.name, &ip, port).await?;
+            // TUI uses non-interactive add; fetch hostkey separately
+            super::relay_host::add_relay_host_without_hostkey(ctx, &format!("{}:{}", ip, port), &item.name).await?;
         }
         AppAction::UpdateRelay(item) => {
             let (ip, port) = super::relay_host::parse_endpoint(&item.description)?;
-            let db = state_store::server_db().await?;
-
-            let pool = db.into_pool();
-            state_store::update_relay_host(&pool, item.id, &item.name, &ip, port).await?;
+            super::relay_host::update_relay_host_by_id(ctx, item.id, &item.name, &ip, port).await?;
         }
         AppAction::DeleteRelay(id) => {
-            let db = state_store::server_db().await?;
-
-            let pool = db.into_pool();
-            state_store::delete_relay_host_by_id(&pool, id).await?;
+            super::relay_host::delete_relay_host_by_id(ctx, id).await?;
         }
         AppAction::AddCredential(spec) => {
             match spec {
@@ -224,6 +116,7 @@ pub async fn handle_management_action(action: tui_core::AppAction) -> ServerResu
                     password,
                 } => {
                     let _ = super::credential::create_password_credential(
+                        ctx,
                         &name,
                         username.as_deref(),
                         &password,
@@ -249,6 +142,7 @@ pub async fn handle_management_action(action: tui_core::AppAction) -> ServerResu
                     };
                     let cert_data = cert_file; // may be None
                     let _ = super::credential::create_ssh_key_credential(
+                        ctx,
                         &name,
                         username.as_deref(),
                         &key_data,
@@ -264,13 +158,14 @@ pub async fn handle_management_action(action: tui_core::AppAction) -> ServerResu
                     username_mode,
                     public_key,
                 } => {
-                    let _ = super::credential::create_agent_credential(&name, username.as_deref(), &public_key, &username_mode).await?;
+                    let _ =
+                        super::credential::create_agent_credential(ctx, &name, username.as_deref(), &public_key, &username_mode).await?;
                 }
             }
         }
-        AppAction::DeleteCredential(id) => super::credential::delete_credential_by_id(id).await?,
-        AppAction::UnassignCredential(host_id) => super::credential::unassign_credential_by_id(host_id).await?,
-        AppAction::AssignCredential { host_id, cred_id } => super::credential::assign_credential_by_ids(host_id, cred_id).await?,
+        AppAction::DeleteCredential(id) => super::credential::delete_credential_by_id(ctx, id).await?,
+        AppAction::UnassignCredential(host_id) => super::credential::unassign_credential_by_id(ctx, host_id).await?,
+        AppAction::AssignCredential { host_id, cred_id } => super::credential::assign_credential_by_ids(ctx, host_id, cred_id).await?,
         AppAction::FetchHostkey { id, name } => {
             info!(relay = %name, relay_id = id, "refreshing relay host key");
             // Fetch and stage hostkey for review
@@ -338,30 +233,24 @@ pub async fn handle_management_action(action: tui_core::AppAction) -> ServerResu
             // Existing (optional)
             let mut old_fp: Option<String> = None;
             let mut old_type: Option<String> = None;
-            if let Some(row) = sqlx::query("SELECT value FROM relay_host_options WHERE relay_host_id = ? AND key = 'hostkey.openssh'")
-                .bind(host.id)
-                .fetch_optional(&pool)
-                .await?
-            {
-                let raw: String = row.get("value");
-                let dec = if is_encrypted_marker(&raw) {
-                    match decrypt_string_if_encrypted(&raw) {
-                        Ok((s, _)) => s,
-                        Err(_) => SecretBoxedString::new(Box::new("".to_string())),
-                    }
+            let opts = state_store::fetch_relay_host_options(&pool, host.id).await?;
+            if let Some((raw, _secure)) = opts.get("hostkey.openssh") {
+                let dec = if is_encrypted_marker(raw) {
+                    decrypt_string_if_encrypted(raw)
+                        .map(|(s, _)| s)
+                        .unwrap_or_else(|_| SecretBoxedString::new(Box::new(String::new())))
                 } else {
-                    SecretBoxedString::new(Box::new(raw))
+                    SecretBoxedString::new(Box::new(raw.clone()))
                 };
                 if !dec.expose_secret().is_empty()
                     && let Ok(pk) = PublicKey::from_openssh(dec.expose_secret())
                 {
                     old_fp = Some(pk.fingerprint(HashAlg::Sha256).to_string());
-                    // Extract type from stored content (prefix token)
                     old_type = Some(dec.expose_secret().split_whitespace().next().unwrap_or("").to_string());
                 }
             }
 
-            return Ok(Some(AppAction::ReviewHostkey(HostkeyReview {
+            let review = HostkeyReview {
                 host_id: host.id,
                 host: host.name,
                 new_fingerprint: new_fp,
@@ -369,28 +258,24 @@ pub async fn handle_management_action(action: tui_core::AppAction) -> ServerResu
                 old_fingerprint: old_fp,
                 old_key_type: old_type,
                 new_key_pem: new_pem,
-            })));
+            };
+
+            // Log capture event with context
+            crate::audit::log_event_from_context_best_effort(
+                ctx,
+                rb_types::audit::EventType::RelayHostKeyCaptured {
+                    name: review.host.clone(),
+                    relay_id: review.host_id,
+                    key_type: review.new_key_type.clone(),
+                    fingerprint: review.new_fingerprint.clone(),
+                },
+            )
+            .await;
+
+            return Ok(Some(AppAction::ReviewHostkey(review)));
         }
         AppAction::StoreHostkey { id, name: _name, key } => {
-            let db = state_store::server_db().await?;
-
-            let pool = db.into_pool();
-
-            // Resolve host strictly by id to avoid races when names change mid-review
-            let host = state_store::fetch_relay_host_by_id(&pool, id)
-                .await?
-                .ok_or_else(|| ServerError::not_found("relay host", id.to_string()))?;
-            let stored = encrypt_string(SecretBoxedString::new(Box::new(key)))?;
-            sqlx::query(
-                "INSERT INTO relay_host_options (relay_host_id, key, value) VALUES (?, ?, ?) \
-                 ON CONFLICT(relay_host_id, key) DO UPDATE SET value = excluded.value",
-            )
-            .bind(host.id)
-            .bind("hostkey.openssh")
-            .bind(stored)
-            .execute(&pool)
-            .await?;
-            info!(relay = %host.name, relay_id = host.id, "relay host key accepted and stored");
+            super::relay_host::store_relay_hostkey_by_id(ctx, id, key).await?;
         }
         AppAction::CancelHostkey { .. } => {
             // No global state to clear
@@ -470,7 +355,10 @@ pub async fn create_relay_selector_app(username: Option<&str>) -> ServerResult<R
 
 /// Fetch relay hostkey for web UI review (returns tuple to avoid tui_core dependency)
 /// Returns: (host_id, host_name, old_fp, old_type, new_fp, new_type, new_pem)
-pub async fn fetch_relay_hostkey_for_web(id: i64) -> ServerResult<(i64, String, Option<String>, Option<String>, String, String, String)> {
+pub async fn fetch_relay_hostkey_for_web(
+    ctx: &rb_types::audit::AuditContext,
+    id: i64,
+) -> ServerResult<(i64, String, Option<String>, Option<String>, String, String, String)> {
     // Get host name first
     let db = state_store::server_db().await?;
 
@@ -480,7 +368,7 @@ pub async fn fetch_relay_hostkey_for_web(id: i64) -> ServerResult<(i64, String, 
         .ok_or_else(|| ServerError::not_found("relay host", id.to_string()))?;
 
     let action = AppAction::FetchHostkey { id, name: host.name };
-    let result = handle_management_action(action).await?;
+    let result = handle_management_action(ctx, action).await?;
 
     match result {
         Some(AppAction::ReviewHostkey(review)) => Ok((
@@ -497,12 +385,12 @@ pub async fn fetch_relay_hostkey_for_web(id: i64) -> ServerResult<(i64, String, 
 }
 
 /// Store relay hostkey from web UI (avoids tui_core dependency)
-pub async fn store_relay_hostkey_from_web(id: i64, key_pem: String) -> ServerResult<()> {
+pub async fn store_relay_hostkey_from_web(ctx: &rb_types::audit::AuditContext, id: i64, key_pem: String) -> ServerResult<()> {
     let action = AppAction::StoreHostkey {
         id,
         name: String::new(), // name is not used in StoreHostkey handler
         key: key_pem,
     };
-    handle_management_action(action).await?;
+    handle_management_action(ctx, action).await?;
     Ok(())
 }

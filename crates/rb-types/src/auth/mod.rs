@@ -1,6 +1,6 @@
 mod claims;
 
-pub use claims::{ClaimLevel, ClaimType};
+pub use claims::{ClaimLevel, ClaimType, ATTACH_ANY_CLAIM, ATTACH_ANY_STR};
 use serde::{Deserialize, Serialize};
 pub mod oidc;
 pub mod ssh;
@@ -16,18 +16,18 @@ pub struct LoginRequest {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 /// Response returned after processing a login request.
-pub struct LoginResponse {
+pub struct LoginResponse<'a> {
     /// Whether authentication succeeded.
     pub success: bool,
     /// Human-readable status or error message.
     pub message: String,
     /// Populated with user info when authentication succeeds.
-    pub user: Option<AuthUserInfo>,
+    pub user: Option<AuthUserInfo<'a>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default, Eq, Hash)]
 /// Authenticated user details returned to clients.
-pub struct AuthUserInfo {
+pub struct AuthUserInfo<'a> {
     /// Stable user identifier.
     pub id: i64,
     /// Username.
@@ -35,28 +35,28 @@ pub struct AuthUserInfo {
     /// Password hash (if using password auth).
     pub password_hash: Option<String>,
     /// Claims granted to the user.
-    pub claims: Vec<ClaimType>,
+    pub claims: Vec<ClaimType<'a>>,
     /// Convenience flag for UI gating (has any management claims).
     pub name: Option<String>,
     /// User's profile picture URL from OIDC.
     pub picture: Option<String>,
 }
 
-impl std::fmt::Display for AuthUserInfo {
+impl<'a> std::fmt::Display for AuthUserInfo<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.username)
     }
 }
 
-impl AuthUserInfo {
+impl<'a> AuthUserInfo<'a> {
     /// Check if this user has a specific claim
     /// Uses the satisfies method to handle wildcards and claim level hierarchies
-    pub fn has_claim(&self, claim: &ClaimType) -> bool {
+    pub fn has_claim(&self, claim: &ClaimType<'a>) -> bool {
         self.claims.iter().any(|c| c.satisfies(claim))
     }
 
     /// Check if this user has any of the specified claims
-    pub fn has_any_claim(&self, claims: &[ClaimType]) -> bool {
+    pub fn has_any_claim(&self, claims: &[ClaimType<'a>]) -> bool {
         claims
             .iter()
             .any(|required_claim| self.claims.iter().any(|user_claim| user_claim.satisfies(required_claim)))

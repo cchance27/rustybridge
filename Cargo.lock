@@ -4342,7 +4342,6 @@ dependencies = [
  "serial_test",
  "server-core",
  "ssh-core",
- "state-store",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4359,8 +4358,11 @@ dependencies = [
  "openidconnect",
  "secrecy",
  "serde",
+ "serde_json",
  "sqlx",
  "ssh-key",
+ "strum",
+ "strum_macros",
  "uuid",
 ]
 
@@ -4373,7 +4375,6 @@ dependencies = [
  "axum",
  "axum_session",
  "axum_session_auth",
- "axum_session_sqlx",
  "base64 0.22.1",
  "chrono",
  "dioxus",
@@ -4389,8 +4390,6 @@ dependencies = [
  "serde",
  "serde_json",
  "server-core",
- "sqlx",
- "state-store",
  "tokio",
  "tower",
  "tower-http",
@@ -4401,7 +4400,6 @@ dependencies = [
  "vt100",
  "wasm-bindgen",
  "web-sys",
- "zstd",
 ]
 
 [[package]]
@@ -5181,6 +5179,8 @@ dependencies = [
  "anyhow",
  "argon2",
  "async-trait",
+ "axum_session",
+ "axum_session_sqlx",
  "base64 0.22.1",
  "chacha20poly1305",
  "chrono",
@@ -5676,6 +5676,7 @@ dependencies = [
  "dirs",
  "rb-types",
  "serde",
+ "serde_json",
  "sqlx",
  "thiserror 2.0.17",
  "tokio",

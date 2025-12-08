@@ -51,6 +51,32 @@ impl ServerHandler {
             });
         }
 
+        // Emit audit event for session end
+        let duration_ms = self.connected_at.elapsed().as_millis() as i64;
+        let session_id = self
+            .connection_session_id
+            .clone()
+            .or_else(|| self.session_number.map(|n| format!("ssh_session_{}", n)))
+            .unwrap_or_else(|| "ssh_session_unknown".to_string());
+        if let Some(username) = self.username.clone() {
+            let ctx = self.ssh_audit_context();
+            let relay_name = self.relay_target.clone().unwrap_or_else(|| "tui".to_string());
+            let relay_id = self.active_relay_id.unwrap_or(0);
+            tokio::spawn(async move {
+                crate::audit::log_event_from_context_best_effort(
+                    &ctx,
+                    rb_types::audit::EventType::SessionEnded {
+                        session_id,
+                        relay_name,
+                        relay_id,
+                        username,
+                        duration_ms,
+                    },
+                )
+                .await;
+            });
+        }
+
         self.log_disconnect("client requested exit");
         Ok(())
     }
@@ -119,6 +145,7 @@ impl ServerHandler {
                     let (cols, rows) = self.view_size();
                     (cols as u32, rows as u32)
                 }),
+                self.connection_session_id.clone(),
             )
             .await;
         self.session_number = Some(session_number);
@@ -135,6 +162,26 @@ impl ServerHandler {
         let session = AppSession::new(app, backend).map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
         self.app_session = Some(session);
         self.last_was_cr = false;
+
+        // Audit: session started
+        if let Some(username) = self.username.clone() {
+            let session_id = self
+                .connection_session_id
+                .clone()
+                .or_else(|| self.session_number.map(|n| format!("ssh_session_{}", n)))
+                .unwrap_or_else(|| "ssh_session_unknown".to_string());
+            let ctx = self.ssh_audit_context();
+            crate::audit::log_event_from_context_best_effort(
+                &ctx,
+                rb_types::audit::EventType::SessionStarted {
+                    session_id,
+                    relay_name: self.relay_target.clone().unwrap_or_else(|| "tui".to_string()),
+                    relay_id: self.active_relay_id.unwrap_or(0),
+                    username,
+                },
+            )
+            .await;
+        }
         Ok(())
     }
 
@@ -410,7 +457,7 @@ impl ServerHandler {
                 let registry = self.registry.clone();
                 let conn_id_clone = conn_id.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = state_store::audit::connections::record_disconnection(&registry.audit_db, &conn_id_clone).await {
+                    if let Err(e) = crate::record_connection_disconnection(&registry, &conn_id_clone).await {
                         tracing::warn!("Failed to record SSH disconnection: {}", e);
                     }
                 });

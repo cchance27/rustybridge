@@ -11,8 +11,9 @@ use crate::{
     error::{ServerError, ServerResult}, secrets::SecretBoxedString
 };
 
-/// Create a password credential
+/// Create a password credential, tracking the full context.
 pub async fn create_password_credential(
+    ctx: &rb_types::audit::AuditContext,
     name: &str,
     username: Option<&str>,
     password: &str,
@@ -36,12 +37,24 @@ pub async fn create_password_credential(
         password_required,
     )
     .await?;
-    info!(credential = name, kind = "password", "credential created/updated");
+    info!(credential = name, kind = "password", context = %ctx, "credential created/updated");
+
+    // Log audit event
+    crate::audit::log_event_from_context_best_effort(
+        ctx,
+        rb_types::audit::EventType::CredentialCreated {
+            name: name.to_string(),
+            kind: "password".to_string(),
+        },
+    )
+    .await;
+
     Ok(id)
 }
 
-/// Create an SSH key credential
+/// Create an SSH key credential, tracking the full context.
 pub async fn create_ssh_key_credential(
+    ctx: &rb_types::audit::AuditContext,
     name: &str,
     username: Option<&str>,
     key: &str,
@@ -75,12 +88,29 @@ pub async fn create_ssh_key_credential(
         true, // password_required not applicable for ssh_key
     )
     .await?;
-    info!(credential = name, kind = "ssh_key", "credential created/updated");
+    info!(credential = name, kind = "ssh_key", context = %ctx, "credential created/updated");
+
+    // Log audit event
+    crate::audit::log_event_from_context_best_effort(
+        ctx,
+        rb_types::audit::EventType::CredentialCreated {
+            name: name.to_string(),
+            kind: "ssh_key".to_string(),
+        },
+    )
+    .await;
+
     Ok(id)
 }
 
-/// Create an SSH agent credential
-pub async fn create_agent_credential(name: &str, username: Option<&str>, public_key: &str, username_mode: &str) -> ServerResult<i64> {
+/// Create an SSH agent credential, tracking the full context.
+pub async fn create_agent_credential(
+    ctx: &rb_types::audit::AuditContext,
+    name: &str,
+    username: Option<&str>,
+    public_key: &str,
+    username_mode: &str,
+) -> ServerResult<i64> {
     let db = state_store::server_db().await?;
 
     let pool = db.into_pool();
@@ -105,12 +135,24 @@ pub async fn create_agent_credential(name: &str, username: Option<&str>, public_
         true, // password_required not applicable for agent
     )
     .await?;
-    info!(credential = name, kind = "agent", "credential created/updated");
+    info!(credential = name, kind = "agent", context = %ctx, "credential created/updated");
+
+    // Log audit event
+    crate::audit::log_event_from_context_best_effort(
+        ctx,
+        rb_types::audit::EventType::CredentialCreated {
+            name: name.to_string(),
+            kind: "agent".to_string(),
+        },
+    )
+    .await;
+
     Ok(id)
 }
 
-/// Update a password credential
+/// Update a password credential, tracking the full context.
 pub async fn update_password_credential(
+    ctx: &rb_types::audit::AuditContext,
     id: i64,
     name: &str,
     username: Option<&str>,
@@ -144,12 +186,26 @@ pub async fn update_password_credential(
         password_required,
     )
     .await?;
-    info!(credential = name, kind = "password", "credential updated");
+    info!(credential = name, kind = "password", context = %ctx, "credential updated");
+
+    // Log audit event
+    crate::audit::log_event_from_context_best_effort(
+        ctx,
+        rb_types::audit::EventType::CredentialUpdated {
+            name: name.to_string(),
+            cred_id: id,
+            kind: "password".to_string(),
+        },
+    )
+    .await;
+
     Ok(())
 }
 
-/// Update an SSH key credential
+/// Update an SSH key credential, tracking the full context.
+#[allow(clippy::too_many_arguments)]
 pub async fn update_ssh_key_credential(
+    ctx: &rb_types::audit::AuditContext,
     id: i64,
     name: &str,
     username: Option<&str>,
@@ -193,12 +249,25 @@ pub async fn update_ssh_key_credential(
         true, // password_required not applicable for ssh_key
     )
     .await?;
-    info!(credential = name, kind = "ssh_key", "credential updated");
+    info!(credential = name, kind = "ssh_key", context = %ctx, "credential updated");
+
+    // Log audit event
+    crate::audit::log_event_from_context_best_effort(
+        ctx,
+        rb_types::audit::EventType::CredentialUpdated {
+            name: name.to_string(),
+            cred_id: id,
+            kind: "ssh_key".to_string(),
+        },
+    )
+    .await;
+
     Ok(())
 }
 
-/// Update an SSH agent credential
+/// Update an SSH agent credential, tracking the full context.
 pub async fn update_agent_credential(
+    ctx: &rb_types::audit::AuditContext,
     id: i64,
     name: &str,
     username: Option<&str>,
@@ -235,12 +304,30 @@ pub async fn update_agent_credential(
         true, // password_required not applicable for agent
     )
     .await?;
-    info!(credential = name, kind = "agent", "credential updated");
+    info!(credential = name, kind = "agent", context = %ctx, "credential updated");
+
+    // Log audit event
+    crate::audit!(
+        ctx,
+        CredentialUpdated {
+            name: name.to_string(),
+            cred_id: id,
+            kind: "agent".to_string(),
+        }
+    );
+
     Ok(())
 }
 
-/// Delete a credential by ID
-pub async fn delete_credential_by_id(id: i64) -> ServerResult<()> {
+/// Delete a credential by ID, tracking the full context.
+///
+/// # Examples
+///
+/// ```ignore
+/// let ctx = AuditContext::web(user_id, username, ip_address, session_id);
+/// delete_credential_by_id(&ctx, credential_id).await?;
+/// ```
+pub async fn delete_credential_by_id(ctx: &rb_types::audit::AuditContext, id: i64) -> ServerResult<()> {
     let db = state_store::server_db().await?;
 
     let pool = db.into_pool();
@@ -287,11 +374,27 @@ pub async fn delete_credential_by_id(id: i64) -> ServerResult<()> {
         }
     }
 
+    // Fetch credential info before deletion for audit log
+    let cred_info = state_store::get_relay_credential_by_id(&mut *tx, id).await?;
+
     state_store::delete_relay_credential_by_id(&mut *tx, id).await?;
 
     tx.commit().await.map_err(ServerError::Database)?;
 
-    info!(id, "credential deleted");
+    info!(id, context = %ctx, "credential deleted");
+
+    // Log audit event with full context
+    if let Some(cred) = cred_info {
+        crate::audit!(
+            ctx,
+            CredentialDeleted {
+                name: cred.name,
+                cred_id: id,
+                kind: cred.kind,
+            }
+        );
+    }
+
     Ok(())
 }
 
@@ -366,14 +469,20 @@ pub async fn list_credentials_with_assignments() -> ServerResult<Vec<(i64, Strin
     Ok(result)
 }
 
-/// Assign a credential to a host by IDs
-pub async fn assign_credential_by_ids(host_id: i64, cred_id: i64) -> ServerResult<()> {
+/// Assign a credential to a host by IDs, tracking the full context.
+pub async fn assign_credential_by_ids(ctx: &rb_types::audit::AuditContext, host_id: i64, cred_id: i64) -> ServerResult<()> {
     let db = state_store::server_db().await?;
     let pool = db.into_pool();
 
     let cred = state_store::get_relay_credential_by_id(&pool, cred_id)
         .await?
         .ok_or_else(|| ServerError::not_found("credential", cred_id.to_string()))?;
+    let credential_name = cred.name.clone(); // Capture for audit log
+
+    let host = state_store::fetch_relay_host_by_id(&pool, host_id)
+        .await?
+        .ok_or_else(|| ServerError::not_found("relay_host", host_id.to_string()))?;
+    let relay_name = host.name.clone(); // Capture for audit log
 
     // Normalize: map ssh_key-like kinds to publickey for relay auth.method
     let method_plain: &str = match cred.kind.as_str() {
@@ -383,33 +492,114 @@ pub async fn assign_credential_by_ids(host_id: i64, cred_id: i64) -> ServerResul
 
     let mut tx = pool.begin().await.map_err(ServerError::Database)?;
 
-    // Clear any existing auth first to ensure clean state
+    // Capture and clear any existing auth first to ensure clean state
+    let existing_keys: Vec<String> = sqlx::query_scalar("SELECT key FROM relay_host_options WHERE relay_host_id = ? AND key LIKE 'auth.%'")
+        .bind(host_id)
+        .fetch_all(&mut *tx)
+        .await?;
+
     sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key LIKE 'auth.%'")
         .bind(host_id)
         .execute(&mut *tx)
         .await?;
 
-    // Use set_relay_option_by_id to benefit from automatic security determination
-    // These will be stored as plain text per our security logic
-    crate::relay_host::options::set_relay_option_internal(&mut *tx, host_id, "auth.source", "credential", true).await?;
-    crate::relay_host::options::set_relay_option_internal(&mut *tx, host_id, "auth.id", &cred.id.to_string(), true).await?;
-    crate::relay_host::options::set_relay_option_internal(&mut *tx, host_id, "auth.method", method_plain, true).await?;
+    // Use set_relay_option_internal inside the transaction; log after commit
+    let mut set_keys = Vec::new();
+    let enc = crate::relay_host::options::set_relay_option_internal(&mut *tx, host_id, "auth.source", "credential", true).await?;
+    set_keys.push(("auth.source".to_string(), enc));
+    let enc = crate::relay_host::options::set_relay_option_internal(&mut *tx, host_id, "auth.id", &cred.id.to_string(), true).await?;
+    set_keys.push(("auth.id".to_string(), enc));
+    let enc = crate::relay_host::options::set_relay_option_internal(&mut *tx, host_id, "auth.method", method_plain, true).await?;
+    set_keys.push(("auth.method".to_string(), enc));
 
     tx.commit().await.map_err(ServerError::Database)?;
 
-    info!(relay_host_id = host_id, credential_id = cred_id, "credential assigned to host");
+    info!(relay_host_id = host_id, credential_id = cred_id, context = %ctx, "credential assigned to host");
+
+    // Log audit event
+    crate::audit!(
+        ctx,
+        CredentialAssigned {
+            cred_id: cred_id,
+            cred_name: credential_name.clone(),
+            relay_id: host_id,
+            relay_name: relay_name.clone(),
+        }
+    );
+
+    if let Some(relay) = state_store::fetch_relay_host_by_id(&pool, host_id).await? {
+        for key in existing_keys {
+            crate::audit::log_event_from_context_best_effort(
+                ctx,
+                rb_types::audit::EventType::RelayOptionCleared {
+                    relay_name: relay.name.clone(),
+                    relay_id: host_id,
+                    key,
+                },
+            )
+            .await;
+        }
+
+        for (key, is_secure) in set_keys {
+            crate::audit::log_event_from_context_best_effort(
+                ctx,
+                rb_types::audit::EventType::RelayOptionSet {
+                    relay_name: relay.name.clone(),
+                    relay_id: host_id,
+                    key,
+                    is_secure,
+                },
+            )
+            .await;
+        }
+    }
+
     Ok(())
 }
 
-/// Unassign a credential from a host by ID
-pub async fn unassign_credential_by_id(host_id: i64) -> ServerResult<()> {
+/// Unassign a credential from a host by ID, tracking the full context.
+pub async fn unassign_credential_by_id(ctx: &rb_types::audit::AuditContext, host_id: i64) -> ServerResult<()> {
     let db = state_store::server_db().await?;
     let pool = db.into_pool();
+
+    // Fetch relay info before modification for audit log
+    let relay_info = state_store::fetch_relay_host_by_id(&pool, host_id).await?;
+
+    // Capture current auth keys for logging
+    let existing_keys: Vec<String> = sqlx::query_scalar("SELECT key FROM relay_host_options WHERE relay_host_id = ? AND key LIKE 'auth.%'")
+        .bind(host_id)
+        .fetch_all(&pool)
+        .await?;
 
     sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key LIKE 'auth.%'")
         .bind(host_id)
         .execute(&pool)
         .await?;
-    info!(relay_host_id = host_id, "credential unassigned from host");
+    info!(relay_host_id = host_id, context = %ctx, "credential unassigned from host");
+
+    // Log audit event
+    if let Some(relay) = relay_info {
+        for key in existing_keys {
+            crate::audit::log_event_from_context_best_effort(
+                ctx,
+                rb_types::audit::EventType::RelayOptionCleared {
+                    relay_name: relay.name.clone(),
+                    relay_id: host_id,
+                    key,
+                },
+            )
+            .await;
+        }
+
+        crate::audit::log_event_from_context_best_effort(
+            ctx,
+            rb_types::audit::EventType::CredentialUnassigned {
+                relay_name: relay.name,
+                relay_id: host_id,
+            },
+        )
+        .await;
+    }
+
     Ok(())
 }

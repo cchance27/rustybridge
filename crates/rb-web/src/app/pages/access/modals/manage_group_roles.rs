@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use rb_types::users::{GroupInfo, RoleInfo};
 
 use crate::{
     app::api::roles::*, components::{Modal, use_toast}
@@ -13,8 +14,8 @@ pub fn ManageGroupRolesModal(
     group_roles: Signal<Vec<String>>,
     available_roles: Signal<Vec<String>>,
     selected_role_to_add: Signal<String>,
-    roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
-    groups: Resource<Result<Vec<rb_types::users::GroupInfo>, ServerFnError>>,
+    roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>,
+    groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>,
 ) -> Element {
     let toast = use_toast();
     let add_role_handler = move |_| {

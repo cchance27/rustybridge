@@ -192,6 +192,16 @@ pub struct ConnectionAmounts {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TerminalSnapshot {
+    pub screen_buffer: String,
+    pub cursor_row: usize,
+    pub cursor_col: usize,
+    pub chunk_index: usize,
+    pub timestamp: i64,
+    pub terminal_size: (usize, usize),
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct UserSessionSummary {
     pub relay_id: i64,
     pub relay_name: String,

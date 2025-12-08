@@ -9,7 +9,7 @@ use crate::{
 
 /// Self-contained Add User Modal
 #[component]
-pub fn AddUserModal(open: Signal<bool>, users: Resource<Result<Vec<UserGroupInfo>, ServerFnError>>) -> Element {
+pub fn AddUserModal(open: Signal<bool>, users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>) -> Element {
     let mut username = use_signal(String::new);
     let mut password = use_signal(String::new);
     let mut validation_errors = use_signal(HashMap::<String, String>::new);

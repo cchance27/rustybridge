@@ -88,7 +88,14 @@ pub struct SessionRecorder {
 }
 
 impl SessionRecorder {
-    pub async fn new(db: DbHandle, user_id: i64, relay_id: i64, session_number: u32, metadata: serde_json::Value) -> Arc<Self> {
+    pub async fn new(
+        db: DbHandle,
+        user_id: i64,
+        relay_id: i64,
+        session_number: u32,
+        metadata: serde_json::Value,
+        connection_id: Option<String>,
+    ) -> Arc<Self> {
         let session_id = Uuid::now_v7();
         let start_time = Utc::now().timestamp_millis();
 
@@ -98,7 +105,7 @@ impl SessionRecorder {
         let recording_enabled = Arc::new(AtomicBool::new(true));
 
         if let Err(e) = sqlx::query(
-            "INSERT INTO recorded_sessions (id, user_id, relay_id, session_number, start_time, metadata) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO relay_sessions (id, user_id, relay_host_id, session_number, start_time, metadata, initiator_client_session_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&session_id_str)
         .bind(user_id)
@@ -106,12 +113,26 @@ impl SessionRecorder {
         .bind(session_number)
         .bind(start_time)
         .bind(metadata_str)
+        .bind(&connection_id)
         .execute(&db.pool)
         .await
         {
             // Without the parent row, every chunk insert would FK-fail and be dropped.
             error!(session_id = %session_id_str, error = ?e, "Failed to create session record; recording will be discarded");
             recording_enabled.store(false, Ordering::Relaxed);
+        }
+
+        // Record the initiator as a participant
+        if let Some(conn_id) = &connection_id
+            && let Err(e) =
+                sqlx::query("INSERT INTO relay_session_participants (relay_session_id, client_session_id, joined_at) VALUES (?, ?, ?)")
+                    .bind(&session_id_str)
+                    .bind(conn_id)
+                    .bind(start_time)
+                    .execute(&db.pool)
+                    .await
+        {
+            error!(session_id = %session_id_str, error = ?e, "Failed to record initiator participant");
         }
 
         let buffer = Arc::new(Mutex::new(Vec::new()));
@@ -155,6 +176,27 @@ impl SessionRecorder {
         recorder
     }
 
+    pub fn session_id(&self) -> Uuid {
+        self.session_id
+    }
+
+    pub async fn record_participant_leave(&self, client_session_id: &str) {
+        let now = Utc::now().timestamp_millis();
+        let session_id_str = self.session_id.to_string();
+
+        if let Err(e) = sqlx::query(
+            "UPDATE relay_session_participants SET left_at = ? WHERE relay_session_id = ? AND client_session_id = ? AND left_at IS NULL",
+        )
+        .bind(now)
+        .bind(&session_id_str)
+        .bind(client_session_id)
+        .execute(&self.db.pool)
+        .await
+        {
+            error!(session_id = %session_id_str, error = ?e, "Failed to record participant leave");
+        }
+    }
+
     pub async fn record_output(&self, data: &[u8]) {
         if !self.recording_enabled.load(Ordering::Relaxed) {
             return;
@@ -172,7 +214,6 @@ impl SessionRecorder {
 
         let input_type = classify_input(data);
         let has_enter = contains_enter(data);
-        let connection_id = connection_id;
 
         loop {
             let now = Utc::now().timestamp_millis();
@@ -352,37 +393,38 @@ impl SessionRecorder {
 
         let mut coalesced: Vec<CoalescedChunk> = Vec::with_capacity(chunks.len());
         for entry in chunks {
-            if let Some(last) = coalesced.last_mut() {
-                if last.chunk.direction == entry.chunk.direction && last.chunk.connection_id == entry.chunk.connection_id {
-                    // Calculate delay since last chunk
-                    let delay_ms = entry.chunk.timestamp - last.chunk.timestamp;
+            if let Some(last) = coalesced.last_mut()
+                && last.chunk.direction == entry.chunk.direction
+                && last.chunk.connection_id == entry.chunk.connection_id
+            {
+                // Calculate delay since last chunk
+                let delay_ms = entry.chunk.timestamp - last.chunk.timestamp;
 
-                    // Offset within the coalesced data where this gap occurs
-                    let base_offset = last.chunk.data.len();
+                // Offset within the coalesced data where this gap occurs
+                let base_offset = last.chunk.data.len();
 
-                    // Record timing marker if delay is significant
-                    if delay_ms > TIMING_THRESHOLD_MS {
-                        last.timing_markers.push((base_offset, delay_ms));
-                    }
-
-                    // Merge data into coalesced chunk
-                    last.chunk.data.extend_from_slice(&entry.chunk.data);
-
-                    // Preserve any existing timing markers on the incoming entry,
-                    // shifting their offsets to account for the new base.
-                    if !entry.timing_markers.is_empty() {
-                        last.timing_markers.extend(
-                            entry
-                                .timing_markers
-                                .into_iter()
-                                .map(|(offset, delay)| (base_offset + offset, delay)),
-                        );
-                    }
-
-                    // Update timestamp to track for next potential merge
-                    last.chunk.timestamp = entry.chunk.timestamp;
-                    continue;
+                // Record timing marker if delay is significant
+                if delay_ms > TIMING_THRESHOLD_MS {
+                    last.timing_markers.push((base_offset, delay_ms));
                 }
+
+                // Merge data into coalesced chunk
+                last.chunk.data.extend_from_slice(&entry.chunk.data);
+
+                // Preserve any existing timing markers on the incoming entry,
+                // shifting their offsets to account for the new base.
+                if !entry.timing_markers.is_empty() {
+                    last.timing_markers.extend(
+                        entry
+                            .timing_markers
+                            .into_iter()
+                            .map(|(offset, delay)| (base_offset + offset, delay)),
+                    );
+                }
+
+                // Update timestamp to track for next potential merge
+                last.chunk.timestamp = entry.chunk.timestamp;
+                continue;
             }
 
             // Start new coalesced chunk (carry through any existing markers as-is)
@@ -482,7 +524,7 @@ impl SessionRecorder {
             next_idx += 1;
 
             let res = sqlx::query(
-                "INSERT INTO session_chunks (id, session_id, timestamp, chunk_index, direction, data, connection_id, timing_markers) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO session_chunks (id, relay_session_id, timestamp, chunk_index, direction, data, client_session_id, timing_markers) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(chunk_id)
             .bind(session_id_str)
@@ -589,7 +631,7 @@ impl SessionRecorder {
         let encrypted = self.encrypted_size.load(Ordering::Relaxed) as i64;
 
         let res = sqlx::query(
-            "UPDATE recorded_sessions 
+            "UPDATE relay_sessions 
              SET end_time = ?, original_size_bytes = ?, compressed_size_bytes = ?, encrypted_size_bytes = ? 
              WHERE id = ?",
         )
@@ -669,7 +711,7 @@ mod tests {
         };
         migrate_audit(&db).await.expect("migrations should succeed");
 
-        let recorder = SessionRecorder::new(db.clone(), 1, 1, 1, json!({})).await;
+        let recorder = SessionRecorder::new(db.clone(), 1, 1, 1, json!({}), None).await;
         (db, recorder)
     }
 
@@ -683,7 +725,7 @@ mod tests {
             "recorder should be enabled after successful setup"
         );
 
-        let session_count: i64 = sqlx::query("SELECT COUNT(*) AS cnt FROM recorded_sessions")
+        let session_count: i64 = sqlx::query("SELECT COUNT(*) AS cnt FROM relay_sessions")
             .fetch_one(&db.pool)
             .await
             .expect("session query should succeed")

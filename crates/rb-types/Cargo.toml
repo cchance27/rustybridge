@@ -12,6 +12,7 @@ ssh-key = ["dep:ssh-key"]
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 sqlx = { workspace = true, default-features = false, features = [
     "macros",
 ], optional = true }
@@ -21,3 +22,5 @@ openidconnect = { workspace = true, optional = true }
 ssh-key = { workspace = true, optional = true }
 chrono = { workspace = true, features = ["serde"] }
 uuid = { version = "1", features = ["v7", "serde"] }
+strum = { version = "0.26", features = ["derive"] }
+strum_macros = "0.26"

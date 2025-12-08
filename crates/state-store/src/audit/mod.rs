@@ -16,6 +16,10 @@ use url::Url;
 use crate::DbResult;
 
 pub mod connections;
+pub mod events;
+
+#[cfg(test)]
+mod tests;
 
 static AUDIT_MIGRATOR: Migrator = sqlx::migrate!("./migrations/audit");
 

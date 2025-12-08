@@ -2,7 +2,9 @@
 //! Self-contained components for managing groups
 
 use dioxus::prelude::*;
-use rb_types::auth::{ClaimLevel, ClaimType};
+use rb_types::{
+    auth::{ClaimLevel, ClaimType}, users::{GroupInfo, RoleInfo, UserGroupInfo}
+};
 
 use crate::{
     app::api::{groups::*, users::*}, components::{Modal, Protected, StructuredTooltip, Table, TooltipSection, use_toast}, pages::access::modals::{ConfirmDeleteGroupModal, EditGroupModal, ManageGroupRolesModal}
@@ -11,9 +13,9 @@ use crate::{
 /// Main Groups Section component
 #[component]
 pub fn GroupsSection(
-    groups: Resource<Result<Vec<rb_types::users::GroupInfo>, ServerFnError>>,
-    users: Resource<Result<Vec<rb_types::users::UserGroupInfo>, ServerFnError>>,
-    roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
+    groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>,
+    users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>,
+    roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>,
 ) -> Element {
     // Toast notification state
     let toast = use_toast();

@@ -5,18 +5,18 @@ use dioxus::fullstack::TypedWebsocket;
 use dioxus::{
     fullstack::{JsonEncoding, WebSocketOptions, Websocket}, prelude::*
 };
-#[cfg(feature = "server")]
-use rb_types::auth::AuthPromptEvent;
 use rb_types::ssh::{SshClientMsg, SshServerMsg};
-use serde::{Deserialize, Serialize};
 #[cfg(feature = "server")]
-use server_core::relay::connect_to_relay_backend;
+use rb_types::{
+    audit::{AuditContext, EventType}, auth::AuthPromptEvent
+};
+use serde::{Deserialize, Serialize};
 #[cfg(feature = "server")]
 use server_core::sessions::{SessionRegistry, SshSession};
 #[cfg(feature = "server")]
-type SharedRegistry = std::sync::Arc<SessionRegistry>;
+use server_core::{audit::log_event_from_context_best_effort, relay::connect_to_relay_backend};
 #[cfg(feature = "server")]
-use state_store::{fetch_relay_host_by_name, user_has_relay_access};
+type SharedRegistry = std::sync::Arc<SessionRegistry>;
 
 #[cfg(feature = "server")]
 use crate::server::auth::guards::{WebAuthSession, ensure_authenticated};
@@ -47,17 +47,13 @@ struct SshStatusResponse {
 }
 
 #[cfg(feature = "server")]
-async fn ensure_relay_websocket_permissions(
-    relay_name: &str,
-    auth: &WebAuthSession,
-    pool: &sqlx::SqlitePool,
-) -> Result<(String, i64, i64), SshAccessError> {
+async fn ensure_relay_websocket_permissions(relay_name: &str, auth: &WebAuthSession) -> Result<(String, i64, i64), SshAccessError> {
     let user = ensure_authenticated(auth).map_err(|err| {
         tracing::warn!(relay = %relay_name, "Unauthenticated SSH WebSocket attempt: {err}");
         SshAccessError::Unauthorized
     })?;
 
-    let relay = fetch_relay_host_by_name(pool, relay_name)
+    let relay = server_core::api::fetch_relay_by_name(relay_name)
         .await
         .map_err(|err| {
             tracing::error!(relay = %relay_name, "Failed to fetch relay host: {err}");
@@ -68,7 +64,7 @@ async fn ensure_relay_websocket_permissions(
             SshAccessError::RelayNotFound
         })?;
 
-    let has_access = user_has_relay_access(pool, user.id, relay.id).await.map_err(|err| {
+    let has_access = server_core::api::user_has_relay_access(user.id, relay.id).await.map_err(|err| {
         tracing::error!(user = %user.username, relay = %relay_name, "Failed to check relay ACL: {err}");
         SshAccessError::Internal
     })?;
@@ -113,7 +109,6 @@ async fn wait_for_client_ready(
 #[get(
     "/api/ws/ssh_connection/{relay_name}?session_number&target_user_id",
     auth: WebAuthSession,
-    pool: axum::Extension<sqlx::SqlitePool>,
     registry: axum::Extension<SharedRegistry>,
     headers: HeaderMap
 )]
@@ -127,51 +122,36 @@ pub async fn ssh_terminal_ws(
     let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
     let authenticated_user_id = user.id;
 
-    // Check for server:attach_any claim
-    use rb_types::auth::ClaimType;
-    let has_attach_any = crate::server::auth::guards::ensure_claim(&auth, &ClaimType::Custom("server:attach_any".to_string())).is_ok();
-
     // Resolve relay
-    let relay = fetch_relay_host_by_name(&pool.0, &relay_name)
+    let relay = server_core::api::fetch_relay_by_name(&relay_name)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .ok_or_else(|| ServerFnError::new("Relay not found"))?;
 
-    let (effective_user_id, effective_username) = if has_attach_any {
-        if let Some(target_id) = target_user_id {
-            // Admin attaching to another user
-            // FIXME: is this correct / best way to handle this?
-            // Fetching target user is safer to ensure they exist.
-            let target_user = state_store::fetch_user_auth_record(&pool.0, target_id)
-                .await
-                .map_err(|e| ServerFnError::new(e.to_string()))?
-                .ok_or_else(|| ServerFnError::new("Target user not found"))?;
-            (target_id, target_user.username)
-        } else {
-            (user.id, user.username.clone())
-        }
-    } else {
-        // Regular user
-        if let Some(target_id) = target_user_id
-            && target_id != user.id
-        {
-            return Err(ServerFnError::new("Unauthorized to attach to other users"));
-        }
+    // Determine target user ID (default to self)
+    let target_id = target_user_id.unwrap_or(user.id);
 
-        // Check relay access
-        let has_access = user_has_relay_access(&pool.0, user.id, relay.id)
+    // Check permissions using centralized helper
+    crate::server::auth::guards::check_session_attach_access(&auth, target_id, relay.id)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let (effective_user_id, effective_username) = if user.id != target_id {
+        // Admin attaching to another user
+        let target_user = server_core::api::fetch_user_auth_record_by_id(target_id)
             .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
-        if !has_access {
-            return Err(ServerFnError::new("Relay access denied"));
-        }
-
+            .map_err(|e| ServerFnError::new(e.to_string()))?
+            .ok_or_else(|| ServerFnError::new("Target user not found"))?;
+        (target_id, target_user.username)
+    } else {
+        // Attaching to self (or admin to self)
         (user.id, user.username.clone())
     };
 
     let username = effective_username;
     let user_id = effective_user_id;
     let relay_id = relay.id;
+    let axum_session_id = auth.session.get_session_id();
 
     let relay_for_upgrade = relay_name.clone();
     let registry_inner: SharedRegistry = registry.0.clone();
@@ -225,6 +205,9 @@ pub async fn ssh_terminal_ws(
                     admin_user_id_for_attach,
                     ip_address.clone(),
                     user_agent_str.clone(),
+                    None,
+                    None,
+                    Some(axum_session_id.clone()),
                 )
                 .await;
             } else {
@@ -256,6 +239,7 @@ pub async fn ssh_terminal_ws(
                 user_agent_str,
                 is_minimized,
                 term_dims,
+                Some(axum_session_id.clone()),
             )
             .await;
         } else {
@@ -270,11 +254,10 @@ pub async fn ssh_terminal_ws(
 
 #[get(
     "/api/ssh/{relay_name}/status", 
-    auth: WebAuthSession,
-    pool: axum::Extension<sqlx::SqlitePool>
+    auth: WebAuthSession
 )]
 pub async fn ssh_terminal_status(relay_name: String) -> Result<SshStatusResponse, ServerFnError> {
-    let _ = ensure_relay_websocket_permissions(&relay_name, &auth, &pool.0).await?;
+    let _ = ensure_relay_websocket_permissions(&relay_name, &auth).await?;
 
     Ok(SshStatusResponse {
         ok: true,
@@ -293,33 +276,49 @@ async fn handle_reattach(
     admin_user_id: Option<i64>,
     ip_address: Option<String>,
     user_agent: Option<String>,
+    pre_subscribed_rx: Option<tokio::sync::broadcast::Receiver<Vec<u8>>>,
+    override_connection_id: Option<String>,
+    axum_session_id: Option<String>,
 ) {
     use rb_types::ssh::SshControl;
     use uuid::Uuid;
 
-    // Generate a connection ID for this WebSocket session
-    let connection_id = Uuid::now_v7().to_string();
-    let connection_id_clone = connection_id.clone();
+    // Generate a connection ID for this WebSocket session (or use provided)
+    let connection_id = override_connection_id.unwrap_or_else(|| Uuid::now_v7().to_string());
 
     // Record the connection
     let registry_for_audit = registry.clone();
     let user_id_for_audit = if let Some(uid) = admin_user_id { uid } else { session.user_id };
-    let ip_for_audit = ip_address.clone();
     let ua_for_audit = user_agent.clone();
+    let audit_ctx = AuditContext::web(
+        user_id_for_audit,
+        session.username.clone(),
+        ip_address.clone().unwrap_or_else(|| "web".to_string()),
+        connection_id.clone(),
+        axum_session_id.clone(),
+    );
+    let audit_ctx_clone = audit_ctx.clone();
+
+    let _session_started_at = std::time::Instant::now();
 
     tokio::spawn(async move {
-        if let Err(e) = state_store::audit::connections::record_web_connection(
-            &registry_for_audit.audit_db,
-            connection_id_clone,
-            user_id_for_audit,
-            ip_for_audit,
-            ua_for_audit,
-        )
-        .await
+        if let Err(e) =
+            server_core::record_web_connection_with_context(&registry_for_audit, &audit_ctx_clone, ua_for_audit, axum_session_id).await
         {
             tracing::warn!("Failed to record web connection: {}", e);
         }
     });
+    // Audit: relay connected (reattach or new viewer)
+    log_event_from_context_best_effort(
+        &audit_ctx,
+        EventType::SessionRelayConnected {
+            session_id: connection_id.clone(),
+            relay_id: session.relay_id,
+            relay_name: session.relay_name.clone(),
+            username: session.username.clone(),
+        },
+    )
+    .await;
 
     // Track minimize state for this connection
     let mut is_minimized = initial_minimized;
@@ -329,25 +328,42 @@ async fn handle_reattach(
     // Track admin viewer if this is an admin attachment
     if is_admin_viewer && let Some(admin_id) = admin_user_id {
         session.add_admin_viewer(admin_id).await;
+        log_event_from_context_best_effort(
+            &audit_ctx,
+            EventType::AdminViewerAdded {
+                session_id: connection_id.clone(),
+                admin_username: session.username.clone(),
+                admin_user_id: admin_id,
+            },
+        )
+        .await;
     }
+
+    // Subscribe to output via backend (or use pre-subscribed)
+    let (mut output_rx, history_already_covered) = if let Some(rx) = pre_subscribed_rx {
+        (rx, true)
+    } else {
+        (session.backend.subscribe(), false)
+    };
 
     // Replay scrollback history so a reattached client sees the existing shell state
-    let history = session.get_history().await;
-    if !history.is_empty() {
-        info!("Replaying scrollback history for session {}", session.session_number);
-        let _ = socket
-            .send(SshServerMsg {
-                data: history,
-                eof: false,
-                exit_status: None,
-                session_id: None,
-                relay_id: None,
-            })
-            .await;
+    // Skip if we have a pre-subscribed receiver (which covers the history from the start)
+    if !history_already_covered {
+        let history = session.get_history().await;
+        if !history.is_empty() {
+            info!("Replaying scrollback history for session {}", session.session_number);
+            let _ = socket
+                .send(SshServerMsg {
+                    data: history,
+                    eof: false,
+                    exit_status: None,
+                    session_id: None,
+                    relay_id: None,
+                })
+                .await;
+        }
     }
 
-    // Subscribe to output via backend
-    let mut output_rx = session.backend.subscribe();
     let backend = session.backend.clone();
 
     // Increment connection count (web)
@@ -423,6 +439,16 @@ async fn handle_reattach(
                                 }
                                 SshControl::Resize { cols, rows } => {
                                     let _ = backend.resize(*cols, *rows).await;
+                                    log_event_from_context_best_effort(
+                                        &audit_ctx,
+                                        EventType::SessionResized {
+                                            session_id: connection_id.clone(),
+                                            relay_id: session.relay_id,
+                                            cols: *cols,
+                                            rows: *rows,
+                                        },
+                                    )
+                                    .await;
                                 }
                                 SshControl::Minimize(minimized) => {
                                     if *minimized != is_minimized {
@@ -463,13 +489,49 @@ async fn handle_reattach(
 
     // Decrement connection count (web)
     let remaining = session.decrement_connection(rb_types::ssh::ConnectionType::Web).await;
+
+    // Record participant leave in relay_session_participants
+    session.recorder.record_participant_leave(&connection_id).await;
+
     if !is_minimized {
         session.decrement_viewers(rb_types::ssh::ConnectionType::Web).await;
     }
 
+    log_event_from_context_best_effort(
+        &audit_ctx,
+        EventType::SessionRelayDisconnected {
+            session_id: connection_id.clone(),
+            relay_id: session.relay_id,
+            relay_name: session.relay_name.clone(),
+            username: session.username.clone(),
+        },
+    )
+    .await;
+    let duration_ms = _session_started_at.elapsed().as_millis() as i64;
+    log_event_from_context_best_effort(
+        &audit_ctx,
+        EventType::SessionEnded {
+            session_id: connection_id.clone(),
+            relay_name: session.relay_name.clone(),
+            relay_id: session.relay_id,
+            username: session.username.clone(),
+            duration_ms,
+        },
+    )
+    .await;
+
     // Remove admin viewer tracking if this was an admin attachment
     if is_admin_viewer && let Some(admin_id) = admin_user_id {
         session.remove_admin_viewer(admin_id).await;
+        log_event_from_context_best_effort(
+            &audit_ctx,
+            EventType::AdminViewerRemoved {
+                session_id: connection_id.clone(),
+                admin_username: session.username.clone(),
+                admin_user_id: admin_id,
+            },
+        )
+        .await;
     }
 
     tracing::info!(
@@ -517,7 +579,7 @@ async fn handle_reattach(
     let registry_for_audit = registry.clone();
     let connection_id_clone = connection_id.clone();
     tokio::spawn(async move {
-        if let Err(e) = state_store::audit::connections::record_disconnection(&registry_for_audit.audit_db, &connection_id_clone).await {
+        if let Err(e) = server_core::record_connection_disconnection(&registry_for_audit, &connection_id_clone).await {
             tracing::warn!("Failed to record web disconnection: {}", e);
         }
     });
@@ -536,8 +598,23 @@ async fn handle_new_session(
     user_agent: Option<String>,
     is_minimized: bool,
     term_dims: (u32, u32),
+    axum_session_id: Option<String>,
 ) {
+    use server_core::sessions::session_backend::SessionBackend as _;
     use tokio::sync::{Mutex, mpsc::unbounded_channel};
+    use uuid::Uuid;
+
+    // Generate ID early to link session start and reattach events
+    let connection_id = Uuid::now_v7().to_string();
+
+    let audit_ctx = AuditContext::web(
+        user_id,
+        username.clone(),
+        ip_address.clone().unwrap_or_else(|| "web".to_string()),
+        connection_id.clone(),
+        axum_session_id.clone(),
+    );
+    let username_for_audit = username.clone();
 
     // Channels for interactive auth prompts
     let (prompt_tx, mut prompt_rx) = unbounded_channel::<AuthPromptEvent>();
@@ -650,6 +727,19 @@ async fn handle_new_session(
     use std::sync::Arc;
     let backend = Arc::new(backend);
 
+    // CRITICAL FIX: Subscribe NOW to capture any output that happens between now and appender start
+    // This prevents first message loss (race condition)
+    let initial_rx = backend.subscribe();
+
+    // Record connection to ensure client_sessions entry exists for FK
+    let registry_for_audit = registry.clone();
+    let ua_for_audit = user_agent.clone();
+    if let Err(e) =
+        server_core::record_web_connection_with_context(&registry_for_audit, &audit_ctx, ua_for_audit, axum_session_id.clone()).await
+    {
+        tracing::warn!("Failed to record web connection (initial): {}", e);
+    }
+
     // Register session and get session number
     let (session_number, session) = registry
         .create_next_session(
@@ -662,10 +752,23 @@ async fn handle_new_session(
             ip_address.clone(),
             user_agent.clone(),
             Some(term_dims),
+            Some(connection_id.clone()),
         )
         .await;
 
     tracing::info!(session_number = session_number, relay = %relay_name, "Created new session with RelayBackend");
+    // Audit: session started
+    // We let handle_reattach log SessionRelayConnected with the same connection_id
+    log_event_from_context_best_effort(
+        &audit_ctx,
+        EventType::SessionStarted {
+            session_id: connection_id.clone(),
+            relay_name: relay_name.clone(),
+            relay_id,
+            username: username_for_audit.clone(),
+        },
+    )
+    .await;
 
     // Clone session for history appending
     let session_for_history = session.clone();
@@ -720,8 +823,19 @@ async fn handle_new_session(
         .await;
 
     // Hand off to reattach logic (which handles the WS loop)
-    // New sessions are never admin viewers (they own the session)
-    // Hand off to reattach logic (which handles the WS loop)
-    // New sessions are never admin viewers (they own the session)
-    handle_reattach(socket, session, registry, current_minimized, false, None, ip_address, user_agent).await;
+    // Pass initial_rx to avoid race condition, and connection_id to link audit events
+    handle_reattach(
+        socket,
+        session,
+        registry,
+        current_minimized,
+        false,
+        None,
+        ip_address,
+        user_agent,
+        Some(initial_rx),
+        Some(connection_id),
+        axum_session_id,
+    )
+    .await;
 }

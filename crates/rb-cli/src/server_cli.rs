@@ -385,7 +385,7 @@ pub enum RolesCmd {
     /// List roles
     List,
     /// Add a claim to a role
-    AddClaim { role: String, claim: ClaimType },
+    AddClaim { role: String, claim: ClaimType<'static> },
     /// Remove a claim from a role
-    RemoveClaim { role: String, claim: ClaimType },
+    RemoveClaim { role: String, claim: ClaimType<'static> },
 }

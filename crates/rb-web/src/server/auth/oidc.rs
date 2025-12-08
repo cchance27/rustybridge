@@ -1,10 +1,16 @@
+use std::net::SocketAddr;
+
 use axum::{
-    extract::{Extension, Query}, response::{IntoResponse, Redirect}
+    extract::{ConnectInfo, Query}, http::HeaderMap, response::{IntoResponse, Redirect}
 };
 use openidconnect::{AuthorizationCode, TokenResponse};
-use rb_types::auth::oidc::{LoginQuery, OidcConfig};
+use rb_types::{
+    audit::{AuthMethod, EventType}, auth::oidc::{LoginQuery, OidcConfig}
+};
 use serde::Deserialize;
-use server_core::auth::oidc::{create_client, generate_auth_url};
+use server_core::{
+    api as sc_api, auth::oidc::{create_client, generate_auth_url}
+};
 
 use crate::server::auth::WebAuthSession;
 
@@ -15,23 +21,13 @@ pub struct AuthRequest {
 }
 
 #[cfg(feature = "server")]
-pub(super) async fn get_oidc_config(pool: &sqlx::SqlitePool) -> Option<OidcConfig> {
-    let issuer_url = state_store::get_server_option(pool, "oidc_issuer_url").await.ok()??;
-    let client_id = state_store::get_server_option(pool, "oidc_client_id").await.ok()??;
-    let client_secret = state_store::get_server_option(pool, "oidc_client_secret").await.ok()??;
-    let redirect_url = state_store::get_server_option(pool, "oidc_redirect_url").await.ok()??;
-
-    Some(OidcConfig {
-        issuer_url,
-        client_id,
-        client_secret,
-        redirect_url,
-    })
+pub(super) async fn get_oidc_config() -> Option<OidcConfig> {
+    sc_api::get_oidc_config().await.ok().flatten()
 }
 
 #[cfg(feature = "server")]
-pub async fn oidc_login(Query(query): Query<LoginQuery>, auth: WebAuthSession, pool: Extension<sqlx::SqlitePool>) -> impl IntoResponse {
-    let config = match get_oidc_config(&pool).await {
+pub async fn oidc_login(Query(query): Query<LoginQuery>, auth: WebAuthSession) -> impl IntoResponse {
+    let config = match get_oidc_config().await {
         Some(c) => c,
         None => {
             tracing::error!("OIDC configuration missing");
@@ -74,8 +70,22 @@ pub async fn oidc_login(Query(query): Query<LoginQuery>, auth: WebAuthSession, p
 }
 
 #[cfg(feature = "server")]
-pub async fn oidc_callback(Query(query): Query<AuthRequest>, auth: WebAuthSession, pool: Extension<sqlx::SqlitePool>) -> impl IntoResponse {
+pub async fn oidc_callback(
+    Query(query): Query<AuthRequest>,
+    auth: WebAuthSession,
+    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+) -> impl IntoResponse {
     tracing::info!("OIDC callback received");
+
+    let ip_address = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
+        .or_else(|| headers.get("x-real-ip").and_then(|v| v.to_str().ok()).map(|s| s.to_string()))
+        .unwrap_or_else(|| addr.ip().to_string());
+
+    let session_id = auth.session.get_session_id().to_string();
 
     // Validate CSRF token (state parameter)
     let stored_csrf: Option<String> = auth.session.get("oidc_csrf_token");
@@ -87,6 +97,13 @@ pub async fn oidc_callback(Query(query): Query<AuthRequest>, auth: WebAuthSessio
         }
         Some(_) => {
             tracing::error!("CSRF token mismatch");
+            server_core::audit::log_oidc_failure(
+                Some(ip_address.clone()),
+                session_id,
+                Some("unknown".to_string()),
+                "CSRF token mismatch".to_string(),
+            )
+            .await;
             return Redirect::to("/oidc/error?error=csrf_mismatch").into_response();
         }
         None if auth.is_authenticated() => {
@@ -96,6 +113,13 @@ pub async fn oidc_callback(Query(query): Query<AuthRequest>, auth: WebAuthSessio
         }
         None => {
             tracing::error!("No CSRF token in session");
+            server_core::audit::log_oidc_failure(
+                Some(ip_address.clone()),
+                session_id,
+                Some("unknown".to_string()),
+                "No CSRF token in session".to_string(),
+            )
+            .await;
             return Redirect::to("/oidc/error?error=no_csrf_token").into_response();
         }
     }
@@ -109,6 +133,13 @@ pub async fn oidc_callback(Query(query): Query<AuthRequest>, auth: WebAuthSessio
         }
         None => {
             tracing::error!("No nonce in session");
+            server_core::audit::log_oidc_failure(
+                Some(ip_address.clone()),
+                session_id,
+                Some("unknown".to_string()),
+                "No nonce in session".to_string(),
+            )
+            .await;
             return Redirect::to("/oidc/error?error=no_nonce").into_response();
         }
     };
@@ -127,7 +158,7 @@ pub async fn oidc_callback(Query(query): Query<AuthRequest>, auth: WebAuthSessio
         }
     };
 
-    let config = match get_oidc_config(&pool).await {
+    let config = match get_oidc_config().await {
         Some(c) => c,
         None => {
             tracing::error!("OIDC configuration missing");
@@ -154,6 +185,13 @@ pub async fn oidc_callback(Query(query): Query<AuthRequest>, auth: WebAuthSessio
         Ok(res) => res,
         Err(e) => {
             tracing::error!("Failed to exchange code: {}", e);
+            server_core::audit::log_oidc_failure(
+                Some(ip_address.clone()),
+                session_id,
+                Some("unknown".to_string()),
+                format!("Token exchange failed: {}", e),
+            )
+            .await;
             return Redirect::to("/oidc/error?error=token_exchange_failed").into_response();
         }
     };
@@ -163,6 +201,13 @@ pub async fn oidc_callback(Query(query): Query<AuthRequest>, auth: WebAuthSessio
         Some(t) => t,
         None => {
             tracing::error!("No ID token returned");
+            server_core::audit::log_oidc_failure(
+                Some(ip_address.clone()),
+                session_id,
+                Some("unknown".to_string()),
+                "No ID token returned".to_string(),
+            )
+            .await;
             return Redirect::to("/oidc/error?error=no_id_token").into_response();
         }
     };
@@ -172,12 +217,20 @@ pub async fn oidc_callback(Query(query): Query<AuthRequest>, auth: WebAuthSessio
         Ok(c) => c,
         Err(e) => {
             tracing::error!("Failed to validate ID token: {}", e);
+            server_core::audit::log_oidc_failure(
+                Some(ip_address.clone()),
+                session_id,
+                Some("unknown".to_string()),
+                format!("ID token validation failed: {}", e),
+            )
+            .await;
             return Redirect::to("/oidc/error?error=invalid_token").into_response();
         }
     };
 
     let subject = claims.subject().to_string();
     let email = claims.email().map(|e| e.as_str().to_string());
+    let username_log = email.clone().unwrap_or_else(|| subject.clone());
 
     // Extract name and picture from additional claims
     let name = claims.name().and_then(|n| n.get(None)).map(|n| n.as_str().to_string());
@@ -192,7 +245,7 @@ pub async fn oidc_callback(Query(query): Query<AuthRequest>, auth: WebAuthSessio
     );
 
     // Look up user by OIDC link
-    let user_id = match state_store::find_user_id_by_oidc_subject(&*pool, &config.issuer_url, &subject).await {
+    let user_id = match sc_api::find_user_id_by_oidc_subject(&config.issuer_url, &subject).await {
         Ok(Some(id)) => id,
         Ok(None) => {
             tracing::warn!(
@@ -200,6 +253,13 @@ pub async fn oidc_callback(Query(query): Query<AuthRequest>, auth: WebAuthSessio
                 email = ?email,
                 "No user found for OIDC subject during login"
             );
+            server_core::audit::log_oidc_failure(
+                Some(ip_address.clone()),
+                session_id,
+                Some(username_log),
+                "No user account linked to this OIDC identity".to_string(),
+            )
+            .await;
             return Redirect::to("/oidc/error?error=account_not_linked").into_response();
         }
         Err(e) => {
@@ -209,7 +269,7 @@ pub async fn oidc_callback(Query(query): Query<AuthRequest>, auth: WebAuthSessio
     };
 
     // Update OIDC link with latest profile info
-    if let Err(e) = state_store::update_oidc_profile_by_subject(&*pool, &config.issuer_url, &subject, &email, &name, &picture).await {
+    if let Err(e) = sc_api::update_oidc_profile_by_subject(&config.issuer_url, &subject, &email, &name, &picture).await {
         tracing::warn!("Failed to update OIDC link profile: {}", e);
     }
 
@@ -219,13 +279,31 @@ pub async fn oidc_callback(Query(query): Query<AuthRequest>, auth: WebAuthSessio
     // Log the user in
     auth.login_user(user_id);
 
+    // Log success
+    // Only log Web LoginSuccess if NOT an SSH login (SSH side handles its own audit)
+    let ssh_code_opt = auth.session.get::<String>("oidc_ssh_code");
+
+    if ssh_code_opt.is_none() {
+        server_core::audit::log_event_with_context_best_effort(
+            Some(user_id),
+            EventType::LoginSuccess {
+                method: AuthMethod::Oidc,
+                connection_id: session_id.clone(),
+                username: username_log,
+            },
+            Some(ip_address),
+            Some(session_id),
+        )
+        .await;
+    }
+
     tracing::info!(
         user_id = %user_id,
         pkce_used = pkce_used,
         "User logged in via OIDC"
     );
 
-    if let Some(ssh_code) = auth.session.get::<String>("oidc_ssh_code") {
+    if let Some(ssh_code) = ssh_code_opt {
         match server_core::auth::ssh_auth::complete_ssh_auth_session(&ssh_code, user_id).await {
             Ok(()) => {
                 tracing::info!(

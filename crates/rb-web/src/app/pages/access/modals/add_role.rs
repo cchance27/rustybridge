@@ -9,7 +9,7 @@ use crate::{
 
 /// Self-contained Add Role Modal
 #[component]
-pub fn AddRoleModal(open: Signal<bool>, roles: Resource<Result<Vec<RoleInfo>, ServerFnError>>) -> Element {
+pub fn AddRoleModal(open: Signal<bool>, roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>) -> Element {
     let mut role_name = use_signal(String::new);
     let mut role_description = use_signal(String::new);
     let mut validation_errors = use_signal(HashMap::<String, String>::new);

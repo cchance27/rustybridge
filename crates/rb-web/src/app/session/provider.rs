@@ -121,6 +121,18 @@ pub fn use_session_provider() -> SessionContext {
     };
     #[cfg(feature = "web")]
     {
+        use web_sys::window;
+        // Check if we are on the SSH success page
+        if let Some(win) = window() {
+            if let Ok(path) = win.location().pathname() {
+                if path == "/auth/ssh-success" {
+                    // Start an empty context without WebSocket or restoration logic
+                    context.toast = None; // Disable toasts explicitly though it shouldn't matter with empty logic
+                    use_context_provider(|| context);
+                    return context;
+                }
+            }
+        }
         context.toast = Some(toast);
     }
     use_context_provider(|| context);

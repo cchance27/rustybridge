@@ -2,7 +2,9 @@
 //! Self-contained components for managing roles
 
 use dioxus::prelude::*;
-use rb_types::auth::{ClaimLevel, ClaimType};
+use rb_types::{
+    auth::{ClaimLevel, ClaimType}, users::{GroupInfo, RoleInfo, UserGroupInfo}
+};
 
 use crate::{
     app::api::roles::*, components::{Protected, StructuredTooltip, Table, TooltipSection, icons, use_toast}, pages::access::modals::{ConfirmDeleteRoleModal, EditRoleClaimsModal, ManageRoleGroupsModal, ManageRoleUsersModal}
@@ -11,9 +13,9 @@ use crate::{
 /// Main Roles Section component
 #[component]
 pub fn RolesSection(
-    roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
-    users: Resource<Result<Vec<rb_types::users::UserGroupInfo>, ServerFnError>>,
-    groups: Resource<Result<Vec<rb_types::users::GroupInfo>, ServerFnError>>,
+    roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>,
+    users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>,
+    groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>,
 ) -> Element {
     // Toast notification state
     let toast = use_toast();

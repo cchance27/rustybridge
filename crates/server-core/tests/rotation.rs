@@ -17,11 +17,13 @@ async fn rotation_reencrypts_credentials_and_options() -> Result<()> {
     state_store::migrate_server(&handle).await?;
     let pool: SqlitePool = handle.into_pool();
 
+    let ctx = rb_types::audit::AuditContext::server_cli(None, "test-host");
+
     // Setup: host + option + credential
     let host_id = state_store::insert_relay_host(&pool, "h3", "127.0.0.1", 22).await?;
-    server_core::set_relay_option_by_id(host_id, "api.secret", "abc123", true).await?;
-    let cred_id = server_core::create_password_credential("credR", Some("ux"), "pw-xyz", "fixed", true).await?;
-    server_core::assign_credential_by_ids(host_id, cred_id).await?;
+    server_core::set_relay_option_by_id(&ctx, host_id, "api.secret", "abc123", true).await?;
+    let cred_id = server_core::create_password_credential(&ctx, "credR", Some("ux"), "pw-xyz", "fixed", true).await?;
+    server_core::assign_credential_by_ids(&ctx, host_id, cred_id).await?;
 
     // Capture pre-rotation ciphertexts
     let before_opt: String = sqlx::query("SELECT value FROM relay_host_options WHERE relay_host_id=? AND key='api.secret'")

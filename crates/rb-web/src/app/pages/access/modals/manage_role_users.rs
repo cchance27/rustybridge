@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use rb_types::users::{RoleInfo, UserGroupInfo};
 
 use crate::{
     app::api::{roles::*, users::list_users}, components::{Modal, use_toast}
@@ -13,8 +14,8 @@ pub fn ManageRoleUsersModal(
     role_users: Signal<Vec<String>>,
     available_users: Signal<Vec<String>>,
     selected_user_to_add: Signal<String>,
-    roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
-    users: Resource<Result<Vec<rb_types::users::UserGroupInfo>, ServerFnError>>,
+    roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>,
+    users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>,
 ) -> Element {
     let toast = use_toast();
     let add_user_handler = move |_| {

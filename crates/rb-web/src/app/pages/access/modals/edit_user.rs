@@ -1,7 +1,9 @@
 use std::{collections::HashMap, str::FromStr as _};
 
 use dioxus::prelude::*;
-use rb_types::{auth::ClaimType, users::UpdateUserRequest};
+use rb_types::{
+    auth::ClaimType, users::{GroupInfo, RoleInfo, UpdateUserRequest, UserGroupInfo}
+};
 
 use crate::{
     app::api::{
@@ -15,9 +17,9 @@ pub fn EditUserModal(
     open: Signal<bool>,
     user_id: Signal<Option<i64>>,
     username: Signal<Option<String>>,
-    roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
-    groups: Resource<Result<Vec<rb_types::users::GroupInfo>, ServerFnError>>,
-    users: Resource<Result<Vec<rb_types::users::UserGroupInfo>, ServerFnError>>,
+    roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>,
+    groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>,
+    users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>,
 ) -> Element {
     let Some(username_str) = username() else {
         return rsx!();
@@ -116,7 +118,7 @@ pub fn EditUserModal(
 
     // Claims Logic
     let user_id_for_remove_claim = user_id_val;
-    let remove_claim_handler = move |claim: ClaimType, user: String| {
+    let remove_claim_handler = move |claim: ClaimType<'static>, user: String| {
         let user_id_for_spawn = user_id_for_remove_claim;
         spawn(async move {
             let claim_str = claim.to_string();

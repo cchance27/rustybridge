@@ -96,9 +96,9 @@ pub struct GrantAccessRequest {
 
 /// Role/group claims listing for web UIs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct GroupClaims {
+pub struct GroupClaims<'a> {
     /// Group name.
     pub group: String,
     /// Claims assigned to the group.
-    pub claims: Vec<ClaimType>,
+    pub claims: Vec<ClaimType<'a>>,
 }

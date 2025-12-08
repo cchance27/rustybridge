@@ -4,8 +4,8 @@ use rb_types::auth::ClaimType;
 use super::context::AuthState;
 
 /// Get current auth state from context
-pub fn use_auth() -> Signal<AuthState> {
-    use_context::<Signal<AuthState>>()
+pub fn use_auth() -> Signal<AuthState<'static>> {
+    use_context::<Signal<AuthState<'static>>>()
 }
 
 /// Check if user has a specific claim

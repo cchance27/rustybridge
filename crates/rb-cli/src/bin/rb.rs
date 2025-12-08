@@ -14,7 +14,6 @@ async fn main() -> Result<()> {
         Err(e) => {
             if e.kind() == ErrorKind::DisplayHelp {
                 e.print()?;
-                println!("\nDatabase: {}", state_store::display_client_db_path());
                 return Ok(());
             } else if e.kind() == ErrorKind::DisplayVersion {
                 e.print()?;

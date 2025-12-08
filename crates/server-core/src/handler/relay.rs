@@ -118,6 +118,7 @@ impl ServerHandler {
                                 let (tx_done, rx_done) = oneshot::channel();
                                 let registry_clone = self.registry.clone();
                                 let server_handle_for_bridge = server_handle.clone();
+                                let connection_id = self.connection_session_id.clone();
 
                                 tokio::spawn(async move {
                                     // Connect using unified backend
@@ -144,11 +145,35 @@ impl ServerHandler {
                                                     username_clone.clone(),
                                                     backend.clone(),
                                                     rb_types::ssh::SessionOrigin::Ssh { user_id },
-                                                    ip_address,
+                                                    ip_address.clone(),
                                                     None,
                                                     Some(initial_size),
+                                                    connection_id.clone(),
                                                 )
                                                 .await;
+
+                                            // Log SessionStarted audit event
+                                            if let Some(conn_id) = &connection_id {
+                                                let session_str = format!("ssh_session_{}", session_number);
+                                                let ctx = rb_types::audit::AuditContext::ssh(
+                                                    user_id,
+                                                    username_clone.clone(),
+                                                    ip_address.clone().unwrap_or_else(|| "ssh".to_string()),
+                                                    session_str.clone(),
+                                                    Some(conn_id.clone()),
+                                                );
+
+                                                crate::audit::log_event_from_context_best_effort(
+                                                    &ctx,
+                                                    rb_types::audit::EventType::SessionStarted {
+                                                        session_id: session_str,
+                                                        relay_name: relay_info.name.clone(),
+                                                        relay_id: relay_info.id,
+                                                        username: username_clone.clone(),
+                                                    },
+                                                )
+                                                .await;
+                                            }
 
                                             // Track SSH connection + viewer
                                             ssh_session.increment_connection(rb_types::ssh::ConnectionType::Ssh).await;
@@ -158,6 +183,11 @@ impl ServerHandler {
                                             use crate::sessions::session_backend::SessionBackend;
                                             let backend_for_bridge = backend.clone();
                                             let session_for_bridge = ssh_session.clone();
+                                            let session_id_for_log = connection_id.clone();
+                                            let relay_name_for_log = relay_info.name.clone();
+                                            let relay_id_for_log = relay_info.id;
+                                            let username_for_log = username_clone.clone();
+                                            let ip_address_for_log = ip_address.clone();
 
                                             tokio::spawn(async move {
                                                 let mut output_rx = backend_for_bridge.subscribe();
@@ -220,6 +250,32 @@ impl ServerHandler {
                                                 if relay_closed || total_connections == 0 {
                                                     session_for_bridge.close().await;
                                                     registry_clone.remove_session(user_id, relay_info.id, session_number).await;
+
+                                                    // Log SessionEnded
+                                                    if let Some(sid) = session_id_for_log {
+                                                        let duration =
+                                                            (chrono::Utc::now() - session_for_bridge.created_at).num_milliseconds();
+                                                        let session_str = format!("ssh_session_{}", session_for_bridge.session_number);
+                                                        let ctx = rb_types::audit::AuditContext::ssh(
+                                                            user_id,
+                                                            username_for_log.clone(),
+                                                            ip_address_for_log.unwrap_or_else(|| "ssh".to_string()),
+                                                            session_str.clone(),
+                                                            Some(sid.clone()),
+                                                        );
+
+                                                        crate::audit::log_event_from_context_best_effort(
+                                                            &ctx,
+                                                            rb_types::audit::EventType::SessionEnded {
+                                                                session_id: session_str,
+                                                                relay_name: relay_name_for_log,
+                                                                relay_id: relay_id_for_log,
+                                                                username: username_for_log,
+                                                                duration_ms: duration,
+                                                            },
+                                                        )
+                                                        .await;
+                                                    }
                                                 }
                                             });
 

@@ -65,13 +65,62 @@ pub(super) struct ServerHandler {
 }
 
 impl ServerHandler {
+    /// Build an AuditContext for this SSH session (best-effort).
+    pub(crate) fn ssh_audit_context(&self) -> rb_types::audit::AuditContext {
+        if let (Some(user_id), Some(username), Some(peer)) = (self.user_id, self.username.as_ref(), self.peer_addr) {
+            let session_id = self
+                .session_number
+                .map(|n| format!("ssh_session_{}", n))
+                .or_else(|| self.connection_session_id.clone())
+                .unwrap_or_else(|| "ssh_session_unknown".to_string());
+            rb_types::audit::AuditContext::ssh(
+                user_id,
+                username,
+                peer.ip().to_string(),
+                session_id,
+                self.connection_session_id.clone(),
+            )
+        } else {
+            rb_types::audit::AuditContext::system("ssh_tui")
+        }
+    }
+
+    /// Helper to log audit events with best-effort context, handling unauthenticated states.
+    pub(crate) fn log_audit_event(&self, event_type: rb_types::audit::EventType) -> impl std::future::Future<Output = ()> + Send {
+        let peer_ip = self.peer_addr.map(|a| a.ip().to_string());
+        let connection_session_id = self.connection_session_id.clone();
+        let session_number = self.session_number;
+        let user_id = self.user_id;
+        let username = self.username.clone();
+
+        async move {
+            let session_id = connection_session_id
+                .clone()
+                .or_else(|| session_number.map(|n| format!("ssh_session_{}", n)));
+
+            if let (Some(user_id), Some(username), Some(ip)) = (user_id, username.as_ref(), peer_ip.clone()) {
+                // Full authenticated context
+                let ssh_session_str = session_number
+                    .map(|n| format!("ssh_session_{}", n))
+                    .or_else(|| connection_session_id.clone())
+                    .unwrap_or_else(|| "ssh_session_unknown".to_string());
+                let ctx = rb_types::audit::AuditContext::ssh(user_id, username, ip, ssh_session_str, connection_session_id);
+                crate::audit::log_event_from_context_best_effort(&ctx, event_type).await;
+            } else {
+                // Unauthenticated or partial context
+                // Use manual event construction to preserve IP and session ID
+                crate::audit::log_event_with_context_best_effort(user_id, event_type, peer_ip, session_id).await;
+            }
+        }
+    }
+
     /// Create a handler bound to the connecting client's socket address.
     pub(super) fn new(peer_addr: Option<SocketAddr>, registry: Arc<SessionRegistry>) -> Self {
         let (size_updates, _) = watch::channel((80, 24));
         let (action_tx, action_rx) = unbounded_channel();
         Self {
             registry,
-            connection_session_id: None, // Set on successful auth
+            connection_session_id: Some(uuid::Uuid::now_v7().to_string()),
             session_number: None,
             tui_session_number: None,
             peer_addr,
@@ -144,6 +193,58 @@ impl ServerHandler {
             reason,
             "client disconnected",
         );
+
+        // Record participant leave for TUI sessions
+        if let (Some(user_id), Some(relay_id), Some(session_num), Some(conn_id)) =
+            (self.user_id, self.active_relay_id, self.session_number, &self.connection_session_id)
+        {
+            let registry = self.registry.clone();
+            let conn_id = conn_id.clone();
+            tokio::spawn(async move {
+                if let Some(session) = registry.get_session(user_id, relay_id, session_num).await {
+                    session.recorder.record_participant_leave(&conn_id).await;
+                }
+            });
+        }
+
+        // Log session end event if authenticated but no specific session was started (e.g. login then disconnect)
+        // If a session was started, the session handler (relay or shell) logs the end event.
+        if self.session_number.is_none()
+            && let (Some(conn_id), Some(username), Some(user_id)) = (&self.connection_session_id, &self.username, self.user_id) {
+                let username = username.clone();
+                let duration = elapsed.as_millis() as i64;
+                let relay_id = self.active_relay_id.unwrap_or(0);
+                let relay_name = self.relay_target.clone().unwrap_or_else(|| "none".to_string());
+
+                let peer_ip = self.peer_addr.map(|a| a.ip().to_string()).unwrap_or_else(|| "unknown".to_string());
+
+                let parent_session_id = conn_id.clone();
+
+                tokio::spawn(async move {
+                    let ssh_session_str = "ssh_session_unknown".to_string();
+
+                    // Let's fix the Context first.
+                    let ctx = rb_types::audit::AuditContext::ssh(
+                        user_id,
+                        username.clone(),
+                        peer_ip,
+                        ssh_session_str,
+                        Some(parent_session_id.clone()),
+                    );
+
+                    crate::audit::log_event_from_context_best_effort(
+                        &ctx,
+                        rb_types::audit::EventType::SessionEnded {
+                            session_id: parent_session_id,
+                            relay_name,
+                            relay_id,
+                            username,
+                            duration_ms: duration,
+                        },
+                    )
+                    .await;
+                });
+            }
     }
 }
 

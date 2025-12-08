@@ -1,4 +1,5 @@
 pub mod session_backend;
+pub mod web;
 
 use std::{
     collections::{HashMap, VecDeque}, sync::{
@@ -680,6 +681,7 @@ impl SessionRegistry {
         ip_address: Option<String>,
         user_agent: Option<String>,
         term_dims: Option<(u32, u32)>,
+        connection_id: Option<String>,
     ) -> (u32, Arc<SshSession>) {
         let mut sessions = self.sessions.write().await;
 
@@ -710,7 +712,7 @@ impl SessionRegistry {
             base
         };
 
-        let recorder = SessionRecorder::new(self.audit_db.clone(), user_id, relay_id, session_number, metadata).await;
+        let recorder = SessionRecorder::new(self.audit_db.clone(), user_id, relay_id, session_number, metadata, connection_id).await;
 
         let session = Arc::new(SshSession::new(
             session_number,

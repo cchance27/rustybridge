@@ -18,13 +18,13 @@ pub mod oidc_unlink;
 
 #[post("/api/auth/login",
     auth: WebAuthSession,
-    pool: axum::Extension<sqlx::SqlitePool>,
-    session: axum_session::Session<axum_session_sqlx::SessionSqlitePool>)]
-pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
-    use state_store::{get_latest_oidc_profile, get_user_claims_by_id};
-
+    session: axum_session::Session<server_core::sessions::web::WebSessionManager>,
+    connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>
+)]
+pub async fn login(request: LoginRequest) -> Result<LoginResponse<'static>> {
     // Touch the session to ensure it exists before we mutate auth state (avoids axum_session warnings)
-    let _ = session.get_session_id();
+    let session_id = session.get_session_id().to_string();
+    let ip_address = connect_info.0.ip().to_string();
 
     // Authenticate user
     let login_target = server_core::auth::parse_login_target(&request.username);
@@ -32,19 +32,17 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
         Ok(AuthDecision::Accept) => {
             // Get user ID and claims
 
-            use rb_types::auth::AuthUserInfo;
-            let user_id = state_store::fetch_user_id_by_name(&*pool, &request.username)
+            let user_id = server_core::api::get_user_id_by_name(&request.username)
                 .await
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?
                 .ok_or_else(|| anyhow::anyhow!("User not found"))?;
 
-            let mut conn = pool.acquire().await.map_err(|e| anyhow::anyhow!(e.to_string()))?;
-            let claims = get_user_claims_by_id(&mut conn, user_id)
+            let claims = server_core::api::get_user_claims_by_id(user_id)
                 .await
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             // Fetch latest OIDC profile info if available
-            let oidc_profile = get_latest_oidc_profile(&*pool, user_id)
+            let oidc_profile = server_core::api::get_latest_oidc_profile(user_id)
                 .await
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
@@ -55,6 +53,19 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
 
             // Login user with AuthSession
             auth.login_user(user_id);
+
+            // Audit: Login Success
+            server_core::audit::log_event_with_context_best_effort(
+                Some(user_id),
+                rb_types::audit::EventType::LoginSuccess {
+                    method: rb_types::audit::AuthMethod::Password,
+                    connection_id: session_id.clone(),
+                    username: request.username.clone(),
+                },
+                Some(ip_address),
+                Some(session_id),
+            )
+            .await;
 
             Ok(LoginResponse {
                 success: true,
@@ -69,22 +80,68 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse> {
                 }),
             })
         }
-        Ok(AuthDecision::Reject) => Ok(LoginResponse {
-            success: false,
-            message: "Invalid username or password".to_string(),
-            user: None,
-        }),
-        Err(e) => Err(anyhow::anyhow!("Authentication error: {}", e).into()),
+        Ok(AuthDecision::Reject) => {
+            // Audit: Login Failure
+            server_core::audit::log_event_with_context_best_effort(
+                None,
+                rb_types::audit::EventType::LoginFailure {
+                    method: rb_types::audit::AuthMethod::Password,
+                    reason: "Invalid username or password".to_string(),
+                    username: Some(request.username.clone()),
+                },
+                Some(ip_address),
+                Some(session_id),
+            )
+            .await;
+
+            Ok(LoginResponse {
+                success: false,
+                message: "Invalid username or password".to_string(),
+                user: None,
+            })
+        }
+        Err(e) => {
+            // Audit: Login Error
+            server_core::audit::log_event_with_context_best_effort(
+                None,
+                rb_types::audit::EventType::LoginFailure {
+                    method: rb_types::audit::AuthMethod::Password,
+                    reason: format!("Authentication error: {}", e),
+                    username: Some(request.username.clone()),
+                },
+                Some(ip_address),
+                Some(session_id),
+            )
+            .await;
+            Err(anyhow::anyhow!("Authentication error: {}", e).into())
+        }
     }
 }
 
 #[post(
     "/api/auth/logout",
     auth: WebAuthSession,
+    session: axum_session::Session<server_core::sessions::web::WebSessionManager>,
+    connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>
 )]
 pub async fn logout() -> Result<()> {
     // Touch session so backing store entry exists before logout_user mutates it.
     if auth.is_authenticated() {
+        if let Some(user) = auth.current_user.clone() {
+            let ip_address = connect_info.0.ip().to_string();
+            let session_id = session.get_session_id().to_string();
+
+            server_core::audit::log_event_with_context_best_effort(
+                Some(user.id),
+                rb_types::audit::EventType::Logout {
+                    username: user.username.clone(),
+                    reason: "User initiated".to_string(),
+                },
+                Some(ip_address),
+                Some(session_id),
+            )
+            .await;
+        }
         auth.logout_user();
     }
 
@@ -92,7 +149,7 @@ pub async fn logout() -> Result<()> {
 }
 
 #[get("/api/auth/current-user", auth: WebAuthSession)]
-pub async fn get_current_user() -> Result<Option<AuthUserInfo>> {
+pub async fn get_current_user() -> Result<Option<AuthUserInfo<'static>>> {
     if auth.is_authenticated() {
         if let Some(user) = auth.current_user {
             Ok(Some(AuthUserInfo {

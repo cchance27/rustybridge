@@ -20,6 +20,14 @@ pub async fn fetch_user_id_by_name(executor: impl SqliteExecutor<'_>, username: 
     Ok(result)
 }
 
+pub async fn fetch_username_by_id(executor: impl SqliteExecutor<'_>, user_id: i64) -> DbResult<Option<String>> {
+    let result = sqlx::query_scalar::<_, String>("SELECT username FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(executor)
+        .await?;
+    Ok(result)
+}
+
 /// Fetch a user's auth record by ID (id, username, password hash).
 pub async fn fetch_user_auth_record(executor: impl SqliteExecutor<'_>, user_id: i64) -> DbResult<Option<UserAuthRecord>> {
     let row = sqlx::query("SELECT id, username, password_hash FROM users WHERE id = ?")
@@ -40,6 +48,14 @@ pub async fn fetch_group_id_by_name(executor: impl SqliteExecutor<'_>, name: &st
         .fetch_optional(executor)
         .await?;
     Ok(row.map(|r| r.get::<i64, _>("id")))
+}
+
+pub async fn fetch_group_name_by_id(executor: impl SqliteExecutor<'_>, group_id: i64) -> DbResult<Option<String>> {
+    let result = sqlx::query_scalar::<_, String>("SELECT name FROM groups WHERE id = ?")
+        .bind(group_id)
+        .fetch_optional(executor)
+        .await?;
+    Ok(result)
 }
 
 pub async fn create_group(executor: impl SqliteExecutor<'_>, name: &str) -> DbResult<i64> {

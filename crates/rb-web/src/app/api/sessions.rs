@@ -6,9 +6,6 @@ use server_core::sessions::SessionRegistry;
 type SharedRegistry = std::sync::Arc<SessionRegistry>;
 
 #[cfg(feature = "server")]
-use state_store::user_has_relay_access;
-
-#[cfg(feature = "server")]
 use crate::server::auth::guards::{WebAuthSession, ensure_authenticated, ensure_claim};
 
 #[get(
@@ -19,7 +16,7 @@ use crate::server::auth::guards::{WebAuthSession, ensure_authenticated, ensure_c
 pub async fn list_all_sessions() -> Result<Vec<AdminSessionSummary>, ServerFnError> {
     // Require server:view claim to list all sessions
 
-    use state_store::{ClaimLevel, ClaimType};
+    use rb_types::auth::{ClaimLevel, ClaimType};
     ensure_claim(&auth, &ClaimType::Server(ClaimLevel::View)).map_err(|e| ServerFnError::new(e.to_string()))?;
 
     let sessions = registry.0.list_all_sessions().await;
@@ -113,6 +110,7 @@ pub async fn list_my_sessions() -> Result<Vec<UserSessionSummary>, ServerFnError
 #[post(
     "/api/sessions/close",
     auth: WebAuthSession,
+    audit: crate::server::audit::WebAuditContext,
     registry: axum::Extension<SharedRegistry>
 )]
 pub async fn close_session(user_id: i64, relay_id: i64, session_number: u32) -> Result<(), ServerFnError> {
@@ -120,12 +118,34 @@ pub async fn close_session(user_id: i64, relay_id: i64, session_number: u32) -> 
 
     // Check if user is closing their own session or has server:edit claim
     if user.id != user_id {
-        use state_store::{ClaimLevel, ClaimType};
+        use rb_types::auth::ATTACH_ANY_CLAIM;
 
-        ensure_claim(&auth, &ClaimType::Server(ClaimLevel::Edit)).map_err(|e| ServerFnError::new(e.to_string()))?;
+        ensure_claim(&auth, &ATTACH_ANY_CLAIM).map_err(|e| ServerFnError::new(e.to_string()))?;
     }
 
     if let Some(session) = registry.0.get_session(user_id, relay_id, session_number).await {
+        // Log audit event for force close
+        let is_self_close = user.id == user_id;
+
+        // Use proper UUID if available, otherwise fallback (though session.recorder should always have it)
+        let session_uuid = session.recorder.session_id().to_string();
+
+        let event = rb_types::audit::EventType::SessionForceClosed {
+            session_id: session_uuid,
+            session_number: session.session_number,
+            relay_id: session.relay_id,
+            relay_name: session.relay_name.clone(),
+            target_username: session.username.clone(),
+            reason: if is_self_close {
+                "User closed own session"
+            } else {
+                "Admin force-closed session"
+            }
+            .to_string(),
+        };
+
+        server_core::audit::log_event_from_context_best_effort(&audit.0, event).await;
+
         session.close().await;
         registry.0.remove_session(user_id, relay_id, session_number).await;
     } else {
@@ -140,30 +160,17 @@ pub async fn close_session(user_id: i64, relay_id: i64, session_number: u32) -> 
 #[post(
     "/api/sessions/attach",
     auth: WebAuthSession,
-    pool: axum::Extension<sqlx::SqlitePool>,
     registry: axum::Extension<SharedRegistry>
 )]
 pub async fn attach_to_session(session_user_id: i64, relay_id: i64, session_number: u32) -> Result<String, ServerFnError> {
+    use rb_types::auth::ATTACH_ANY_CLAIM;
+
     let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    // Check for server:attach_any claim
-    use state_store::ClaimType;
-    let has_attach_any = crate::server::auth::guards::ensure_claim(&auth, &ClaimType::Custom("server:attach_any".to_string())).is_ok();
-
-    if !has_attach_any {
-        // Only allow attaching to your own sessions
-        if user.id != session_user_id {
-            return Err(ServerFnError::new("Cannot attach to another user's session"));
-        }
-
-        // Verify relay access
-        let has_access = user_has_relay_access(&*pool, user.id, relay_id)
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
-        if !has_access {
-            return Err(ServerFnError::new("Relay access denied"));
-        }
-    }
+    // Check permissions using centralized helper
+    crate::server::auth::guards::check_session_attach_access(&auth, session_user_id, relay_id)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     // Ensure the session exists and matches the relay/user
     let session = registry
@@ -171,6 +178,9 @@ pub async fn attach_to_session(session_user_id: i64, relay_id: i64, session_numb
         .get_session(session_user_id, relay_id, session_number)
         .await
         .ok_or_else(|| ServerFnError::new("Session not found"))?;
+
+    // Check for admin permission (server:attach_any implies general session management for now)
+    ensure_claim(&auth, &ATTACH_ANY_CLAIM).map_err(|e| ServerFnError::new(e.to_string()))?;
 
     let mut url = format!(
         "/api/ws/ssh_connection/{}?session_number={}",

@@ -10,8 +10,8 @@ pub fn SessionHistory() -> Element {
     let limit = use_signal(|| 10i64);
     let mut sort_by = use_signal(|| Some("start_time".to_string()));
     let mut sort_dir = use_signal(|| SortDirection::Desc);
-    let mut username_filter = use_signal(|| String::new());
-    let mut relay_name_filter = use_signal(|| String::new());
+    let mut username_filter = use_signal(String::new);
+    let mut relay_name_filter = use_signal(String::new);
 
     let sessions_resource = use_resource(move || {
         let page_val = page();

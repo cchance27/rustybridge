@@ -37,6 +37,15 @@ pub fn app_root() -> Element {
 }
 
 #[component]
+fn AuthenticatedLayout() -> Element {
+    rsx! {
+        SessionGlobalChrome {
+            Outlet::<Routes> {}
+        }
+    }
+}
+
+#[component]
 fn SessionProviderShell() -> Element {
     // Initialize session provider after toast context is available
     let _session = use_session_provider();
@@ -46,15 +55,14 @@ fn SessionProviderShell() -> Element {
 
     rsx! {
         ServerStatusProvider {
-            SessionGlobalChrome {
-                Router::<Routes> {}
-            }
+            Router::<Routes> {}
         }
     }
 }
 
 #[derive(Clone, Routable, PartialEq)]
 pub enum Routes {
+    #[layout(AuthenticatedLayout)]
     #[route("/")]
     DashboardPage {},
     #[route("/relays")]
@@ -71,6 +79,7 @@ pub enum Routes {
     SessionHistory {},
     #[route("/admin/sessions/:session_id/replay")]
     SessionPlayer { session_id: String },
+    #[end_layout]
     #[route("/login")]
     LoginPage {},
     #[route("/logout")]

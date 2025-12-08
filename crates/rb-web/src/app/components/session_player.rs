@@ -258,7 +258,7 @@ pub fn SessionPlayer(session_id: String) -> Element {
     let mut loaded_bytes = use_signal(|| 0usize);
     let mut total_chunks_stream = use_signal(|| 0usize);
     let mut total_db_chunks = use_signal(|| 0usize); // Real DB chunk count
-    let mut chunk_list = use_signal(|| Vec::<SessionChunk>::new());
+    let mut chunk_list = use_signal(Vec::<SessionChunk>::new);
 
     let session_id_meta = session_id.clone();
     let session_meta = use_resource(move || {
@@ -304,7 +304,7 @@ pub fn SessionPlayer(session_id: String) -> Element {
 
     // Websocket receive loop
     use_future(move || {
-        let mut ws = ws.clone();
+        let mut ws = ws;
         async move {
             while let Ok(msg) = ws.recv().await {
                 match msg {
@@ -354,9 +354,9 @@ pub fn SessionPlayer(session_id: String) -> Element {
                             let is_currently_playing = *is_playing.read();
 
                             if is_currently_playing {
-                            // When playing, always request more to ensure smooth playback
-                            // and that we get all chunks to the end
-                            let cursor = list.len();
+                                // When playing, always request more to ensure smooth playback
+                                // and that we get all chunks to the end
+                                let cursor = list.len();
                                 let _ = ws
                                     .send(SessionStreamClient::RequestMore {
                                         cursor,
@@ -459,10 +459,10 @@ pub fn SessionPlayer(session_id: String) -> Element {
     // Calculate session metadata
     let session_info = use_memo(move || {
         if let Some(Ok(summary)) = session_meta.read().as_ref() {
-            let start_time = summary.session.start_time;
+            let start_time = summary.start_time;
             // Prefer last_chunk_ts for timeline scaling to avoid showing empty tail time
             // This ensures the timeline and progress bar fill the width based on actual content
-            let end_time = summary.last_chunk_ts.or(summary.session.end_time).unwrap_or(start_time);
+            let end_time = summary.last_chunk_ts.or(summary.end_time).unwrap_or(start_time);
             let duration_ms = end_time.saturating_sub(start_time);
 
             #[cfg(feature = "web")]
@@ -484,7 +484,7 @@ pub fn SessionPlayer(session_id: String) -> Element {
     #[cfg(feature = "web")]
     let session_terminal_size = use_memo(move || {
         if let Some(Ok(summary)) = session_meta.read().as_ref() {
-            let meta = &summary.session.metadata;
+            let meta = &summary.metadata;
             let cols = meta
                 .get("terminal")
                 .and_then(|t| t.get("cols"))
@@ -495,11 +495,7 @@ pub fn SessionPlayer(session_id: String) -> Element {
                 .and_then(|t| t.get("rows"))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0) as u16;
-            if cols > 0 && rows > 0 {
-                Some((cols, rows))
-            } else {
-                None
-            }
+            if cols > 0 && rows > 0 { Some((cols, rows)) } else { None }
         } else {
             None
         }
@@ -546,10 +542,7 @@ pub fn SessionPlayer(session_id: String) -> Element {
                         if let Some(window) = web_sys::window() {
                             if let Some(document) = window.document() {
                                 if document.get_element_by_id("replay-terminal").is_some() {
-                                    match init_terminal(
-                                        "replay-terminal",
-                                        term_size,
-                                    ) {
+                                    match init_terminal("replay-terminal", term_size) {
                                         Ok(()) => {
                                             terminal_initialized.set(true);
                                             return; // Success - exit the retry loop
@@ -972,16 +965,16 @@ pub fn SessionPlayer(session_id: String) -> Element {
                         }
                         // Extended Metadata
                         div { class: "flex flex-wrap gap-x-6 gap-y-1 text-xs opacity-70 border-t border-base-content/10 pt-2 mt-1",
-                            if let Some(username) = &response.session.username {
+                            if let Some(username) = &response.username {
                                 div { span { class: "font-semibold", "User: " } "{username}" }
                             }
-                            if let Some(relay) = &response.session.relay_name {
+                            if let Some(relay) = &response.relay_name {
                                 div { span { class: "font-semibold", "Relay: " } "{relay}" }
                             }
-                            if let Some(size) = response.session.original_size_bytes {
+                            if let Some(size) = response.original_size_bytes {
                                 div { span { class: "font-semibold", "Size: " } "{format_bytes(size)}" }
                             }
-                            if let (Some(orig), Some(comp)) = (response.session.original_size_bytes, response.session.compressed_size_bytes) {
+                            if let (Some(orig), Some(comp)) = (response.original_size_bytes, response.compressed_size_bytes) {
                                 if orig > 0 {
                                     {
                                         let ratio = (1.0 - (comp as f64 / orig as f64)) * 100.0;
@@ -1071,7 +1064,7 @@ pub fn SessionPlayer(session_id: String) -> Element {
                                 {
                                     let events = grouped_events.read();
                                     let current_idx = *current_chunk_index.read();
-                                    let start_time = summary.session.start_time;
+                                    let start_time = summary.start_time;
 
                                     rsx! {
                                         for (i, event) in events.iter().enumerate() {
@@ -1103,10 +1096,10 @@ pub fn SessionPlayer(session_id: String) -> Element {
                                                         // Get the DB chunk index from the event
                                                         // The event.start_index is relative to the input_events list, not the full stream
                                                         // We need to find the actual db_chunk_index from the event chunk
-                                                        if let Some(Ok(events)) = input_events.read().as_ref() {
-                                                            if let Some(chunk) = events.get(event_start_index) {
-                                                                if let Some(db_idx) = chunk.db_chunk_index {
-                                                                    let ws = ws.clone();
+                                                        if let Some(Ok(events)) = input_events.read().as_ref()
+                                                            && let Some(chunk) = events.get(event_start_index)
+                                                                && let Some(db_idx) = chunk.db_chunk_index {
+                                                                    let ws = ws;
                                                                     spawn(async move {
                                                                         let _ = ws.send(SessionStreamClient::Seek {
                                                                             target_chunk: db_idx,
@@ -1114,8 +1107,6 @@ pub fn SessionPlayer(session_id: String) -> Element {
                                                                         }).await;
                                                                     });
                                                                 }
-                                                            }
-                                                        }
                                                     },
                                                     div { class: "flex justify-between text-base-content/60 mb-1",
                                                         span { "{format_duration(event.timestamp - start_time)}" }
@@ -1146,8 +1137,8 @@ pub fn SessionPlayer(session_id: String) -> Element {
                     .read()
                     .as_ref()
                     .and_then(|r| r.as_ref().ok())
-                    .map(|meta| meta.chunk_count)
-                    .unwrap_or(0);
+                    .and_then(|meta| meta.chunk_count)
+                    .unwrap_or(0) as usize;
                 let total_chunks = if total_db > 0 { total_db } else { summary_total };
 
                 let current_idx = (*current_chunk_index.read()).min(total_chunks.saturating_sub(1));
@@ -1326,7 +1317,7 @@ pub fn SessionPlayer(session_id: String) -> Element {
                                                     }
                                                 }
 
-                                                let ws = ws.clone();
+                                                let ws = ws;
                                                 spawn(async move {
                                                     let _ = ws.send(SessionStreamClient::Seek {
                                                         target_chunk: target_chunk_idx,
@@ -1355,7 +1346,7 @@ pub fn SessionPlayer(session_id: String) -> Element {
                                                 stream_complete.set(false);
                                                 loaded_bytes.set(0);
                                                 chunk_list.write().clear();
-                                                let ws = ws.clone();
+                                                let ws = ws;
                                                         spawn(async move {
                                                             let _ = ws
                                                                 .send(SessionStreamClient::Hello {
@@ -1398,7 +1389,7 @@ pub fn SessionPlayer(session_id: String) -> Element {
                                                 let db_buffer_window = 5; // Same as playing buffer
 
                                                 if last_buffered_db_chunk < current_db_chunk + db_buffer_window {
-                                                    let ws_clone = ws.clone();
+                                                    let ws_clone = ws;
                                                     let cursor = chunk_list_read.len();
                                                     drop(chunk_list_read); // Release the read lock
                                                     spawn(async move {

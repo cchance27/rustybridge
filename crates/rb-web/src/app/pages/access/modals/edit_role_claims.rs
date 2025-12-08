@@ -1,7 +1,7 @@
 use std::str::FromStr as _;
 
 use dioxus::prelude::*;
-use rb_types::auth::ClaimType;
+use rb_types::{auth::ClaimType, users::RoleInfo};
 
 use crate::{
     app::api::roles::{add_role_claim, remove_role_claim}, components::{Modal, use_toast}
@@ -13,9 +13,9 @@ pub fn EditRoleClaimsModal(
     role_claims_modal_open: Signal<bool>,
     claims_role_id: Signal<i64>,
     claims_role_name: Signal<String>,
-    role_claims: Signal<Vec<ClaimType>>,
+    role_claims: Signal<Vec<ClaimType<'static>>>,
     role_selected_claim_to_add: Signal<String>,
-    roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
+    roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>,
 ) -> Element {
     let is_super_admin = claims_role_name() == "Super Admin";
     let role_id_val = claims_role_id();
@@ -49,7 +49,7 @@ pub fn EditRoleClaimsModal(
         });
     };
 
-    let remove_role_claim_handler = move |claim: ClaimType| {
+    let remove_role_claim_handler = move |claim: ClaimType<'static>| {
         let role_id = role_id_val;
         let role = claims_role_name();
         spawn(async move {

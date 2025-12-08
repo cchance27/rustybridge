@@ -1,12 +1,11 @@
-use axum::{
-    extract::Extension, response::{IntoResponse, Redirect}
-};
+use axum::response::{IntoResponse, Redirect};
+use server_core::api as sc_api;
 
 use crate::server::auth::WebAuthSession;
 
 /// Unlink OIDC account from the current user
 #[cfg(feature = "server")]
-pub async fn oidc_unlink(auth: WebAuthSession, pool: Extension<sqlx::SqlitePool>) -> impl IntoResponse {
+pub async fn oidc_unlink(auth: WebAuthSession) -> impl IntoResponse {
     // Ensure user is authenticated
     let user_id = match auth.current_user.as_ref() {
         Some(user) => user.id,
@@ -15,7 +14,7 @@ pub async fn oidc_unlink(auth: WebAuthSession, pool: Extension<sqlx::SqlitePool>
         }
     };
 
-    match state_store::delete_oidc_link_for_user(&*pool, user_id).await {
+    match sc_api::delete_oidc_link_for_user(user_id).await {
         Ok(result) => {
             let rows_affected = result;
             if rows_affected > 0 {

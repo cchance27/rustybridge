@@ -13,7 +13,7 @@ use crate::error::{ServerError, ServerResult};
 /// - CLI commands that work with group names
 /// - TUI interfaces that display group names
 /// - WebUI list operations that fetch by name
-pub async fn get_group_claims_server(group_name: &str) -> ServerResult<Vec<ClaimType>> {
+pub async fn get_group_claims_server(group_name: &str) -> ServerResult<Vec<ClaimType<'_>>> {
     let db = state_store::server_db().await?;
     let pool = db.into_pool();
 

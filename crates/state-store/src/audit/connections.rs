@@ -23,12 +23,13 @@ pub async fn record_ssh_connection(
     user_id: i64,
     ip_address: String,
     ssh_client: Option<String>,
+    connection_id: Option<String>,
 ) -> Result<String, sqlx::Error> {
-    let connection_id = Uuid::now_v7().to_string();
+    let connection_id = connection_id.unwrap_or_else(|| Uuid::now_v7().to_string());
     let connected_at = Utc::now().timestamp_millis();
 
     sqlx::query(
-        "INSERT INTO connections 
+        "INSERT INTO client_sessions 
          (id, user_id, connection_type, ip_address, connected_at, ssh_client) 
          VALUES (?, ?, ?, ?, ?, ?)",
     )
@@ -51,13 +52,14 @@ pub async fn record_web_connection(
     user_id: i64,
     ip_address: Option<String>,
     user_agent: Option<String>,
+    parent_session_id: Option<String>,
 ) -> Result<(), sqlx::Error> {
     let connected_at = Utc::now().timestamp_millis();
 
     sqlx::query(
-        "INSERT INTO connections 
-         (id, user_id, connection_type, ip_address, user_agent, connected_at) 
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO client_sessions 
+         (id, user_id, connection_type, ip_address, user_agent, connected_at, parent_session_id) 
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&connection_id)
     .bind(user_id)
@@ -65,6 +67,7 @@ pub async fn record_web_connection(
     .bind(ip_address.unwrap_or_else(|| "unknown".to_string()))
     .bind(user_agent)
     .bind(connected_at)
+    .bind(parent_session_id)
     .execute(&db.pool)
     .await?;
 
@@ -75,7 +78,7 @@ pub async fn record_web_connection(
 pub async fn record_disconnection(db: &DbHandle, connection_id: &str) -> Result<(), sqlx::Error> {
     let disconnected_at = Utc::now().timestamp_millis();
 
-    sqlx::query("UPDATE connections SET disconnected_at = ? WHERE id = ?")
+    sqlx::query("UPDATE client_sessions SET disconnected_at = ? WHERE id = ?")
         .bind(disconnected_at)
         .bind(connection_id)
         .execute(&db.pool)
