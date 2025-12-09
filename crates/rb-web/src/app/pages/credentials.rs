@@ -7,7 +7,7 @@ use rb_types::{
 
 use crate::{
     app::api::credentials::*, components::{
-        CredentialBadge, CredentialForm, Fab, Layout, Modal, Protected, RequireAuth, StructuredTooltip, Table, TableActions, Toast, ToastMessage, ToastType, TooltipSection
+        CredentialBadge, CredentialForm, Fab, Layout, Modal, Protected, RequireAuth, StructuredTooltip, Table, TableActions, TooltipSection, use_toast
     }
 };
 
@@ -17,7 +17,7 @@ pub fn CredentialsPage() -> Element {
     let mut credentials = use_resource(|| async move { list_credentials().await });
 
     // Toast notification state
-    let mut toast = use_signal(|| None::<ToastMessage>);
+    let toast = use_toast();
 
     // Modal state
     let mut is_modal_open = use_signal(|| false);
@@ -215,22 +215,20 @@ pub fn CredentialsPage() -> Element {
             match result {
                 Ok(_) => {
                     is_modal_open.set(false);
-                    toast.set(Some(ToastMessage {
-                        message: format!(
-                            "Credential '{}' {} successfully",
-                            name_val,
-                            if id.is_some() { "updated" } else { "created" }
-                        ),
-                        toast_type: ToastType::Success,
-                    }));
+                    toast.success(&format!(
+                        "Credential '{}' {} successfully",
+                        name_val,
+                        if id.is_some() { "updated" } else { "created" }
+                    ));
                     credentials.restart(); // Reload data
                 }
                 Err(e) => {
                     is_modal_open.set(false);
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to {} credential: {}", if id.is_some() { "update" } else { "create" }, e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!(
+                        "Failed to {} credential: {}",
+                        if id.is_some() { "update" } else { "create" },
+                        e
+                    ));
                 }
             }
         });
@@ -250,18 +248,12 @@ pub fn CredentialsPage() -> Element {
                 match delete_credential(id).await {
                     Ok(_) => {
                         delete_confirm_open.set(false);
-                        toast.set(Some(ToastMessage {
-                            message: format!("Credential '{}' deleted successfully", name),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("Credential '{}' deleted successfully", name));
                         credentials.restart(); // Reload data
                     }
                     Err(e) => {
                         delete_confirm_open.set(false);
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to delete credential: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to delete credential: {}", e));
                     }
                 }
             });
@@ -271,7 +263,7 @@ pub fn CredentialsPage() -> Element {
     rsx! {
         RequireAuth {
             any_claims: vec![ClaimType::Credentials(ClaimLevel::View)],
-            Toast { message: toast }
+
             Layout {
                 div { class: "card bg-base-200 shadow-xl",
                     div { class: "card-body",

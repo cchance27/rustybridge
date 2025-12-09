@@ -1,8 +1,11 @@
 use dioxus::prelude::*;
+mod sessions;
 
 use crate::{
     app::{
-        api::ssh_keys::{add_my_ssh_key, delete_my_ssh_key, get_my_ssh_keys}, auth::oidc::get_oidc_link_status, components::{Layout, Modal, Table, Toast, ToastMessage, ToastType}
+        api::{
+            audit::{RecordedSession, list_my_sessions}, ssh_keys::{add_my_ssh_key, delete_my_ssh_key, get_my_ssh_keys}
+        }, auth::oidc::get_oidc_link_status, components::{Layout, Modal, Table, use_toast}, session::provider::use_session, storage::{BrowserStorage, StorageType}
     }, components::RequireAuth
 };
 
@@ -13,7 +16,7 @@ pub fn ProfilePage() -> Element {
     let mut oidc_status = use_resource(|| async move { get_oidc_link_status().await.ok() });
 
     // State
-    let mut toast = use_signal(|| None::<ToastMessage>);
+    let toast = use_toast();
     let mut is_add_key_modal_open = use_signal(|| false);
     let mut new_key_value = use_signal(String::new);
     let mut new_key_comment = use_signal(String::new);
@@ -61,17 +64,11 @@ pub fn ProfilePage() -> Element {
             match add_my_ssh_key(key, if comment.is_empty() { None } else { Some(comment) }).await {
                 Ok(_) => {
                     is_add_key_modal_open.set(false);
-                    toast.set(Some(ToastMessage {
-                        message: "SSH key added successfully".to_string(),
-                        toast_type: ToastType::Success,
-                    }));
+                    toast.success("SSH key added successfully");
                     ssh_keys.restart();
                 }
                 Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to add SSH key: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Failed to add SSH key: {}", e));
                 }
             }
         });
@@ -83,17 +80,11 @@ pub fn ProfilePage() -> Element {
                 match delete_my_ssh_key(id).await {
                     Ok(_) => {
                         delete_key_target.set(None);
-                        toast.set(Some(ToastMessage {
-                            message: "SSH key deleted successfully".to_string(),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success("SSH key deleted successfully");
                         ssh_keys.restart();
                     }
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to delete SSH key: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to delete SSH key: {}", e));
                     }
                 }
             });
@@ -120,18 +111,12 @@ pub fn ProfilePage() -> Element {
             match unlink_oidc().await {
                 Ok(_) => {
                     oidc_unlink_confirm_open.set(false);
-                    toast.set(Some(ToastMessage {
-                        message: "OIDC account unlinked successfully".to_string(),
-                        toast_type: ToastType::Success,
-                    }));
+                    toast.success("OIDC account unlinked successfully");
                     oidc_status.restart();
                 }
                 Err(e) => {
                     oidc_unlink_confirm_open.set(false);
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to unlink OIDC account: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Failed to unlink OIDC account: {}", e));
                 }
             }
         });
@@ -140,17 +125,10 @@ pub fn ProfilePage() -> Element {
     rsx! {
         RequireAuth {
             Layout {
-                Toast { message: toast }
 
                 div { class: "flex flex-col gap-6",
-                    // Header
-                    div { class: "prose",
-                        h1 { "Profile" }
-                        p { "Manage your account settings and preferences." }
-                    }
-
                     // OIDC Section
-                    div { class: "card bg-base-100 shadow-xl",
+                    div { class: "card bg-base-200 shadow-xl self-start w-full",
                         div { class: "card-body",
                             h2 { class: "card-title", "Identity Provider" }
                             p { "Link your account to an external identity provider for single sign-on." }
@@ -203,7 +181,7 @@ pub fn ProfilePage() -> Element {
                     }
 
                     // SSH Keys Section
-                    div { class: "card bg-base-100 shadow-xl",
+                    div { class: "card bg-base-200 shadow-xl self-start w-full",
                         div { class: "card-body",
                             div { class: "flex justify-between items-center mb-4",
                                 div {
@@ -287,6 +265,64 @@ pub fn ProfilePage() -> Element {
                             }
                         }
                     }
+
+                    // Web Settings Section
+                    div { class: "card bg-base-200 shadow-xl self-start w-full",
+                        div { class: "card-body",
+                            h2 { class: "card-title", "Web Settings" }
+                            p { class: "text-sm opacity-70 mb-4", "Configure browser-specific preferences." }
+
+                            // Snap Behavior Toggle
+                            {
+                                let session = use_session();
+                                let mut snap_to_navbar = session.snap_to_navbar;
+                                let is_enabled = snap_to_navbar.read();
+
+                                rsx! {
+                                    div { class: "form-control",
+                                        label { class: "label cursor-pointer justify-start gap-4",
+                                            input {
+                                                r#type: "checkbox",
+                                                class: "toggle toggle-primary",
+                                                checked: *is_enabled,
+                                                onchange: move |evt| {
+                                                    let new_value = evt.checked();
+                                                    snap_to_navbar.set(new_value);
+                                                    // Save to localStorage
+                                                    let storage = BrowserStorage::new(StorageType::Local);
+                                                    let _ = storage.set_json("rb-snap-to-navbar", &new_value);
+                                                }
+                                            }
+                                            div { class: "flex flex-col",
+                                                span { class: "label-text font-semibold",
+                                                    "Snap Windows Below Navbar"
+                                                    span { class: "ml-1 text-primary", "*" }
+                                                }
+                                                span { class: "label-text-alt opacity-70",
+                                                    if *is_enabled {
+                                                        "Windows snap below the navigation bar"
+                                                    } else {
+                                                        "Windows snap to the screen edge"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    div { class: "text-xs opacity-50 mt-4 pl-1",
+                                        span { class: "text-primary", "* " }
+                                        "Settings marked with an asterisk are stored locally in your browser and are not synced across devices."
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Sessions Section
+                    sessions::SessionsSection {}
+
+                    // Session History Section
+                    SessionHistorySection {}
                 }
 
                 // Add Key Modal
@@ -393,5 +429,160 @@ pub fn ProfilePage() -> Element {
                 }
             }
         }
+    }
+}
+
+#[component]
+fn SessionHistorySection() -> Element {
+    let sessions = use_resource(|| async move { list_my_sessions().await });
+
+    rsx! {
+        div { class: "card bg-base-200 shadow-xl self-start w-full",
+            div { class: "card-body",
+                h2 { class: "card-title", "Session History" }
+                p { class: "text-sm opacity-70", "View and replay your recorded sessions." }
+
+                match &*sessions.read_unchecked() {
+                    Some(Ok(session_list)) => rsx! {
+                        if session_list.is_empty() {
+                            div { class: "text-center py-8 opacity-50", "No recorded sessions found." }
+                        } else {
+                            div { class: "overflow-x-auto",
+                                table { class: "table table-zebra w-full",
+                                    thead {
+                                        tr {
+                                            th { "Time" }
+                                            th { "Relay" }
+                                            th { "Session #" }
+                                            th { "Duration" }
+                                            th { "Status" }
+                                            th { "Actions" }
+                                        }
+                                    }
+                                    tbody {
+                                        for session in session_list {
+                                            SessionHistoryRow { session: session.clone() }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    Some(Err(e)) => rsx! {
+                        div { class: "alert alert-error",
+                            "Error loading session history: {e}"
+                        }
+                    },
+                    None => rsx! {
+                        div { class: "flex justify-center p-8",
+                            span { class: "loading loading-spinner loading-lg" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn SessionHistoryRow(session: RecordedSession) -> Element {
+    let start_time = format_timestamp(session.start_time);
+    let duration = if let Some(end) = session.end_time {
+        format_duration(end - session.start_time)
+    } else {
+        "Active".to_string()
+    };
+
+    let status = if session.end_time.is_some() { "Completed" } else { "Active" };
+
+    // Export dropdown with format selection
+    let export_dropdown = rsx! {
+        div { class: "dropdown dropdown-end",
+            div {
+                tabindex: "0",
+                role: "button",
+                class: "btn btn-xs btn-ghost",
+                "Export ▼"
+            }
+            ul {
+                tabindex: "0",
+                class: "dropdown-content menu bg-base-100 rounded-box z-[1] w-52 p-2 shadow",
+                li {
+                    a {
+                        href: "/api/audit/sessions/{session.id}/export/cast",
+                        target: "_blank",
+                        rel: "external",
+                        download: "session.cast",
+                        "Asciicinema (.cast)"
+                    }
+                }
+                li {
+                    a {
+                        href: "/api/audit/sessions/{session.id}/export/txt",
+                        target: "_blank",
+                        rel: "external",
+                        download: "session.txt",
+                        "Plain Text (.txt)"
+                    }
+                }
+            }
+        }
+    };
+
+    rsx! {
+        tr {
+            td { "{start_time}" }
+            td {
+                span { class: "font-mono text-sm",
+                    {session.relay_name.as_deref().unwrap_or("Unknown")}
+                }
+            }
+            td {
+                span { class: "badge badge-neutral badge-sm",
+                    "#{session.session_number}"
+                }
+            }
+            td { "{duration}" }
+            td {
+                span {
+                    class: if session.end_time.is_some() { "badge badge-success badge-sm" } else { "badge badge-info badge-sm" },
+                    "{status}"
+                }
+            }
+            td {
+                div { class: "flex gap-2",
+                    Link {
+                        to: "/admin/sessions/{session.id}/replay",
+                        class: "btn btn-xs btn-primary",
+                        "Replay"
+                    }
+                    {export_dropdown}
+                }
+            }
+        }
+    }
+}
+
+fn format_timestamp(ms: i64) -> String {
+    use chrono::{Local, TimeZone};
+
+    if let Some(dt) = Local.timestamp_millis_opt(ms).single() {
+        dt.format("%Y-%m-%d %H:%M:%S").to_string()
+    } else {
+        "Invalid date".to_string()
+    }
+}
+
+fn format_duration(ms: i64) -> String {
+    let seconds = ms / 1000;
+    let minutes = seconds / 60;
+    let hours = minutes / 60;
+
+    if hours > 0 {
+        format!("{}h {}m", hours, minutes % 60)
+    } else if minutes > 0 {
+        format!("{}m {}s", minutes, seconds % 60)
+    } else {
+        format!("{}s", seconds)
     }
 }

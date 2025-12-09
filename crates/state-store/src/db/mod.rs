@@ -279,7 +279,7 @@ fn fallback_home() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn display_path(handle: &rb_types::state::DbHandle) -> String {
+pub fn display_path(handle: &rb_types::state::DbHandle) -> String {
     handle
         .path
         .as_ref()

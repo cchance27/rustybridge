@@ -1,12 +1,14 @@
 use std::{collections::HashMap, str::FromStr as _};
 
 use dioxus::prelude::*;
-use rb_types::{auth::ClaimType, users::UpdateUserRequest};
+use rb_types::{
+    auth::ClaimType, users::{GroupInfo, RoleInfo, UpdateUserRequest, UserGroupInfo}
+};
 
 use crate::{
     app::api::{
         groups::{add_member_to_group, remove_member_from_group}, roles::{assign_role_to_user, revoke_role_from_user}, users::*
-    }, components::{Modal, ToastMessage, ToastType}
+    }, components::{Modal, use_toast}
 };
 
 /// Edit User Modal with password, roles, groups, and claims management
@@ -15,10 +17,9 @@ pub fn EditUserModal(
     open: Signal<bool>,
     user_id: Signal<Option<i64>>,
     username: Signal<Option<String>>,
-    roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
-    groups: Resource<Result<Vec<rb_types::users::GroupInfo>, ServerFnError>>,
-    users: Resource<Result<Vec<rb_types::users::UserGroupInfo>, ServerFnError>>,
-    toast: Signal<Option<ToastMessage>>,
+    roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>,
+    groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>,
+    users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>,
 ) -> Element {
     let Some(username_str) = username() else {
         return rsx!();
@@ -28,6 +29,7 @@ pub fn EditUserModal(
     };
 
     let mut active_tab = use_signal(|| "general"); // general, groups, roles, claims
+    let toast = use_toast();
 
     let mut password = use_signal(String::new);
     let mut validation_errors = use_signal(HashMap::<String, String>::new);
@@ -103,17 +105,11 @@ pub fn EditUserModal(
                     Ok(_) => {
                         open.set(false);
                         password.set(String::new());
-                        toast.set(Some(ToastMessage {
-                            message: format!("User '{}' updated successfully", username_for_message),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("User '{}' updated successfully", username_for_message));
                         users.restart();
                     }
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to update user: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to update user: {}", e));
                     }
                 }
             });
@@ -122,7 +118,7 @@ pub fn EditUserModal(
 
     // Claims Logic
     let user_id_for_remove_claim = user_id_val;
-    let remove_claim_handler = move |claim: ClaimType, user: String| {
+    let remove_claim_handler = move |claim: ClaimType<'static>, user: String| {
         let user_id_for_spawn = user_id_for_remove_claim;
         spawn(async move {
             let claim_str = claim.to_string();
@@ -132,16 +128,10 @@ pub fn EditUserModal(
                     let mut current = user_claims();
                     current.retain(|c| c != &claim);
                     user_claims.set(current);
-                    toast.set(Some(ToastMessage {
-                        message: format!("Removed claim '{}' from user '{}'", claim_str, user),
-                        toast_type: ToastType::Success,
-                    }));
+                    toast.success(&format!("Removed claim '{}' from user '{}'", claim_str, user));
                 }
                 Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to remove claim: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Failed to remove claim: {}", e));
                 }
             }
         });
@@ -162,10 +152,7 @@ pub fn EditUserModal(
                 let claim_type = match ClaimType::from_str(&claim_str) {
                     Ok(ct) => ct,
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Invalid claim format: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Invalid claim format: {}", e));
                         return;
                     }
                 };
@@ -179,16 +166,10 @@ pub fn EditUserModal(
                             user_claims.set(current);
                         }
                         selected_claim_to_add.set(String::new());
-                        toast.set(Some(ToastMessage {
-                            message: format!("Added claim '{}' to user '{}'", claim_str, username_for_message),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("Added claim '{}' to user '{}'", claim_str, username_for_message));
                     }
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to add claim: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to add claim: {}", e));
                     }
                 }
             });
@@ -219,16 +200,10 @@ pub fn EditUserModal(
                         current.push(role_name.clone());
                         user_roles.set(current);
                         selected_role_to_add.set(String::new());
-                        toast.set(Some(ToastMessage {
-                            message: format!("Assigned role '{}' to user '{}'", role_name, user_name),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("Assigned role '{}' to user '{}'", role_name, user_name));
                     }
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to assign role: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to assign role: {}", e));
                     }
                 }
             }
@@ -249,16 +224,10 @@ pub fn EditUserModal(
                         let mut current = user_roles();
                         current.retain(|r| r != &role_name);
                         user_roles.set(current);
-                        toast.set(Some(ToastMessage {
-                            message: format!("Removed role '{}' from user '{}'", role_name, user_name),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("Removed role '{}' from user '{}'", role_name, user_name));
                     }
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to remove role: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to remove role: {}", e));
                     }
                 }
             }
@@ -290,16 +259,10 @@ pub fn EditUserModal(
                         current.push(group_name.clone());
                         user_groups.set(current);
                         selected_group_to_add.set(String::new());
-                        toast.set(Some(ToastMessage {
-                            message: format!("Added user '{}' to group '{}'", username, group_name),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("Added user '{}' to group '{}'", username, group_name));
                     }
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to add user to group: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to add user to group: {}", e));
                     }
                 }
             }
@@ -322,16 +285,10 @@ pub fn EditUserModal(
                         let mut current = user_groups();
                         current.retain(|g| g != &group_name);
                         user_groups.set(current);
-                        toast.set(Some(ToastMessage {
-                            message: format!("Removed user '{}' from group '{}'", username, group_name),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("Removed user '{}' from group '{}'", username, group_name));
                     }
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to remove user from group: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to remove user from group: {}", e));
                     }
                 }
             }

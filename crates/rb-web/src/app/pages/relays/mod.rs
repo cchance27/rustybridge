@@ -6,7 +6,7 @@ use rb_types::{
 };
 
 use crate::{
-    app::api::relays::fetch_relay_hostkey_for_review, components::{Fab, Layout, Protected, RequireAuth, Toast, ToastMessage, ToastType}
+    app::api::relays::fetch_relay_hostkey_for_review, components::{Fab, Layout, Protected, RequireAuth, use_toast}
 };
 
 mod modals;
@@ -23,6 +23,7 @@ use table::RelaysTable;
 pub fn RelaysPage() -> Element {
     // Initialize state
     let mut state = RelayState::new();
+    let toast = use_toast();
 
     // Create event handlers
     let open_add = move |_| {
@@ -138,10 +139,7 @@ pub fn RelaysPage() -> Element {
                 Err(e) => {
                     state.refresh_modal_open.set(false);
                     state.refresh_review.set(None);
-                    state.toast.set(Some(ToastMessage {
-                        message: format!("Failed to fetch hostkey: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Failed to fetch hostkey: {}", e));
                 }
             }
         });
@@ -173,7 +171,6 @@ pub fn RelaysPage() -> Element {
     rsx! {
             RequireAuth {
                 any_claims: vec![ClaimType::Relays(ClaimLevel::View)],
-                Toast { message: state.toast }
                 Layout {
                     div { class: "card bg-base-200 shadow-xl",
                     div { class: "card-body",

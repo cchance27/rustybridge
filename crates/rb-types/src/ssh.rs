@@ -164,3 +164,136 @@ pub struct SshKey {
     pub comment: Option<String>,
     pub created_at: i64,
 }
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum SessionStateSummary {
+    Attached,
+    Detached,
+    Closed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SessionKind {
+    TUI,   // Direct SSH to bridge
+    Relay, // SSH via bridge to target
+    Web,   // Web Dashboard Presence
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum TUIApplication {
+    Management,
+    RelaySelector,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ConnectionAmounts {
+    pub web: u32,
+    pub ssh: u32,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TerminalSnapshot {
+    pub screen_buffer: String,
+    pub cursor_row: usize,
+    pub cursor_col: usize,
+    pub chunk_index: usize,
+    pub timestamp: i64,
+    pub terminal_size: (usize, usize),
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct UserSessionSummary {
+    pub relay_id: i64,
+    pub relay_name: String,
+    pub session_number: u32,
+    pub kind: SessionKind,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
+    pub state: SessionStateSummary,
+    /// Whether the user has been active (typed) recently
+    #[serde(default)]
+    pub active_recent: bool,
+    /// The name of the active TUI application (e.g. "Management", "Relay Selector")
+    #[serde(default)]
+    pub active_app: Option<TUIApplication>,
+    /// When the session was detached (if applicable)
+    #[serde(default)]
+    pub detached_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Timeout for detached sessions in seconds (if applicable)
+    #[serde(default)]
+    pub detached_timeout_secs: Option<u32>,
+    pub connections: ConnectionAmounts,
+    pub viewers: ConnectionAmounts,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub last_active_at: chrono::DateTime<chrono::Utc>,
+    /// Admin viewer user IDs (users with server:attach_any viewing this session)
+    #[serde(default)]
+    pub admin_viewers: Vec<i64>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AdminSessionSummary {
+    pub user_id: i64,
+    pub username: String,
+    #[serde(flatten)]
+    pub session: UserSessionSummary,
+}
+
+/// Session origin tracking - where the session was created from
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum SessionOrigin {
+    /// Session created from web UI
+    Web { user_id: i64 },
+    /// Session created from SSH client
+    Ssh { user_id: i64 },
+}
+
+/// Connection type for tracking web vs SSH connections
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionType {
+    Web,
+    Ssh,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub enum SshControl {
+    Close,
+    Resize { cols: u32, rows: u32 },
+    Minimize(bool),
+    Ready { cols: u32, rows: u32 },
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct SshClientMsg {
+    pub cmd: Option<SshControl>,
+    pub data: Vec<u8>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct SshServerMsg {
+    pub data: Vec<u8>,
+    pub eof: bool,
+    pub exit_status: Option<i32>,
+    pub session_id: Option<u32>, // Session number for this connection
+    pub relay_id: Option<i64>,   // Relay ID for this connection
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct WebSessionMeta {
+    pub id: String, // Unique ID for the connection
+    pub user_id: i64,
+    pub username: String,
+    pub ip: String,
+    pub user_agent: Option<String>,
+    pub connected_at: chrono::DateTime<chrono::Utc>,
+    pub last_seen: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub enum SessionEvent {
+    Created(i64, UserSessionSummary),
+    Updated(i64, UserSessionSummary),
+    Removed { user_id: i64, relay_id: i64, session_number: u32 },
+    List(Vec<UserSessionSummary>),
+    Presence(i64, Vec<WebSessionMeta>),
+}

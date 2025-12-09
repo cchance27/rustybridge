@@ -28,10 +28,15 @@ sha2.workspace = true
 tui-core.workspace = true
 futures = "0.3"
 async-trait.workspace = true
+axum_session = "0.17"
+axum_session_sqlx = { version = "0.6", features = ["sqlite"] }
 openidconnect = { workspace = true, features = ["reqwest"] }
 ssh-key.workspace = true
 ssh-encoding = "0.2"
 reqwest.workspace = true
+chrono = { version = "0.4.42", features = ["serde"] }
+uuid = { version = "1.18.1", features = ["v4", "v7", "serde"] }
+zstd = "0.13"
 
 [dev-dependencies]
 anyhow.workspace = true

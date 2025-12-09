@@ -19,24 +19,58 @@ impl ServerHandler {
         // If a relay connect is pending, poll its completion
         if let Some(rx) = self.pending_relay.as_mut() {
             match rx.try_recv() {
-                Ok(Ok((handle, auth_tx))) => {
-                    self.relay_handle = Some(handle);
+                Ok(Ok((session_number, auth_tx))) => {
+                    self.session_number = Some(session_number);
                     self.auth_tx = Some(auth_tx);
                     self.pending_relay = None;
                     self.prompt_sink_active = false; // relay established; prompts will come from remote shell now
+                    self.touch_session();
+                    // We are leaving the TUI; retire the TUI session so it disappears from dashboards.
+                    self.end_tui_session();
                 }
                 Ok(Err(err)) => {
                     let _ = self.send_line(session, channel, &format!("failed to start relay: {}", err));
                     self.pending_relay = None;
+                    self.touch_session();
                     return self.handle_exit(session, channel);
                 }
                 Err(oneshot::error::TryRecvError::Empty) => {}
                 Err(oneshot::error::TryRecvError::Closed) => {
                     let _ = self.send_line(session, channel, "failed to start relay: channel closed");
                     self.pending_relay = None;
+                    self.touch_session();
                     return self.handle_exit(session, channel);
                 }
             }
+        }
+
+        // Send data to relay backend if we have an active relay session
+        if let (Some(user_id), Some(relay_id), Some(session_number)) = (self.user_id, self.active_relay_id, self.session_number)
+            && relay_id > 0
+            && !data.is_empty()
+        {
+            // Record input if we have a connection ID
+            if let Some(conn_id) = &self.connection_session_id {
+                let registry = self.registry.clone();
+                let data_vec = data.to_vec();
+                let conn_id = conn_id.clone();
+                tokio::spawn(async move {
+                    if let Some(session) = registry.get_session(user_id, relay_id, session_number).await {
+                        session.recorder.record_input(&data_vec, conn_id).await;
+                    }
+                });
+            }
+
+            // Get the session and send data via backend
+            let registry = self.registry.clone();
+            let data_to_send = data.to_vec();
+            tokio::spawn(async move {
+                if let Some(session) = registry.get_session(user_id, relay_id, session_number).await {
+                    let _ = session.backend.send(data_to_send).await;
+                }
+            });
+            self.touch_session();
+            return Ok(());
         }
 
         // If an auth prompt is active, capture input directly and bypass TUI apps
@@ -134,19 +168,28 @@ impl ServerHandler {
                 }
                 self.pending_auth = None;
             }
-            return Ok(());
-        }
-
-        if let Some(relay) = self.relay_handle.as_ref() {
-            if !data.is_empty() {
-                relay.send(data.to_vec());
-            }
+            self.touch_session();
             return Ok(());
         }
 
         if let Some(app_session) = self.app_session.as_mut() {
             // Normalize incoming SSH bytes to canonical TUI sequences
             let canonical = tui_core::input::canonicalize(data);
+
+            // Record input for TUI sessions too
+            if let (Some(user_id), Some(session_number), Some(conn_id)) =
+                (self.user_id, self.tui_session_number, &self.connection_session_id)
+                && !data.is_empty()
+            {
+                let registry = self.registry.clone();
+                let data_vec = data.to_vec();
+                let conn_id = conn_id.clone();
+                tokio::spawn(async move {
+                    if let Some(session) = registry.get_session(user_id, 0, session_number).await {
+                        session.recorder.record_input(&data_vec, conn_id).await;
+                    }
+                });
+            }
 
             // Filter out DSR response if we requested it (cursor position report)
             // \x1b[<row>;<col>R
@@ -159,6 +202,19 @@ impl ServerHandler {
                 .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
             self.process_action(action, session, channel).await?;
         }
+        self.touch_session();
         Ok(())
+    }
+
+    fn touch_session(&self) {
+        if let (Some(user_id), Some(session_number)) = (self.user_id, self.session_number) {
+            let relay_id = self.active_relay_id.unwrap_or(0);
+            let registry = self.registry.clone();
+            tokio::spawn(async move {
+                if let Some(session) = registry.get_session(user_id, relay_id, session_number).await {
+                    session.touch().await;
+                }
+            });
+        }
     }
 }

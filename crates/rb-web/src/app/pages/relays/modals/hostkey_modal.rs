@@ -1,12 +1,13 @@
 use dioxus::prelude::*;
 
 use crate::{
-    app::{api::relays::store_relay_hostkey, pages::relays::state::RelayState}, components::{Modal, ToastMessage, ToastType}
+    app::{api::relays::store_relay_hostkey, pages::relays::state::RelayState}, components::{Modal, use_toast}
 };
 
 /// Modal for reviewing and storing relay hostkeys
 #[component]
 pub fn HostkeyReviewModal(state: RelayState) -> Element {
+    let toast = use_toast();
     let on_refresh = move |_| {
         if let Some(review) = (state.refresh_review)() {
             let target_id = (state.refresh_target_id)();
@@ -17,19 +18,13 @@ pub fn HostkeyReviewModal(state: RelayState) -> Element {
                     Ok(_) => {
                         state.refresh_modal_open.set(false);
                         state.refresh_review.set(None);
-                        state.toast.set(Some(ToastMessage {
-                            message: format!("Hostkey for '{}' stored successfully", target_name),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("Hostkey for '{}' stored successfully", target_name));
                         state.relays.restart();
                     }
                     Err(e) => {
                         state.refresh_modal_open.set(false);
                         state.refresh_review.set(None);
-                        state.toast.set(Some(ToastMessage {
-                            message: format!("Failed to store hostkey: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to store hostkey: {}", e));
                     }
                 }
             });

@@ -4,19 +4,16 @@ use dioxus::prelude::*;
 use rb_types::users::RoleInfo;
 
 use crate::{
-    app::api::roles::create_role, components::{Modal, ToastMessage, ToastType}
+    app::api::roles::create_role, components::{Modal, use_toast}
 };
 
 /// Self-contained Add Role Modal
 #[component]
-pub fn AddRoleModal(
-    open: Signal<bool>,
-    roles: Resource<Result<Vec<RoleInfo>, ServerFnError>>,
-    toast: Signal<Option<ToastMessage>>,
-) -> Element {
+pub fn AddRoleModal(open: Signal<bool>, roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>) -> Element {
     let mut role_name = use_signal(String::new);
     let mut role_description = use_signal(String::new);
     let mut validation_errors = use_signal(HashMap::<String, String>::new);
+    let toast = use_toast();
 
     let on_save = move |_| {
         validation_errors.set(HashMap::new());
@@ -42,17 +39,11 @@ pub fn AddRoleModal(
                     open.set(false);
                     role_name.set(String::new());
                     role_description.set(String::new());
-                    toast.set(Some(ToastMessage {
-                        message: format!("Role '{}' created successfully", name_val),
-                        toast_type: ToastType::Success,
-                    }));
+                    toast.success(&format!("Role '{}' created successfully", name_val));
                     roles.restart();
                 }
                 Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to create role: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Failed to create role: {}", e));
                 }
             }
         });

@@ -79,6 +79,14 @@ pub enum DbError {
     /// Invalid principal kind for ACL operations
     #[error("invalid principal kind: {kind}")]
     InvalidPrincipalKind { kind: String },
+
+    /// JSON serialization/deserialization error
+    #[error("JSON serialization error in {context}: {source}")]
+    JsonSerialization {
+        context: String,
+        #[source]
+        source: serde_json::Error,
+    },
 }
 
 /// Result type alias for database operations

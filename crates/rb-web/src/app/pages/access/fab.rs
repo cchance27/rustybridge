@@ -2,19 +2,20 @@
 //! Each component is self-contained with its own state, validation, and handlers.
 
 use dioxus::prelude::*;
-use rb_types::auth::{ClaimLevel, ClaimType};
+use rb_types::{
+    auth::{ClaimLevel, ClaimType}, users::{GroupInfo, RoleInfo, UserGroupInfo}
+};
 
 use crate::{
-    app::components::{MultiFab, Protected, ToastMessage}, pages::access::modals::{AddGroupModal, AddRoleModal, AddUserModal}
+    app::components::{MultiFab, Protected}, pages::access::modals::{AddGroupModal, AddRoleModal, AddUserModal}
 };
 
 /// Main FAB component - just controls which modals are open
 #[component]
 pub fn AccessFab(
-    users: Resource<Result<Vec<rb_types::users::UserGroupInfo>, ServerFnError>>,
-    groups: Resource<Result<Vec<rb_types::users::GroupInfo>, ServerFnError>>,
-    roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
-    toast: Signal<Option<ToastMessage>>,
+    users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>,
+    groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>,
+    roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>,
 ) -> Element {
     let mut user_modal_open = use_signal(|| false);
     let mut group_modal_open = use_signal(|| false);
@@ -34,8 +35,8 @@ pub fn AccessFab(
             }
         }
 
-        AddUserModal { open: user_modal_open, users, toast }
-        AddGroupModal { open: group_modal_open, groups, toast }
-        AddRoleModal { open: role_modal_open, roles, toast }
+        AddUserModal { open: user_modal_open, users }
+        AddGroupModal { open: group_modal_open, groups }
+        AddRoleModal { open: role_modal_open, roles }
     }
 }

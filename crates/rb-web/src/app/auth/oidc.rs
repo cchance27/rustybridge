@@ -16,7 +16,6 @@ pub struct OidcLinkStatus {
 #[get(
     "/api/auth/oidc/link_status",
     auth: WebAuthSession,
-    pool: axum::Extension<sqlx::SqlitePool>
 )]
 pub async fn get_oidc_link_status() -> Result<OidcLinkStatus, ServerFnError> {
     let user_id = match auth.current_user.as_ref() {
@@ -24,7 +23,7 @@ pub async fn get_oidc_link_status() -> Result<OidcLinkStatus, ServerFnError> {
         None => return Err(ServerFnError::new("Not authenticated")),
     };
 
-    let result = state_store::get_oidc_link_for_user(&*pool, user_id)
+    let result = server_core::api::get_oidc_link_for_user(user_id)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
 
@@ -48,7 +47,6 @@ pub async fn get_oidc_link_status() -> Result<OidcLinkStatus, ServerFnError> {
 #[post(
     "/api/auth/oidc/unlink",
     auth: WebAuthSession,
-    pool: axum::Extension<sqlx::SqlitePool>
 )]
 pub async fn unlink_oidc() -> Result<(), ServerFnError> {
     let user_id = match auth.current_user.as_ref() {
@@ -56,7 +54,7 @@ pub async fn unlink_oidc() -> Result<(), ServerFnError> {
         None => return Err(ServerFnError::new("Not authenticated")),
     };
 
-    let result = state_store::delete_oidc_link_for_user(&*pool, user_id)
+    let result = server_core::api::delete_oidc_link_for_user(user_id)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
 
@@ -72,7 +70,6 @@ pub async fn unlink_oidc() -> Result<(), ServerFnError> {
 #[get(
     "/api/users/{user_id}/oidc_status",
     auth: WebAuthSession,
-    pool: axum::Extension<sqlx::SqlitePool>
 )]
 pub async fn get_user_oidc_status(user_id: i64) -> Result<OidcLinkStatus, ServerFnError> {
     use rb_types::auth::{ClaimLevel, ClaimType};
@@ -82,7 +79,7 @@ pub async fn get_user_oidc_status(user_id: i64) -> Result<OidcLinkStatus, Server
     // Require users:view permission
     ensure_claim(&auth, &ClaimType::Users(ClaimLevel::View)).map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    let result = state_store::get_oidc_link_for_user(&*pool, user_id)
+    let result = server_core::api::get_oidc_link_for_user(user_id)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
 
@@ -106,7 +103,6 @@ pub async fn get_user_oidc_status(user_id: i64) -> Result<OidcLinkStatus, Server
 #[delete(
     "/api/users/{user_id}/oidc",
     auth: WebAuthSession,
-    pool: axum::Extension<sqlx::SqlitePool>
 )]
 pub async fn unlink_user_oidc(user_id: i64) -> Result<(), ServerFnError> {
     use rb_types::auth::{ClaimLevel, ClaimType};
@@ -116,7 +112,7 @@ pub async fn unlink_user_oidc(user_id: i64) -> Result<(), ServerFnError> {
     // Require users:manage permission
     ensure_claim(&auth, &ClaimType::Users(ClaimLevel::Edit)).map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    let result = state_store::delete_oidc_link_for_user(&*pool, user_id)
+    let result = server_core::api::delete_oidc_link_for_user(user_id)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
 

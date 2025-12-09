@@ -5,7 +5,7 @@ use crate::app::api::relay_list::list_user_relays;
 // Server function is available on both client and server through Dioxus RPC
 
 #[component]
-pub fn RelayDrawer(on_select: EventHandler<String>) -> Element {
+pub fn RelayDrawer(on_select: EventHandler<String>, children: Element) -> Element {
     let relays = use_resource(|| async move { list_user_relays().await.unwrap_or_default() });
 
     rsx! {
@@ -16,7 +16,7 @@ pub fn RelayDrawer(on_select: EventHandler<String>) -> Element {
                 r#type: "checkbox",
                 class: "drawer-toggle",
             }
-            div { class: "drawer-content" }
+            div { class: "drawer-content", {children} }
             div {
                 class: "drawer-side z-50",
                 label {

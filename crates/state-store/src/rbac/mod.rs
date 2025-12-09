@@ -87,7 +87,7 @@ pub async fn revoke_role_from_user_by_ids(conn: &mut sqlx::SqliteConnection, use
 }
 
 /// Add a claim to a role using role ID (preferred over name-based operation).
-pub async fn add_claim_to_role_by_id(executor: impl SqliteExecutor<'_>, role_id: i64, claim: &ClaimType) -> DbResult<()> {
+pub async fn add_claim_to_role_by_id(executor: impl SqliteExecutor<'_>, role_id: i64, claim: &ClaimType<'_>) -> DbResult<()> {
     sqlx::query("INSERT OR IGNORE INTO role_claims (role_id, claim_key) VALUES (?, ?)")
         .bind(role_id)
         .bind(claim.to_string())
@@ -100,7 +100,7 @@ pub async fn add_claim_to_role_by_id(executor: impl SqliteExecutor<'_>, role_id:
 ///
 /// # Super Admin Protection
 /// Cannot modify claims for role ID 1 (Super Admin role).
-pub async fn remove_claim_from_role_by_id(executor: impl SqliteExecutor<'_>, role_id: i64, claim: &ClaimType) -> DbResult<()> {
+pub async fn remove_claim_from_role_by_id(executor: impl SqliteExecutor<'_>, role_id: i64, claim: &ClaimType<'_>) -> DbResult<()> {
     if role_id == crate::SUPER_ADMIN_ROLE_ID {
         return Err(crate::DbError::InvalidOperation {
             operation: "remove_role_claim".to_string(),
@@ -118,7 +118,7 @@ pub async fn remove_claim_from_role_by_id(executor: impl SqliteExecutor<'_>, rol
 
 /// Get all user claims (direct + via roles + via groups + via group roles) by user ID.
 /// This is the preferred method to avoid race conditions.
-pub async fn get_user_claims_by_id(conn: &mut sqlx::SqliteConnection, user_id: i64) -> DbResult<Vec<ClaimType>> {
+pub async fn get_user_claims_by_id(conn: &mut sqlx::SqliteConnection, user_id: i64) -> DbResult<Vec<ClaimType<'static>>> {
     // Fetch direct user claims
     let user_claims = sqlx::query_scalar::<_, String>("SELECT claim_key FROM user_claims WHERE user_id = ?")
         .bind(user_id)
@@ -180,7 +180,7 @@ pub async fn get_user_claims_by_id(conn: &mut sqlx::SqliteConnection, user_id: i
 }
 
 /// Get direct user claims by user ID (preferred over username-based lookup).
-pub async fn get_user_direct_claims_by_id(executor: impl SqliteExecutor<'_>, user_id: i64) -> DbResult<Vec<ClaimType>> {
+pub async fn get_user_direct_claims_by_id(executor: impl SqliteExecutor<'_>, user_id: i64) -> DbResult<Vec<ClaimType<'static>>> {
     let user_claims = sqlx::query_scalar::<_, String>("SELECT claim_key FROM user_claims WHERE user_id = ?")
         .bind(user_id)
         .fetch_all(executor)
@@ -190,7 +190,7 @@ pub async fn get_user_direct_claims_by_id(executor: impl SqliteExecutor<'_>, use
 }
 
 /// Add a claim to a user using user ID (preferred over username-based operation).
-pub async fn add_claim_to_user_by_id(executor: impl SqliteExecutor<'_>, user_id: i64, claim: &ClaimType) -> DbResult<()> {
+pub async fn add_claim_to_user_by_id(executor: impl SqliteExecutor<'_>, user_id: i64, claim: &ClaimType<'_>) -> DbResult<()> {
     sqlx::query("INSERT OR IGNORE INTO user_claims (user_id, claim_key) VALUES (?, ?)")
         .bind(user_id)
         .bind(claim.to_string())
@@ -200,7 +200,7 @@ pub async fn add_claim_to_user_by_id(executor: impl SqliteExecutor<'_>, user_id:
 }
 
 /// Remove a claim from a user using user ID (preferred over username-based operation).
-pub async fn remove_claim_from_user_by_id(executor: impl SqliteExecutor<'_>, user_id: i64, claim: &ClaimType) -> DbResult<()> {
+pub async fn remove_claim_from_user_by_id(executor: impl SqliteExecutor<'_>, user_id: i64, claim: &ClaimType<'_>) -> DbResult<()> {
     sqlx::query("DELETE FROM user_claims WHERE user_id = ? AND claim_key = ?")
         .bind(user_id)
         .bind(claim.to_string())
@@ -210,7 +210,7 @@ pub async fn remove_claim_from_user_by_id(executor: impl SqliteExecutor<'_>, use
 }
 
 /// Add a claim to a group using group ID (preferred over name-based operation).
-pub async fn add_claim_to_group_by_id(executor: impl SqliteExecutor<'_>, group_id: i64, claim: &ClaimType) -> DbResult<()> {
+pub async fn add_claim_to_group_by_id(executor: impl SqliteExecutor<'_>, group_id: i64, claim: &ClaimType<'_>) -> DbResult<()> {
     sqlx::query("INSERT OR IGNORE INTO group_claims (group_id, claim_key) VALUES (?, ?)")
         .bind(group_id)
         .bind(claim.to_string())
@@ -220,7 +220,7 @@ pub async fn add_claim_to_group_by_id(executor: impl SqliteExecutor<'_>, group_i
 }
 
 /// Remove a claim from a group using group ID (preferred over name-based operation).
-pub async fn remove_claim_from_group_by_id(executor: impl SqliteExecutor<'_>, group_id: i64, claim: &ClaimType) -> DbResult<()> {
+pub async fn remove_claim_from_group_by_id(executor: impl SqliteExecutor<'_>, group_id: i64, claim: &ClaimType<'_>) -> DbResult<()> {
     sqlx::query("DELETE FROM group_claims WHERE group_id = ? AND claim_key = ?")
         .bind(group_id)
         .bind(claim.to_string())
@@ -230,7 +230,7 @@ pub async fn remove_claim_from_group_by_id(executor: impl SqliteExecutor<'_>, gr
 }
 
 /// Get group claims by group ID (preferred over name-based lookup).
-pub async fn get_group_claims_by_id(executor: impl SqliteExecutor<'_>, group_id: i64) -> DbResult<Vec<ClaimType>> {
+pub async fn get_group_claims_by_id(executor: impl SqliteExecutor<'_>, group_id: i64) -> DbResult<Vec<ClaimType<'static>>> {
     let claims = sqlx::query_scalar::<_, String>("SELECT claim_key FROM group_claims WHERE group_id = ?")
         .bind(group_id)
         .fetch_all(executor)
@@ -240,7 +240,7 @@ pub async fn get_group_claims_by_id(executor: impl SqliteExecutor<'_>, group_id:
 }
 
 /// Get role claims by role ID (preferred over name-based lookup).
-pub async fn get_role_claims_by_id(executor: impl SqliteExecutor<'_>, role_id: i64) -> DbResult<Vec<ClaimType>> {
+pub async fn get_role_claims_by_id(executor: impl SqliteExecutor<'_>, role_id: i64) -> DbResult<Vec<ClaimType<'static>>> {
     let claims = sqlx::query_scalar::<_, String>("SELECT claim_key FROM role_claims WHERE role_id = ?")
         .bind(role_id)
         .fetch_all(executor)

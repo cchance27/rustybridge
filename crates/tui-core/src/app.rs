@@ -20,7 +20,7 @@ use crate::TuiResult;
 ///
 /// This trait provides a clean interface for interactive terminal applications
 /// that can run both over SSH (remote) and standalone (local terminal).
-pub trait TuiApp: Send {
+pub trait TuiApp: Send + Sync {
     /// Handle raw input bytes from the user.
     fn handle_input(&mut self, input: &[u8]) -> TuiResult<AppAction>;
 

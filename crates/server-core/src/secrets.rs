@@ -28,9 +28,68 @@ const SALT_FILE_ENV: &str = "RB_SERVER_SECRETS_SALT_FILE";
 const ENC_PREFIX_V1: &str = "enc:v1:";
 const ENC_PREFIX_V2: &str = "enc:v2:";
 
-static MASTER_KEY: Lazy<ServerResult<SecretVec<u8>>> = Lazy::new(load_master_key);
+use std::sync::RwLock;
+
+static MASTER_KEY_CACHE: Lazy<RwLock<Option<ServerResult<SecretVec<u8>>>>> = Lazy::new(|| RwLock::new(None));
+
+fn get_master_key() -> ServerResult<SecretVec<u8>> {
+    {
+        let lock = MASTER_KEY_CACHE.read().unwrap();
+        if let Some(res) = lock.as_ref() {
+            return match res {
+                Ok(k) => Ok(SecretVec::new(Box::new(k.expose_secret().clone()))),
+                Err(e) => Err(ServerError::Crypto(format!("Cached master key error: {}", e))),
+            };
+        }
+    }
+
+    let mut lock = MASTER_KEY_CACHE.write().unwrap();
+    // Check again
+    if let Some(res) = lock.as_ref() {
+        return match res {
+            Ok(k) => Ok(SecretVec::new(Box::new(k.expose_secret().clone()))),
+            Err(e) => Err(ServerError::Crypto(format!("Cached master key error: {}", e))),
+        };
+    }
+
+    let val = load_master_key();
+    *lock = Some(match val {
+        Ok(k) => Ok(k),
+        Err(e) => Err(ServerError::Crypto(e.to_string())), // Store as simplified error to allow cloning (since original error might not be cloneable)
+    });
+
+    match lock.as_ref().unwrap() {
+        Ok(k) => Ok(SecretVec::new(Box::new(k.expose_secret().clone()))),
+        Err(e) => Err(ServerError::Crypto(format!("Master key error: {}", e))),
+    }
+}
+
+#[cfg(test)]
+pub fn reset_master_key_for_test() {
+    let mut lock = MASTER_KEY_CACHE.write().unwrap();
+    *lock = None;
+}
+
+#[cfg(test)]
+static TEST_MASTER_KEY: std::sync::RwLock<Option<Vec<u8>>> = std::sync::RwLock::new(None);
+
+#[cfg(test)]
+pub fn set_master_key_for_test(key: &[u8]) {
+    let mut lock = TEST_MASTER_KEY.write().unwrap();
+    *lock = Some(key.to_vec());
+    reset_master_key_for_test();
+}
 
 fn load_master_key() -> ServerResult<SecretVec<u8>> {
+    #[cfg(test)]
+    {
+        if let Ok(lock) = TEST_MASTER_KEY.read() {
+            if let Some(key) = lock.as_ref() {
+                return Ok(SecretVec::new(Box::new(key.clone())));
+            }
+        }
+    }
+
     // Try explicit 32-byte master key (base64-encoded)
     if let Ok(mut key_b64) = std::env::var(MASTER_KEY_ENV) {
         key_b64 = key_b64.trim().to_string();
@@ -157,9 +216,7 @@ fn ensure_secure_permissions(path: &Path) -> ServerResult<bool> {
 }
 
 pub fn encrypt_secret(plaintext: &[u8]) -> ServerResult<EncryptedBlob> {
-    let master_key = MASTER_KEY
-        .as_ref()
-        .map_err(|e| ServerError::Crypto(format!("Master key init failed: {e}")))?;
+    let master_key = get_master_key().map_err(|e| ServerError::Crypto(format!("Master key init failed: {e}")))?;
 
     let salt = random_bytes(16);
     let nonce = random_bytes(24);
@@ -191,9 +248,7 @@ pub fn encrypt_secret(plaintext: &[u8]) -> ServerResult<EncryptedBlob> {
 
 pub fn decrypt_secret(salt: &[u8], nonce: &[u8], ciphertext: &[u8]) -> ServerResult<(SecretVec<u8>, bool)> {
     // Attempt v2 decryption (HKDF-based key derivation)
-    let master_key = MASTER_KEY
-        .as_ref()
-        .map_err(|e| ServerError::Crypto(format!("Master key init failed: {e}")))?;
+    let master_key = get_master_key().map_err(|e| ServerError::Crypto(format!("Master key init failed: {e}")))?;
 
     let hkdf = Hkdf::<Sha256>::new(Some(salt), master_key.expose_secret());
     let mut key = [0u8; 32];
@@ -440,5 +495,5 @@ pub fn derive_master_key_from_passphrase(passphrase: &str) -> ServerResult<Vec<u
 
 pub fn require_master_secret() -> ServerResult<()> {
     // Just trigger the lazy load to check
-    MASTER_KEY.as_ref().map(|_| ()).map_err(|e| ServerError::Crypto(e.to_string()))
+    get_master_key().map(|_| ()).map_err(|e| ServerError::Crypto(e.to_string()))
 }

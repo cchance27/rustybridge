@@ -1,5 +1,5 @@
+pub mod audit;
 pub mod auth;
-pub mod ssh_websocket;
 
 #[cfg(feature = "server")]
 use axum::Router;
@@ -7,13 +7,15 @@ use dioxus::prelude::*;
 
 /// Start the Dioxus fullstack web server with Axum integration.
 #[cfg(feature = "server")]
-pub async fn run_web_server(config: rb_types::config::WebServerConfig, app: fn() -> Element) -> anyhow::Result<()> {
+pub async fn run_web_server(
+    config: rb_types::config::WebServerConfig,
+    app: fn() -> Element,
+    registry: std::sync::Arc<server_core::sessions::SessionRegistry>,
+) -> anyhow::Result<()> {
     use axum_session::{SameSite, SessionLayer, SessionStore};
     use axum_session_auth::AuthSessionLayer;
-    use axum_session_sqlx::SessionSqlitePool;
-    use sqlx::SqlitePool;
 
-    use crate::server::auth::WebUser;
+    use crate::{app::api, server::auth::WebUser};
 
     if config.tls.is_some() {
         tracing::warn!("native TLS requested but not yet implemented; serving HTTP");
@@ -22,8 +24,7 @@ pub async fn run_web_server(config: rb_types::config::WebServerConfig, app: fn()
     let addr = format!("{}:{}", config.bind, config.port);
 
     // Initialize DB for session store
-    let db = state_store::server_db().await?;
-    let pool = db.into_pool();
+    let db_handle = server_core::api::server_db_handle().await?;
 
     // Session Layer
     // OIDC redirects arrive as cross-site navigations, so SameSite must allow the
@@ -37,21 +38,18 @@ pub async fn run_web_server(config: rb_types::config::WebServerConfig, app: fn()
         .with_secure(config.tls.is_some())
         .with_cookie_path("/");
 
-    let sqlite_pool = SessionSqlitePool::from(pool.clone());
-    let session_store = SessionStore::new(Some(sqlite_pool), session_config).await?;
+    let session_manager = server_core::sessions::web::create_web_session_manager(&db_handle);
+    let session_store = SessionStore::new(Some(session_manager), session_config).await?;
     let session_layer = SessionLayer::new(session_store);
 
     // Auth Layer
     let auth_config = axum_session_auth::AuthConfig::<i64>::default();
-    let auth_layer = AuthSessionLayer::<WebUser, i64, SessionSqlitePool, SqlitePool>::new(Some(pool.clone())).with_config(auth_config);
+    let auth_layer =
+        AuthSessionLayer::<WebUser, i64, server_core::sessions::web::WebSessionManager, ()>::new(None).with_config(auth_config);
 
     // Create router with custom WebSocket route for SSH terminal
     let router = Router::new()
-        .route("/api/ssh/{relay_name}", axum::routing::get(ssh_websocket::ssh_terminal_ws))
-        .route(
-            "/api/ssh/{relay_name}/status",
-            axum::routing::get(ssh_websocket::ssh_terminal_status),
-        )
+        // TODO: Move OIDC routes to standard dioxus [get] handlers
         .route("/api/auth/oidc/login", axum::routing::get(auth::oidc::oidc_login))
         .route("/api/auth/oidc/callback", axum::routing::get(auth::oidc::oidc_callback))
         .route("/api/auth/oidc/link", axum::routing::get(auth::oidc_link::oidc_link_start))
@@ -59,12 +57,15 @@ pub async fn run_web_server(config: rb_types::config::WebServerConfig, app: fn()
             "/api/auth/oidc/callback/link",
             axum::routing::get(auth::oidc_link::oidc_link_callback),
         )
-        //.route("/api/auth/oidc/unlink", axum::routing::post(auth::oidc_unlink::oidc_unlink))
+        .route(
+            "/api/audit/sessions/{id}/export/{export_type}",
+            axum::routing::get(api::audit::export_session),
+        )
         .serve_dioxus_application(ServeConfig::new(), app)
-        .layer(axum::Extension(pool.clone()))
+        .layer(axum::Extension(registry))
         .layer(auth_layer)
         .layer(session_layer)
-        .into_make_service();
+        .into_make_service_with_connect_info::<std::net::SocketAddr>();
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 

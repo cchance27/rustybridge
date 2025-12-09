@@ -2,20 +2,24 @@
 //! Self-contained components for managing roles
 
 use dioxus::prelude::*;
-use rb_types::auth::{ClaimLevel, ClaimType};
+use rb_types::{
+    auth::{ClaimLevel, ClaimType}, users::{GroupInfo, RoleInfo, UserGroupInfo}
+};
 
 use crate::{
-    app::api::roles::*, components::{Protected, StructuredTooltip, Table, ToastMessage, ToastType, TooltipSection, icons}, pages::access::modals::{ConfirmDeleteRoleModal, EditRoleClaimsModal, ManageRoleGroupsModal, ManageRoleUsersModal}
+    app::api::roles::*, components::{Protected, StructuredTooltip, Table, TooltipSection, icons, use_toast}, pages::access::modals::{ConfirmDeleteRoleModal, EditRoleClaimsModal, ManageRoleGroupsModal, ManageRoleUsersModal}
 };
 
 /// Main Roles Section component
 #[component]
 pub fn RolesSection(
-    roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
-    users: Resource<Result<Vec<rb_types::users::UserGroupInfo>, ServerFnError>>,
-    groups: Resource<Result<Vec<rb_types::users::GroupInfo>, ServerFnError>>,
-    toast: Signal<Option<ToastMessage>>,
+    roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>,
+    users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>,
+    groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>,
 ) -> Element {
+    // Toast notification state
+    let toast = use_toast();
+
     // Delete confirmation state
     let mut delete_confirm_open = use_signal(|| false);
     let mut delete_target_id = use_signal(|| 0i64);
@@ -117,20 +121,14 @@ pub fn RolesSection(
             match delete_role(target_id).await {
                 Ok(_) => {
                     delete_confirm_open.set(false);
-                    toast.set(Some(ToastMessage {
-                        message: format!("Role '{}' deleted successfully", target_name),
-                        toast_type: ToastType::Success,
-                    }));
+                    toast.success(&format!("Role '{}' deleted successfully", target_name));
                     roles.restart();
                     users.restart();
                     groups.restart();
                 }
                 Err(e) => {
                     delete_confirm_open.set(false);
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to delete role: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Failed to delete role: {}", e));
                 }
             }
         });
@@ -314,7 +312,6 @@ pub fn RolesSection(
             role_claims,
             role_selected_claim_to_add,
             roles,
-            toast,
         }
 
         ManageRoleUsersModal {
@@ -326,7 +323,6 @@ pub fn RolesSection(
             selected_user_to_add,
             roles,
             users,
-            toast,
         }
 
         ManageRoleGroupsModal {
@@ -338,7 +334,6 @@ pub fn RolesSection(
             selected_group_to_add,
             roles,
             groups,
-            toast,
         }
     }
 }

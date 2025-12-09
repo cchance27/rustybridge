@@ -4,6 +4,7 @@
 //! the entire RustyBridge application, including server-side and client-side (WASM) code.
 
 pub mod access;
+pub mod audit;
 pub mod auth;
 pub mod client;
 pub mod config;

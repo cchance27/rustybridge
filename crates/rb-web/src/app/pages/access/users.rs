@@ -3,25 +3,25 @@
 
 use dioxus::prelude::*;
 use rb_types::{
-    access::RelayAccessSource, auth::{ClaimLevel, ClaimType}
+    access::RelayAccessSource, auth::{ClaimLevel, ClaimType}, users::{GroupInfo, RoleInfo, UserGroupInfo}
 };
 
 use crate::{
     app::{
         api::users::*, auth::oidc::{OidcLinkStatus, get_user_oidc_status, unlink_user_oidc}
-    }, components::{
-        Protected, StructuredTooltip, Table, TableActions, ToastMessage, ToastType, TooltipSection, buttons::HoverSwapButton, icons
-    }, pages::access::modals::{ConfirmDeleteUserModal, EditUserModal, ManageUserGroupsModal, ManageUserRolesModal, UnlinkUserModal}
+    }, components::{Protected, StructuredTooltip, Table, TableActions, TooltipSection, buttons::HoverSwapButton, icons, use_toast}, pages::access::modals::{ConfirmDeleteUserModal, EditUserModal, ManageUserGroupsModal, ManageUserRolesModal, UnlinkUserModal}
 };
 
 /// Main Users Section component
 #[component]
 pub fn UsersSection(
-    users: Resource<Result<Vec<rb_types::users::UserGroupInfo>, ServerFnError>>,
-    toast: Signal<Option<ToastMessage>>,
-    roles: Resource<Result<Vec<rb_types::users::RoleInfo>, ServerFnError>>,
-    groups: Resource<Result<Vec<rb_types::users::GroupInfo>, ServerFnError>>,
+    users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>,
+    roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>,
+    groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>,
 ) -> Element {
+    // Toast notification state
+    let toast = use_toast();
+
     // Delete confirmation state
     let mut delete_confirm_open = use_signal(|| false);
     let mut delete_target_name = use_signal(String::new);
@@ -102,18 +102,12 @@ pub fn UsersSection(
             match delete_user(target_id).await {
                 Ok(_) => {
                     delete_confirm_open.set(false);
-                    toast.set(Some(ToastMessage {
-                        message: format!("User '{}' deleted successfully", target_name),
-                        toast_type: ToastType::Success,
-                    }));
+                    toast.success(&format!("User '{}' deleted successfully", target_name));
                     users.restart();
                 }
                 Err(e) => {
                     delete_confirm_open.set(false);
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to delete user: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Failed to delete user: {}", e));
                 }
             }
         });
@@ -309,7 +303,6 @@ pub fn UsersSection(
                                                 user_id: user.id,
                                                 username: user.username.clone(),
                                                 oidc_refresh_trigger,
-                                                toast,
                                                 users,
                                             }
                                         }
@@ -353,7 +346,6 @@ pub fn UsersSection(
                                     selected_role_to_add: manage_roles_selected,
                                     roles,
                                     users,
-                                    toast,
                                 }
                             }
                             Protected {
@@ -367,7 +359,6 @@ pub fn UsersSection(
                                     selected_group_to_add: manage_groups_selected,
                                     users,
                                     groups,
-                                    toast,
                                 }
                             }
                         },
@@ -392,7 +383,6 @@ pub fn UsersSection(
                 user_id: editing_user_id,
                 username: editing_username,
                 users,
-                toast,
                 roles,
                 groups,
             }
@@ -406,12 +396,12 @@ fn OidcStatusCell(
     user_id: i64,
     username: String,
     oidc_refresh_trigger: Signal<u32>,
-    toast: Signal<Option<ToastMessage>>,
-    users: Resource<Result<Vec<rb_types::users::UserGroupInfo>, ServerFnError>>,
+    users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>,
 ) -> Element {
     // Track per-user OIDC status; kept inside its own component to satisfy Dioxus hook ordering rules.
     let mut oidc_status = use_signal(|| None::<OidcLinkStatus>);
     let mut unlink_modal_open = use_signal(|| false);
+    let toast = use_toast();
 
     // Refresh when the shared trigger bumps (e.g., after unlink) or on initial mount.
     use_effect(move || {
@@ -433,19 +423,13 @@ fn OidcStatusCell(
                 match unlink_user_oidc(user_id).await {
                     Ok(_) => {
                         unlink_modal_open.set(false);
-                        toast.set(Some(ToastMessage {
-                            message: format!("OIDC account unlinked for user '{}'", username_clone),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("OIDC account unlinked for user '{}'", username_clone));
                         oidc_refresh_trigger.set(oidc_refresh_trigger() + 1);
                         users.restart();
                     }
                     Err(e) => {
                         unlink_modal_open.set(false);
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to unlink OIDC: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to unlink OIDC: {}", e));
                     }
                 }
             });

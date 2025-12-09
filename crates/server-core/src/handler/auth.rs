@@ -2,7 +2,9 @@
 
 use std::borrow::Cow;
 
-use rb_types::auth::{AuthDecision, LoginTarget};
+use rb_types::{
+    audit::{AuthMethod, EventType}, auth::{AuthDecision, LoginTarget}
+};
 use russh::server::Auth;
 use tracing::{info, warn};
 
@@ -24,6 +26,15 @@ impl ServerHandler {
 
     pub(super) async fn handle_auth_password(&mut self, user: &str, password: &str) -> Result<Auth, russh::Error> {
         let login: LoginTarget = parse_login_target(user);
+
+        // Attempt to resolve user_id early for better audit logging, even if auth fails later
+        if let Ok(handle) = state_store::server_db().await {
+            let pool = handle.into_pool();
+            if let Ok(uid) = state_store::fetch_user_id_by_name(&pool, &login.username).await {
+                self.user_id = uid;
+            }
+        }
+
         let decision = authenticate_password(&login, password)
             .await
             .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
@@ -32,6 +43,21 @@ impl ServerHandler {
             AuthDecision::Accept => {
                 self.username = Some(login.username.clone());
                 self.relay_target = login.relay.clone();
+
+                let connection_id = self.connection_session_id.clone().unwrap_or_else(|| {
+                    let cf = uuid::Uuid::now_v7().to_string();
+                    self.connection_session_id = Some(cf.clone());
+                    cf
+                });
+
+                self.log_audit_event(EventType::LoginSuccess {
+                    method: AuthMethod::Password,
+                    connection_id,
+                    username: login.username.clone(),
+                    client_type: rb_types::audit::ClientType::Ssh,
+                })
+                .await;
+
                 info!(
                     peer = %display_addr(self.peer_addr),
                     user = %login.username,
@@ -41,6 +67,14 @@ impl ServerHandler {
                 Ok(Auth::Accept)
             }
             AuthDecision::Reject => {
+                self.log_audit_event(EventType::LoginFailure {
+                    method: AuthMethod::Password,
+                    reason: "invalid credentials".to_string(),
+                    username: Some(login.username.clone()),
+                    client_type: rb_types::audit::ClientType::Ssh,
+                })
+                .await;
+
                 warn!(
                     peer = %display_addr(self.peer_addr),
                     user = %login.username,
@@ -53,6 +87,14 @@ impl ServerHandler {
 
     pub(super) async fn handle_auth_publickey(&mut self, user: &str, public_key: &russh::keys::PublicKey) -> Result<Auth, russh::Error> {
         let login = parse_login_target(user);
+
+        // Attempt to resolve user_id early for better audit logging
+        if let Ok(handle) = state_store::server_db().await {
+            let pool = handle.into_pool();
+            if let Ok(uid) = state_store::fetch_user_id_by_name(&pool, &login.username).await {
+                self.user_id = uid;
+            }
+        }
 
         let key_bytes = match public_key.to_bytes() {
             Ok(b) => b,
@@ -75,6 +117,21 @@ impl ServerHandler {
             Ok(true) => {
                 self.username = Some(login.username.clone());
                 self.relay_target = login.relay.clone();
+
+                let connection_id = self.connection_session_id.clone().unwrap_or_else(|| {
+                    let cf = uuid::Uuid::now_v7().to_string();
+                    self.connection_session_id = Some(cf.clone());
+                    cf
+                });
+
+                self.log_audit_event(EventType::LoginSuccess {
+                    method: AuthMethod::PublicKey,
+                    connection_id,
+                    username: login.username.clone(),
+                    client_type: rb_types::audit::ClientType::Ssh,
+                })
+                .await;
+
                 info!(
                     peer = %display_addr(self.peer_addr),
                     user = %login.username,
@@ -83,6 +140,14 @@ impl ServerHandler {
                 Ok(Auth::Accept)
             }
             Ok(false) => {
+                self.log_audit_event(EventType::LoginFailure {
+                    method: AuthMethod::PublicKey,
+                    reason: "key not found".to_string(),
+                    username: Some(login.username.clone()),
+                    client_type: rb_types::audit::ClientType::Ssh,
+                })
+                .await;
+
                 warn!(
                     peer = %display_addr(self.peer_addr),
                     user = %login.username,
@@ -174,6 +239,23 @@ impl ServerHandler {
                             self.pending_ssh_auth_code = None;
                             self.last_ssh_auth_check = None;
                             self.ssh_auth_message_shown = false;
+
+                            // Set user_id so log_audit_event can produce a full context
+                            self.user_id = Some(auth_user_id);
+
+                            let connection_id = self.connection_session_id.clone().unwrap_or_else(|| {
+                                let cf = uuid::Uuid::now_v7().to_string();
+                                self.connection_session_id = Some(cf.clone());
+                                cf
+                            });
+
+                            self.log_audit_event(EventType::LoginSuccess {
+                                method: AuthMethod::Oidc,
+                                connection_id,
+                                username: login.username.clone(),
+                                client_type: rb_types::audit::ClientType::Ssh,
+                            })
+                            .await;
 
                             info!(
                                 peer = %display_addr(self.peer_addr),
@@ -274,6 +356,47 @@ impl ServerHandler {
             user = %self.username.as_deref().unwrap_or("<unknown>"),
             "user authenticated"
         );
+
+        // Record SSH connection to audit DB
+        if let (Some(user_id), Some(peer_addr)) = (self.user_id, self.peer_addr) {
+            let registry = self.registry.clone();
+            let ip_address = peer_addr.ip().to_string();
+
+            // Generate connection ID and record metadata
+            match crate::record_ssh_connection(&registry, user_id, ip_address, None, self.connection_session_id.clone()).await {
+                Ok(conn_id) => {
+                    tracing::info!("Recorded SSH connection: {}", conn_id);
+                    self.connection_session_id = Some(conn_id);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to record SSH connection: {:?}", e);
+                }
+            }
+        }
+
         Ok(())
+    }
+
+    /// Check if the current user has management access (any *:view claim or wildcard).
+    pub(super) async fn check_management_access(username: &str) -> (bool, Option<i64>) {
+        if let Ok(handle) = state_store::server_db().await {
+            let pool = handle.into_pool();
+            if let Ok(mut conn) = pool.acquire().await {
+                if let Some(uid) = state_store::fetch_user_id_by_name(&mut *conn, username).await.ok().flatten() {
+                    if let Ok(claims) = state_store::get_user_claims_by_id(&mut conn, uid).await {
+                        let can_manage = claims.iter().any(|c| {
+                            let claim_str = c.to_string();
+                            claim_str == "*" || claim_str.ends_with(":view")
+                        });
+                        return (can_manage, Some(uid));
+                    } else {
+                        return (false, Some(uid));
+                    }
+                } else {
+                    return (false, None);
+                }
+            }
+        }
+        (false, None)
     }
 }

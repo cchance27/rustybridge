@@ -12,7 +12,7 @@ pub struct UserInfo {
 
 /// Enhanced user info with group memberships.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct UserGroupInfo {
+pub struct UserGroupInfo<'a> {
     pub id: i64,
     /// Username.
     pub username: String,
@@ -21,7 +21,7 @@ pub struct UserGroupInfo {
     /// Relays the user can access (with access source).
     pub relays: Vec<UserRelayAccess>,
     /// Claims granted to the user.
-    pub claims: Vec<ClaimType>,
+    pub claims: Vec<ClaimType<'a>>,
     /// Number of SSH public keys.
     pub ssh_key_count: i64,
     /// List of role names assigned to the user.
@@ -30,7 +30,7 @@ pub struct UserGroupInfo {
 
 /// Group info with statistics.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct GroupInfo {
+pub struct GroupInfo<'a> {
     /// Group ID.
     pub id: i64,
     /// Group name.
@@ -44,14 +44,14 @@ pub struct GroupInfo {
     /// Relay names (host:port) this group can access.
     pub relays: Vec<String>,
     /// Claims granted to the group.
-    pub claims: Vec<ClaimType>,
+    pub claims: Vec<ClaimType<'a>>,
     /// List of role names assigned to the group.
     pub roles: Vec<String>,
 }
 
 /// Role info with statistics.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct RoleInfo {
+pub struct RoleInfo<'a> {
     /// Role ID.
     pub id: i64,
     /// Role name.
@@ -67,7 +67,7 @@ pub struct RoleInfo {
     /// Group names with this role.
     pub groups: Vec<String>,
     /// Claims granted by the role.
-    pub claims: Vec<ClaimType>,
+    pub claims: Vec<ClaimType<'a>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

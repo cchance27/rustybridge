@@ -38,13 +38,13 @@ use crate::app::auth::hooks::{use_auth, use_has_all_claims, use_has_any_claim, u
 #[component]
 pub fn Protected(
     /// Single claim required (mutually exclusive with any_claims/all_claims)
-    claim: Option<ClaimType>,
+    claim: Option<ClaimType<'static>>,
 
     /// Any of these claims required (mutually exclusive with claim/all_claims)
-    any_claims: Option<Vec<ClaimType>>,
+    any_claims: Option<Vec<ClaimType<'static>>>,
 
     /// All of these claims required (mutually exclusive with claim/any_claims)
-    all_claims: Option<Vec<ClaimType>>,
+    all_claims: Option<Vec<ClaimType<'static>>>,
 
     /// Content to show when user doesn't have required claims
     fallback: Option<Element>,

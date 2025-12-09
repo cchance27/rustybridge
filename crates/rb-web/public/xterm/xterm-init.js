@@ -1,52 +1,22 @@
-window.initRustyBridgeTerminal = async function (terminalId, options) {
-    async function loadScript(src) {
-        {
-            if (document.querySelector(`script[src="${src}"]`)) return;
-            return new Promise((resolve, reject) => {
-                {
-                    const script = document.createElement('script');
-                    script.src = src;
-                    script.onload = resolve;
-                    script.onerror = reject;
-                    document.head.appendChild(script);
-                }
-            });
-        }
-    }
 
-    async function loadCss(href) {
-        {
-            if (document.querySelector(`link[href="${href}"]`)) return;
-            const link = document.createElement('link');
-            link.rel = 'stylesheet';
-            link.href = href;
-            document.head.appendChild(link);
-        }
-    }
+// Initialize globals
+window.terminals = window.terminals || {};
 
+// Debounce helper to prevent spamming
+window.debounce = (func, wait) => {
+    let timeout;
+    return function (...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func.apply(this, args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+};
+
+window.initRustyBridgeTerminal = async (terminalId, options) => {
     try {
-        await loadCss('/xterm/xterm.css');
-
-        if (!window.Terminal) {
-            await loadScript('/xterm/xterm.js');
-            console.log("Loaded xterm")
-        }
-
-        if (options.fit && !window.FitAddon) {
-            await loadScript('/xterm/addon-fit.js');
-            console.log("Loaded fit addon")
-        }
-
-        if (options.web_links && !window.WebLinksAddon) {
-            await loadScript('/xterm/addon-web-links.js');
-            console.log("Loaded web links addon")
-        }
-
-        if (options.webgl && !window.WebglAddon) {
-            await loadScript('/xterm/addon-webgl.js');
-            console.log("Loaded webgl addon")
-        }
-
         const container = document.getElementById(terminalId);
         if (!container) {
             console.error('Terminal container not found:', terminalId);
@@ -58,7 +28,7 @@ window.initRustyBridgeTerminal = async function (terminalId, options) {
 
         container.innerHTML = '';
 
-        const term = new window.Terminal({
+        const termOptions = {
             cursorBlink: true,
             convertEol: true,
             fontFamily: 'Menlo, Monaco, "Courier New", monospace',
@@ -66,8 +36,19 @@ window.initRustyBridgeTerminal = async function (terminalId, options) {
             theme: {
                 background: '#1e1e1e',
                 foreground: '#ffffff',
-            }
-        });
+            },
+        };
+
+        // If explicit cols/rows were provided (e.g. from a recording),
+        // include them; otherwise let xterm use its defaults.
+        if (options && typeof options.cols === 'number' && options.cols > 0) {
+            termOptions.cols = options.cols;
+        }
+        if (options && typeof options.rows === 'number' && options.rows > 0) {
+            termOptions.rows = options.rows;
+        }
+
+        const term = new window.Terminal(termOptions);
 
         let fitAddon = null;
         if (options.fit && window.FitAddon) {
@@ -89,170 +70,177 @@ window.initRustyBridgeTerminal = async function (terminalId, options) {
 
         term.open(container);
 
+        // If explicit cols/rows were provided and fit is disabled,
+        // size the container based on the actual cell dimensions so
+        // the terminal geometry matches the recording instead of the layout.
+        if (options && typeof options.cols === 'number' && typeof options.rows === 'number' && !options.fit) {
+            const setSize = () => {
+                try {
+                    const core = term._core;
+                    const dims = core?._renderService?._dimensions;
+                    if (dims?.actualCellWidth && dims.actualCellHeight) {
+                        const width = dims.actualCellWidth * options.cols;
+                        const height = dims.actualCellHeight * options.rows;
+                        container.style.width = `${width}px`;
+                        container.style.height = `${height}px`;
+                        container.style.display = 'block';
+                        return true;
+                    }
+                } catch (e) {
+                    console.warn('Failed to apply fixed terminal size from recording:', e);
+                }
+                return false;
+            };
+
+            // Try immediately and then retry for a short period if needed
+            if (!setSize()) {
+                let attempts = 0;
+                const interval = setInterval(() => {
+                    attempts++;
+                    if (setSize() || attempts > 20) { // Retry for up to ~400ms
+                        clearInterval(interval);
+                    }
+                }, 20);
+            }
+        }
+
         if (fitAddon) {
             fitAddon.fit();
 
             // Use ResizeObserver to handle container resizing
-            const resizeObserver = new ResizeObserver(() => {
-                try {
-                    console.log('ResizeObserver fitting terminal...');
-                    fitAddon.fit();
-                } catch (e) {
-                    console.warn('ResizeObserver failed to fit terminal:', e);
+            const debouncedFit = window.debounce(() => {
+                // Only fit if the container is visible and has dimensions
+                if (container.clientWidth > 0 && container.clientHeight > 0) {
+                    try {
+                        console.log('ResizeObserver fitting terminal...');
+                        fitAddon.fit();
+                    } catch (e) {
+                        console.warn('ResizeObserver failed to fit terminal:', e);
+                    }
                 }
+            }, 250); // 250ms debounce for layout fitting
+
+            const resizeObserver = new ResizeObserver(() => {
+                debouncedFit();
             });
             resizeObserver.observe(container);
 
-            // Store observer to disconnect later if needed (though we don't have a cleanup hook here yet)
-            // For now, this is attached to the DOM element's lifetime effectively
+            // Store fitAddon on the terminal instance so we can access it later
+            term._fitAddon = fitAddon;
         }
 
-        window.terminals = window.terminals || {};
         window.terminals[terminalId] = term;
 
-        // term.onData handler removed to prevent double echo when AttachAddon is active.
-        // The AttachAddon will handle input sending to the server.
-
-        term.write('Welcome to RustyBridge Terminal\r\n');
-        term.write('Type something to test echo...\r\n');
-
+        term.write('Loading Session...\r\n');
         console.log('Terminal initialized successfully:', terminalId);
     } catch (err) {
         console.error('Failed to initialize terminal:', err);
     }
 }
 
-// Function to attach a WebSocket to a terminal for SSH connections
-// connectToken is used to prevent stale async tasks from overwriting newer selections
-window.attachWebSocketToTerminal = async function (terminalId, websocketUrl, connectToken, onClose) {
-    try {
-        const term = window.terminals[terminalId];
-        if (!term) {
-            console.error('Terminal not found:', terminalId);
-            return null;
-        }
-
-        const isStale = () => term.activeSshToken !== connectToken;
-
-        console.log('[rb-web] attach called', { terminalId, websocketUrl, connectToken, active: term.activeSshToken });
-
-        // Create WebSocket connection
-        console.log('[rb-web] creating WebSocket', websocketUrl);
-        const socket = new WebSocket(websocketUrl);
-
-        // Wait for the socket to open before attaching, with a timeout so we don't hang forever
-        await new Promise((resolve, reject) => {
-            const timeoutMs = 8000;
-            const timeout = setTimeout(() => {
-                if (!isStale()) {
-                    console.warn('WebSocket open timed out, closing socket');
-                }
-                socket.close();
-                reject(new Error('WebSocket open timed out'));
-            }, timeoutMs);
-
-            socket.onopen = () => {
-                clearTimeout(timeout);
-                if (isStale()) {
-                    console.log('[rb-web] socket open but stale token, closing');
-                    socket.close();
-                    return;
-                }
-                console.log('WebSocket connected for terminal:', terminalId);
-                term.write('\r\n\x1b[32mConnected to SSH session\x1b[0m\r\n');
-                resolve();
-            };
-
-            socket.onerror = (error) => {
-                clearTimeout(timeout);
-                if (isStale()) {
-                    console.log('[rb-web] socket error but stale token, closing');
-                    socket.close();
-                    return;
-                }
-                console.error('WebSocket error:', error);
-                term.write('\r\n\x1b[31mWebSocket connection error\x1b[0m\r\n');
-                reject(error);
-            };
-
-            socket.onclose = (event) => {
-                clearTimeout(timeout);
-                if (isStale()) {
-                    console.log('[rb-web] socket close but stale token');
-                    return;
-                }
-                if (event.code !== 1000) {
-                    console.warn('WebSocket closed before open/attach:', event.code, event.reason);
-                    reject(new Error('WebSocket closed during connect'));
-                }
-            };
-        });
-
-        socket.onclose = () => {
-            if (isStale()) {
-                return;
-            }
-            console.log('WebSocket closed for terminal:', terminalId);
-            term.write('\r\n\x1b[33mConnection closed\x1b[0m\r\n');
-            // Notify Rust side that connection closed
-            if (onClose) {
-                onClose();
-            }
-        };
-
-        // Load attach addon if not already loaded
-        if (!window.AttachAddon) {
-            await loadScript('/xterm/addon-attach.js');
-            console.log("Loaded attach addon");
-        }
-
-        if (isStale()) {
-            socket.close();
-            return null;
-        }
-
-        // Attach the WebSocket to the terminal (socket is now open)
-        const attachAddon = new window.AttachAddon.AttachAddon(socket);
-        term.loadAddon(attachAddon);
-
-        // Disable local echo - the SSH server will echo back
-        term.options.disableStdin = false; // Keep stdin enabled
-
-        // Clear the welcome message
-        term.clear();
-
-        if (isStale()) {
-            attachAddon.dispose();
-            socket.close();
-            return null;
-        }
-
-        return {
-            socket: socket,
-            addon: attachAddon,
-            disconnect: () => {
-                attachAddon.dispose();
-                socket.close();
-            }
-        };
-    } catch (err) {
-        console.error('Failed to attach WebSocket:', err);
-        const term = window.terminals[terminalId];
-        if (term) {
-            term.write('\r\n\x1b[31mFailed to connect: ' + err.message + '\x1b[0m\r\n');
-        }
-        return null;
+// Function to write data to a terminal (called from Rust)
+window.writeToTerminal = (terminalId, data) => {
+    const term = window.terminals[terminalId];
+    if (!term) {
+        console.warn(`writeToTerminal: Terminal ${terminalId} not found`);
+        return false;
     }
-}
 
-// Helper function for loadScript (needs to be accessible)
-async function loadScript(src) {
-    if (document.querySelector(`script[src="${src}"]`)) return;
-    return new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = src;
-        script.onload = resolve;
-        script.onerror = reject;
-        document.head.appendChild(script);
-    });
-}
+    // Handle string input
+    if (typeof data === 'string') {
+        term.write(data);
+        return true;
+    }
+
+    if (data instanceof Uint8Array) {
+        window._rbTextDecoder = window._rbTextDecoder || new TextDecoder('utf-8', { fatal: false });
+        const decoded = window._rbTextDecoder.decode(data);
+        term.write(decoded);
+        return true;
+    }
+
+    // Fallback for plain arrays or unexpected types
+    if (Array.isArray(data)) {
+        window._rbTextDecoder = window._rbTextDecoder || new TextDecoder('utf-8', { fatal: false });
+        const decoded = window._rbTextDecoder.decode(new Uint8Array(data));
+        term.write(decoded);
+        return true;
+    }
+
+    term.write(data);
+    return true;
+};
+
+// Function to setup input handling to send data back to Rust
+window.setupTerminalInput = (terminalId, onDataCallback) => {
+    const term = window.terminals[terminalId];
+    if (term) {
+        if (term._inputDisposable) {
+            term._inputDisposable.dispose();
+        }
+        term._inputDisposable = term.onData(data => {
+            // Convert string to Uint8Array for consistency with Rust Vec<u8>
+            const encoder = new TextEncoder();
+            const bytes = encoder.encode(data);
+            onDataCallback(Array.from(bytes));
+        });
+        return true;
+    }
+
+    console.warn(`setupTerminalInput: Terminal ${terminalId} not found`);
+    return false;
+};
+
+window.focusTerminal = (terminalId) => {
+    const term = window.terminals[terminalId];
+    if (term) {
+        term.focus();
+    } else {
+        console.warn(`focusTerminal: Terminal ${terminalId} not found`);
+    }
+};
+
+window.fitTerminal = (terminalId) => {
+    const term = window.terminals[terminalId];
+    if (term?._fitAddon) {
+        try {
+            term._fitAddon.fit();
+        } catch (e) {
+            console.warn(`fitTerminal: Failed to fit terminal ${terminalId}`, e);
+        }
+    }
+};
+
+// Function to get current terminal dimensions
+window.getTerminalDimensions = (terminalId) => {
+    const term = window.terminals[terminalId];
+    if (term) {
+        return {
+            cols: term.cols,
+            rows: term.rows
+        };
+    }
+    return null;
+};
+
+// Function to setup resize handling to send dimensions back to Rust
+window.setupTerminalResize = (terminalId, onResizeCallback) => {
+    const term = window.terminals[terminalId];
+    if (term) {
+        if (term._resizeDisposable) {
+            term._resizeDisposable.dispose();
+        }
+
+        // Debounce resize events by 250
+        const debouncedResize = window.debounce((size) => {
+            onResizeCallback({ cols: size.cols, rows: size.rows });
+        }, 250);
+
+        term._resizeDisposable = term.onResize(debouncedResize);
+        console.log(`Resize handling setup for terminal ${terminalId} (debounced)`);
+        return true;
+    }
+
+    console.warn(`setupTerminalResize: Terminal ${terminalId} not found`);
+    return false;
+};

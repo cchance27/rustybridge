@@ -40,12 +40,13 @@ impl ServerHandler {
                 let tx = self.action_tx.clone();
                 let name_clone = name.clone();
                 let server_handle = session.handle();
+                let ctx = self.ssh_audit_context();
                 tokio::spawn(async move {
                     let action = AppAction::FetchHostkey {
                         id,
                         name: name_clone.clone(),
                     };
-                    match crate::handle_management_action(action).await {
+                    match crate::handle_management_action(&ctx, action).await {
                         Ok(Some(res_action)) => {
                             let _ = tx.send(res_action);
                         }
@@ -78,7 +79,8 @@ impl ServerHandler {
                     AppAction::AddCredential(_) | AppAction::DeleteCredential(_) => 1,
                     _ => 0,
                 };
-                match crate::handle_management_action(cloned.clone()).await {
+                let ctx = self.ssh_audit_context();
+                match crate::handle_management_action(&ctx, cloned.clone()).await {
                     Ok(_) => {
                         // Reload Management app with fresh data and redraw.
                         self.reload_management_app(session, channel, tab, None).await?;

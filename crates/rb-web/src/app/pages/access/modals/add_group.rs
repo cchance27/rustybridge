@@ -4,18 +4,15 @@ use dioxus::prelude::*;
 use rb_types::users::GroupInfo;
 
 use crate::{
-    app::api::groups::create_group, components::{Modal, ToastMessage, ToastType}
+    app::api::groups::create_group, components::{Modal, use_toast}
 };
 
 /// Self-contained Add Group Modal
 #[component]
-pub fn AddGroupModal(
-    open: Signal<bool>,
-    groups: Resource<Result<Vec<GroupInfo>, ServerFnError>>,
-    toast: Signal<Option<ToastMessage>>,
-) -> Element {
+pub fn AddGroupModal(open: Signal<bool>, groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>) -> Element {
     let mut group_name = use_signal(String::new);
     let mut validation_errors = use_signal(HashMap::<String, String>::new);
+    let toast = use_toast();
 
     let on_save = move |_| {
         validation_errors.set(HashMap::new());
@@ -37,17 +34,11 @@ pub fn AddGroupModal(
                 Ok(_) => {
                     open.set(false);
                     group_name.set(String::new());
-                    toast.set(Some(ToastMessage {
-                        message: format!("Group '{}' created successfully", name_val),
-                        toast_type: ToastType::Success,
-                    }));
+                    toast.success(&format!("Group '{}' created successfully", name_val));
                     groups.restart();
                 }
                 Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to create group: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Failed to create group: {}", e));
                 }
             }
         });

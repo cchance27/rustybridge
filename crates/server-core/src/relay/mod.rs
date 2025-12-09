@@ -16,7 +16,7 @@ pub mod handler;
 
 // Re-export main types and functions for backwards compatibility
 pub use auth::{authenticate_relay_session, prompt_for_input};
-pub use connection::{RelayHandle, connect_to_relay_channel, connect_to_relay_local, start_bridge};
+pub use connection::{RelayHandle, connect_to_relay_backend, connect_to_relay_channel, connect_to_relay_local, start_bridge_backend};
 pub use credential::{ResolvedCredential, fetch_and_resolve_credential};
 pub use handler::{SharedRelayHandler, WarningCallback};
 

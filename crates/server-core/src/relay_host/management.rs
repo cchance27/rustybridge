@@ -50,15 +50,132 @@ pub fn hostkey_fetch_timeout() -> ServerResult<Duration> {
     }
 }
 
-pub async fn add_relay_host(endpoint: &str, name: &str) -> ServerResult<()> {
-    add_relay_host_inner(endpoint, name, true).await
+/// Update a relay host's name or endpoint, tracking full context.
+pub async fn update_relay_host_by_id(
+    ctx: &rb_types::audit::AuditContext,
+    host_id: i64,
+    new_name: &str,
+    ip: &str,
+    port: i64,
+) -> ServerResult<()> {
+    let db = state_store::server_db().await?;
+    let pool = db.into_pool();
+
+    let mut tx = pool.begin().await.map_err(ServerError::Database)?;
+
+    // Fetch current values for audit logging
+    let current = state_store::fetch_relay_host_by_id(&mut *tx, host_id)
+        .await?
+        .ok_or_else(|| ServerError::not_found("relay host", host_id.to_string()))?;
+
+    state_store::update_relay_host(&mut *tx, host_id, new_name, ip, port).await?;
+
+    tx.commit().await.map_err(ServerError::Database)?;
+
+    info!(relay_host_id = host_id, context = %ctx, "relay host updated");
+
+    // Log audit event
+    crate::audit!(
+        ctx,
+        RelayHostUpdated {
+            relay_id: host_id,
+            old_name: current.name,
+            new_name: new_name.to_string(),
+            old_endpoint: format!("{}:{}", current.ip, current.port),
+            new_endpoint: format!("{}:{}", ip, port),
+        }
+    );
+
+    Ok(())
 }
 
-/// Add a relay host without performing an immediate hostkey fetch/prompt.
+/// Store a relay host key (OpenSSH pem) with audit logging.
+pub async fn store_relay_hostkey_by_id(ctx: &rb_types::audit::AuditContext, host_id: i64, key_pem: String) -> ServerResult<()> {
+    let db = state_store::server_db().await?;
+    let pool = db.into_pool();
+
+    // Check if an existing hostkey is present to determine event type
+    let had_existing =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM relay_host_options WHERE relay_host_id = ? AND key = 'hostkey.openssh'")
+            .bind(host_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0)
+            > 0;
+
+    // Use option helper to benefit from encryption + logging
+    crate::relay_host::options::set_relay_option_by_id(ctx, host_id, "hostkey.openssh", &key_pem, true).await?;
+
+    // Parse key for fingerprint/type
+    let parsed = russh::keys::PublicKey::from_openssh(&key_pem).ok();
+    if let Some(pk) = parsed {
+        let fp = pk.fingerprint(russh::keys::HashAlg::Sha256).to_string();
+        let key_type = key_pem.split_whitespace().next().unwrap_or("").to_string();
+        if let Some(host) = state_store::fetch_relay_host_by_id(&pool, host_id).await? {
+            let event = if had_existing {
+                rb_types::audit::EventType::RelayHostKeyRefreshed {
+                    name: host.name,
+                    relay_id: host_id,
+                }
+            } else {
+                rb_types::audit::EventType::RelayHostKeyCaptured {
+                    name: host.name,
+                    relay_id: host_id,
+                    key_type,
+                    fingerprint: fp,
+                }
+            };
+            crate::audit::log_event_from_context_best_effort(ctx, event).await;
+        }
+    }
+    Ok(())
+}
+
+/// Add a relay host, tracking the full context of who performed the action.
+///
+/// # Examples
+///
+/// ```ignore
+/// let ctx = AuditContext::web(user_id, username, ip_address, session_id);
+/// add_relay_host(&ctx, "10.0.0.5:22", "production-1").await?;
+/// ```
+pub async fn add_relay_host(ctx: &rb_types::audit::AuditContext, endpoint: &str, name: &str) -> ServerResult<()> {
+    let result = add_relay_host_inner(endpoint, name, true).await;
+
+    if result.is_ok() {
+        // Log audit event with full context
+        crate::audit::log_event_from_context_best_effort(
+            ctx,
+            rb_types::audit::EventType::RelayHostCreated {
+                name: name.to_string(),
+                endpoint: endpoint.to_string(),
+            },
+        )
+        .await;
+    }
+
+    result
+}
+
+/// Add a relay host without performing an immediate hostkey fetch/prompt, tracking the full context.
 /// This is used by rb-web, which presents a non-interactive hostkey review modal
 /// after the host is created.
-pub async fn add_relay_host_without_hostkey(endpoint: &str, name: &str) -> ServerResult<()> {
-    add_relay_host_inner(endpoint, name, false).await
+pub async fn add_relay_host_without_hostkey(ctx: &rb_types::audit::AuditContext, endpoint: &str, name: &str) -> ServerResult<()> {
+    let result = add_relay_host_inner(endpoint, name, false).await;
+
+    if result.is_ok() {
+        // Log audit event with full context
+        crate::audit::log_event_from_context_best_effort(
+            ctx,
+            rb_types::audit::EventType::RelayHostCreated {
+                name: name.to_string(),
+                endpoint: endpoint.to_string(),
+            },
+        )
+        .await;
+    }
+
+    result
 }
 
 async fn add_relay_host_inner(endpoint: &str, name: &str, fetch_hostkey: bool) -> ServerResult<()> {
@@ -164,11 +281,81 @@ pub async fn list_hosts() -> ServerResult<Vec<RelayInfo>> {
     Ok(hosts)
 }
 
-pub async fn delete_relay_host_by_id(id: i64) -> ServerResult<()> {
+/// Summarize relay auth labels and hostkey presence for UI display.
+///
+/// Returns (host_id -> auth label, host_id -> has_hostkey).
+pub async fn summarize_relay_auth() -> ServerResult<(std::collections::HashMap<i64, String>, std::collections::HashMap<i64, bool>)> {
     let db = state_store::server_db().await?;
     let pool = db.into_pool();
+
+    let hosts = state_store::list_relay_hosts(&pool, None).await?;
+    let mut labels = std::collections::HashMap::new();
+    let mut hostkeys = std::collections::HashMap::new();
+
+    for host in hosts {
+        let opts = state_store::fetch_relay_host_options(&pool, host.id).await?;
+
+        // hostkey presence
+        hostkeys.insert(host.id, opts.contains_key("hostkey.openssh"));
+
+        // auth label
+        let label = if let Some((source, _secure)) = opts.get("auth.source") {
+            if source == "credential" {
+                if let Some((id_raw, _)) = opts.get("auth.id") {
+                    if let Ok(cid) = id_raw.parse::<i64>() {
+                        // We don't need the credential name here; just mark as credential
+                        format!("credential:{}", cid)
+                    } else {
+                        "credential".to_string()
+                    }
+                } else {
+                    "credential".to_string()
+                }
+            } else {
+                "custom".to_string()
+            }
+        } else if opts.contains_key("auth.identity") || opts.contains_key("auth.password") {
+            "custom".to_string()
+        } else {
+            "none".to_string()
+        };
+
+        labels.insert(host.id, label);
+    }
+
+    Ok((labels, hostkeys))
+}
+
+/// Delete a relay host by ID, tracking the full context of who performed the action.
+///
+/// # Examples
+///
+/// ```ignore
+/// let ctx = AuditContext::web(user_id, username, ip_address, session_id);
+/// delete_relay_host_by_id(&ctx, relay_id).await?;
+/// ```
+pub async fn delete_relay_host_by_id(ctx: &rb_types::audit::AuditContext, id: i64) -> ServerResult<()> {
+    let db = state_store::server_db().await?;
+    let pool = db.into_pool();
+
+    // Fetch relay info before deletion for audit log
+    let relay_info = state_store::fetch_relay_host_by_id(&pool, id).await?;
+
     sqlx::query("DELETE FROM relay_hosts WHERE id = ?").bind(id).execute(&pool).await?;
-    info!(relay_host_id = id, "relay host deleted");
+    info!(relay_host_id = id, context = %ctx, "relay host deleted");
+
+    // Log audit event
+    if let Some(relay) = relay_info {
+        crate::audit!(
+            ctx,
+            RelayHostDeleted {
+                name: relay.name.clone(),
+                relay_id: id,
+                endpoint: format!("{}:{}", relay.ip, relay.port),
+            }
+        );
+    }
+
     Ok(())
 }
 

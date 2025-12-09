@@ -3,12 +3,13 @@ use dioxus::prelude::*;
 use crate::{
     app::{
         api::relays::{clear_relay_auth, clear_relay_credential}, pages::relays::state::RelayState
-    }, components::{Modal, ToastMessage, ToastType}
+    }, components::{Modal, use_toast}
 };
 
 /// Modal for clearing authentication from a relay
 #[component]
 pub fn ClearCredentialModal(state: RelayState) -> Element {
+    let toast = use_toast();
     let on_clear = move |_| {
         let target_id = (state.clear_target_id)();
         let target_name = (state.clear_target_name)();
@@ -22,18 +23,12 @@ pub fn ClearCredentialModal(state: RelayState) -> Element {
             match res {
                 Ok(_) => {
                     state.clear_modal_open.set(false);
-                    state.toast.set(Some(ToastMessage {
-                        message: format!("Authentication cleared from '{}' successfully", target_name),
-                        toast_type: ToastType::Success,
-                    }));
+                    toast.success(&format!("Authentication cleared from '{}' successfully", target_name));
                     state.relays.restart();
                 }
                 Err(e) => {
                     state.clear_modal_open.set(false);
-                    state.toast.set(Some(ToastMessage {
-                        message: format!("Failed to clear credential: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Failed to clear credential: {}", e));
                 }
             }
         });

@@ -8,12 +8,13 @@ use rb_types::{
 use crate::{
     app::{
         api::relays::{assign_relay_credential, set_custom_auth}, pages::relays::state::RelayState
-    }, components::{CredentialForm, Modal, ToastMessage, ToastType}
+    }, components::{CredentialForm, Modal, use_toast}
 };
 
 /// Modal for assigning authentication to a relay
 #[component]
 pub fn AssignCredentialModal(state: RelayState) -> Element {
+    let toast = use_toast();
     let on_save = move |_| {
         let target_id = (state.assign_target_id)();
         let target_name = (state.assign_target_name)();
@@ -106,18 +107,12 @@ pub fn AssignCredentialModal(state: RelayState) -> Element {
             match result {
                 Ok(_) => {
                     state.assign_modal_open.set(false);
-                    state.toast.set(Some(ToastMessage {
-                        message: format!("Authentication assigned to '{}' successfully", target_name),
-                        toast_type: ToastType::Success,
-                    }));
+                    toast.success(&format!("Authentication assigned to '{}' successfully", target_name));
                     state.relays.restart();
                 }
                 Err(e) => {
                     state.assign_modal_open.set(false);
-                    state.toast.set(Some(ToastMessage {
-                        message: format!("Failed to assign credential: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Failed to assign credential: {}", e));
                 }
             }
         });

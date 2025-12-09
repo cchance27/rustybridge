@@ -17,11 +17,13 @@ async fn rotation_handles_whitespace_in_inputs() -> Result<()> {
     state_store::migrate_server(&handle).await?;
     let pool = handle.into_pool();
 
+    let ctx = rb_types::audit::AuditContext::server_cli(None, "test-host");
+
     // Create a credential
     sqlx::query("INSERT INTO relay_hosts (name, ip, port) VALUES ('h1', '127.0.0.1', 22)")
         .execute(&pool)
         .await?;
-    let _cred = server_core::create_password_credential("cred1", Some("user"), "password123", "fixed", true).await?;
+    let _cred = server_core::create_password_credential(&ctx, "cred1", Some("user"), "password123", "fixed", true).await?;
 
     // Rotate with whitespace in both old and new inputs (should be trimmed)
     server_core::rotate_secrets_key("  test-secret\n", "\tnew-secret  ").await?;

@@ -4,19 +4,16 @@ use dioxus::prelude::*;
 use rb_types::users::{CreateUserRequest, UserGroupInfo};
 
 use crate::{
-    app::api::users::create_user, components::{Modal, ToastMessage, ToastType}
+    app::api::users::create_user, components::{Modal, use_toast}
 };
 
 /// Self-contained Add User Modal
 #[component]
-pub fn AddUserModal(
-    open: Signal<bool>,
-    users: Resource<Result<Vec<UserGroupInfo>, ServerFnError>>,
-    toast: Signal<Option<ToastMessage>>,
-) -> Element {
+pub fn AddUserModal(open: Signal<bool>, users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>) -> Element {
     let mut username = use_signal(String::new);
     let mut password = use_signal(String::new);
     let mut validation_errors = use_signal(HashMap::<String, String>::new);
+    let toast = use_toast();
 
     let on_save = move |_| {
         validation_errors.set(HashMap::new());
@@ -51,17 +48,11 @@ pub fn AddUserModal(
                     open.set(false);
                     username.set(String::new());
                     password.set(String::new());
-                    toast.set(Some(ToastMessage {
-                        message: format!("User '{}' created successfully", username_val),
-                        toast_type: ToastType::Success,
-                    }));
+                    toast.success(&format!("User '{}' created successfully", username_val));
                     users.restart();
                 }
                 Err(e) => {
-                    toast.set(Some(ToastMessage {
-                        message: format!("Failed to create user: {}", e),
-                        toast_type: ToastType::Error,
-                    }));
+                    toast.error(&format!("Failed to create user: {}", e));
                 }
             }
         });

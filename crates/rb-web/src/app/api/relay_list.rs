@@ -9,23 +9,26 @@ use crate::server::auth::guards::{WebAuthSession, ensure_authenticated};
 #[get(
     "/api/relays/list",
     auth: WebAuthSession,
-    pool: axum::Extension<sqlx::SqlitePool>
 )]
 pub async fn list_user_relays() -> Result<Vec<RelayInfo>> {
     // NOTE: We don't restrict this to relays:view claim because that claim
     // is to view ALL Relays for management not for connections.
     let user = ensure_authenticated(&auth)?;
 
-    use state_store::list_relay_hosts;
-    let relays = list_relay_hosts(&*pool, Some(user.id)).await.context("Failed to list relays")?;
+    let mut relays = Vec::new();
+    for r in server_core::api::list_relay_hosts_with_details()
+        .await
+        .context("Failed to list relays")?
+    {
+        if server_core::api::user_has_relay_access(user.id, r.id).await.unwrap_or(false) {
+            relays.push(RelayInfo {
+                id: r.id,
+                name: r.name,
+                ip: r.ip,
+                port: r.port,
+            });
+        }
+    }
 
-    Ok(relays
-        .into_iter()
-        .map(|r| RelayInfo {
-            id: r.id,
-            name: r.name,
-            ip: r.ip,
-            port: r.port,
-        })
-        .collect())
+    Ok(relays)
 }

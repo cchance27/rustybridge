@@ -1,7 +1,8 @@
 use dioxus::prelude::*;
+use rb_types::users::{GroupInfo, UserGroupInfo};
 
 use crate::{
-    app::api::groups::{add_member_to_group, remove_member_from_group}, components::{Modal, ToastMessage, ToastType}
+    app::api::groups::{add_member_to_group, remove_member_from_group}, components::{Modal, use_toast}
 };
 
 /// User Groups Management Modal
@@ -13,10 +14,10 @@ pub fn ManageUserGroupsModal(
     user_groups: Signal<Vec<String>>,
     available_groups: Signal<Vec<String>>,
     selected_group_to_add: Signal<String>,
-    users: Resource<Result<Vec<rb_types::users::UserGroupInfo>, ServerFnError>>,
-    groups: Resource<Result<Vec<rb_types::users::GroupInfo>, ServerFnError>>,
-    toast: Signal<Option<ToastMessage>>,
+    users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>,
+    groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>,
 ) -> Element {
+    let toast = use_toast();
     let add_group_handler = move |_| {
         let user_name = username();
         let group_name = selected_group_to_add();
@@ -45,20 +46,14 @@ pub fn ManageUserGroupsModal(
 
                         selected_group_to_add.set(String::new());
 
-                        toast.set(Some(ToastMessage {
-                            message: format!("Added user '{}' to group '{}'", user_name, group_name),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("Added user '{}' to group '{}'", user_name, group_name));
 
                         // Refresh resources
                         users.restart();
                         groups.restart();
                     }
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to add user to group: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to add user to group: {}", e));
                     }
                 }
             }
@@ -91,19 +86,13 @@ pub fn ManageUserGroupsModal(
                             available_groups.set(available);
                         }
 
-                        toast.set(Some(ToastMessage {
-                            message: format!("Removed user '{}' from group '{}'", user_name, group_name),
-                            toast_type: ToastType::Success,
-                        }));
+                        toast.success(&format!("Removed user '{}' from group '{}'", user_name, group_name));
 
                         users.restart();
                         groups.restart();
                     }
                     Err(e) => {
-                        toast.set(Some(ToastMessage {
-                            message: format!("Failed to remove user from group: {}", e),
-                            toast_type: ToastType::Error,
-                        }));
+                        toast.error(&format!("Failed to remove user from group: {}", e));
                     }
                 }
             }
