@@ -298,7 +298,7 @@ async fn handle_reattach(
     let username_for_audit = admin_username.clone().unwrap_or_else(|| session.username.clone());
     let audit_ctx = AuditContext::web(
         user_id_for_audit,
-        session.username.clone(),
+        username_for_audit.clone(),
         ip_address.clone().unwrap_or_else(|| "web".to_string()),
         connection_id.clone(),
         axum_session_id.clone(),
@@ -454,12 +454,14 @@ async fn handle_reattach(
                                 SshControl::Close => {
                                     // User explicitly closed the shell
                                     explicit_close = true;
-                                    // Close backend for everyone and remove the session
-                                    let _ = backend.close().await;
-                                    session.close().await;
-                                    registry
-                                        .remove_session(session.user_id, session.relay_id, session.session_number)
-                                        .await;
+                                    // Close backend for everyone and remove the session ONLY if not an admin viewer
+                                    if !is_admin_viewer {
+                                        let _ = backend.close().await;
+                                        session.close().await;
+                                        registry
+                                            .remove_session(session.user_id, session.relay_id, session.session_number)
+                                            .await;
+                                    }
                                     break;
                                 }
                                 SshControl::Resize { cols, rows } => {

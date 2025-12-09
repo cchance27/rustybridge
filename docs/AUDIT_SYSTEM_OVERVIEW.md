@@ -164,7 +164,7 @@ From `server-core/src/handler/session.rs` and relay bridge:
 From `crates/rb-web/src/app/api/ws/ssh.rs`:
 
 - On new web session:
-  - `SessionStarted { session_id: ws_conn_{user_id}, relay_name, relay_id, username }`
+  - `SessionStarted { session_id, relay_name, relay_id, username }`
   - `SessionRelayConnected { session_id, relay_id, relay_name, username }`
 - On attach/reattach via WebSocket:
   - `SessionRelayConnected { session_id, relay_id, relay_name, username }`
