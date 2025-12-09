@@ -157,6 +157,10 @@ pub async fn list_audit_events(query: ListEventsQuery) -> Result<PagedEvents> {
         filter.session_id = Some(session_id.clone());
     }
 
+    if let Some(ref parent_session_id) = query.parent_session_id {
+        filter.parent_session_id = Some(parent_session_id.clone());
+    }
+
     if let Some(start) = query.start_time {
         filter.start_time = Some(start);
     }
