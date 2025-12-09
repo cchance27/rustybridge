@@ -116,7 +116,9 @@ pub async fn list_my_sessions() -> Result<Vec<UserSessionSummary>, ServerFnError
 pub async fn close_session(user_id: i64, relay_id: i64, session_number: u32) -> Result<(), ServerFnError> {
     let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    // Check if user is closing their own session or has server:edit claim
+    // Check if user is closing their own session or has AttachAny claim, for now we're using this
+    // claim as super high level claim, but we should likely have more granular claims.
+    // TODO: add more granular claim for server:attach_any, server:force_close etc.
     if user.id != user_id {
         use rb_types::auth::ATTACH_ANY_CLAIM;
 
