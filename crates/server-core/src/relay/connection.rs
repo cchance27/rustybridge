@@ -7,12 +7,10 @@ use std::{collections::HashMap, sync::Arc};
 use rb_types::{
     auth::AuthPromptEvent, relay::RelayInfo, ssh::{ForwardingConfig, NewlineMode}
 };
-use russh::{ChannelMsg, CryptoVec, client};
+use russh::{ChannelMsg, client};
 use secrecy::ExposeSecret;
 use ssh_core::{crypto::default_preferred, forwarding::ForwardingManager, session::run_shell};
-use tokio::sync::{
-    mpsc::{self, UnboundedReceiver, UnboundedSender}, watch
-};
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tracing::{info, warn};
 
 use super::{auth::authenticate_relay_session, credential::fetch_and_resolve_credential, handler::SharedRelayHandler};
@@ -295,153 +293,6 @@ pub async fn connect_to_relay_backend(
     };
 
     start_bridge_backend(&relay_info, base_username, term_size, &options, prompt_tx, auth_rx).await
-}
-
-/// Start an outbound SSH session to the relay host and bridge IO between the remote channel and the inbound client channel.
-///
-/// - `server_handle` is used to send data back to the inbound client channel.
-/// - `client_channel` is the inbound channel id on the embedded server.
-/// - `pty_size_rx` emits window-size updates to propagate to the relay session.
-/// - `options` is a key-value map from `relay_host_options`.
-#[allow(clippy::too_many_arguments)]
-pub async fn start_bridge(
-    server_handle: russh::server::Handle,
-    client_channel: russh::ChannelId,
-    relay: &RelayInfo,
-    base_username: &str,
-    initial_size: (u16, u16),
-    mut pty_size_rx: watch::Receiver<(u16, u16)>,
-    options: &HashMap<String, SecretBoxedString>,
-    peer_addr: Option<std::net::SocketAddr>,
-    action_tx: Option<UnboundedSender<tui_core::AppAction>>,
-    auth_rx: Option<tokio::sync::Mutex<UnboundedReceiver<String>>>,
-    prompt_sink: Option<(russh::server::Handle, russh::ChannelId)>,
-) -> Result<RelayHandle> {
-    let auth_rx = auth_rx.map(Arc::new);
-
-    // Build client config with secure defaults.
-    let cfg = build_client_config(options);
-
-    // Client handler that enforces host-key policy.
-    let handler = super::handler::SharedRelayHandler {
-        expected_key: options.get("hostkey.openssh").map(|v| v.expose_secret().clone()),
-        relay_name: relay.name.clone(),
-        warning_callback: Arc::new({
-            let server_handle = server_handle.clone();
-            let relay_name = relay.name.clone();
-            move |msg| {
-                let server_handle = server_handle.clone();
-                let relay_name = relay_name.clone();
-                Box::pin(async move {
-                    warn!(relay = %relay_name, "{}", msg);
-                    let mut payload = CryptoVec::new();
-                    payload.extend(format!("[rustybridge] {}\r\n", msg).as_bytes());
-                    let _ = server_handle.data(client_channel, payload).await;
-                })
-            }
-        }),
-        action_tx: action_tx.clone(),
-        auth_rx: auth_rx.clone(),
-    };
-
-    let target = format!("{}:{}", relay.ip, relay.port);
-    let peer = peer_addr.map(|a| a.to_string()).unwrap_or_else(|| "unknown".to_string());
-    info!(relay = %relay.name, target, peer, "connecting to relay host");
-
-    let mut remote = client::connect(cfg, (relay.ip.as_str(), relay.port as u16), handler).await?;
-
-    // Fetch and resolve credential once to avoid TOCTOU
-    let resolved_cred = fetch_and_resolve_credential(options, base_username).await?;
-
-    // Authenticate according to options.
-    let prompt_sink = prompt_sink.clone();
-    authenticate_relay_session(
-        &mut remote,
-        options,
-        base_username,
-        resolved_cred.as_ref(),
-        &action_tx,
-        &auth_rx,
-        prompt_sink,
-    )
-    .await?;
-
-    // Open channel + PTY + shell
-    let rchan = remote.channel_open_session().await?;
-    let (cols, rows) = initial_size;
-    rchan.request_pty(true, "xterm", cols as u32, rows as u32, 0, 0, &[]).await?;
-    rchan.request_shell(true).await?;
-
-    // Set up input channel for client->relay traffic.
-    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
-
-    let server_handle_in = server_handle.clone();
-    let client_channel_in = client_channel;
-    let channel_id = rchan.id();
-
-    // Single task handling relay->client, client->relay, and window resizes.
-    tokio::spawn(async move {
-        let mut rchan = rchan; // move into task
-        loop {
-            tokio::select! {
-                msg = rchan.wait() => {
-                    match msg {
-                        Some(ChannelMsg::Data { data }) => {
-                            let mut payload = CryptoVec::new();
-                            payload.extend(&data);
-                            if server_handle_in.data(client_channel_in, payload).await.is_err() {
-                                break;
-                            }
-                        }
-                        Some(ChannelMsg::ExtendedData { data, .. }) => {
-                            let mut payload = CryptoVec::new();
-                            payload.extend(&data);
-                            if server_handle_in.data(client_channel_in, payload).await.is_err() {
-                                break;
-                            }
-                        }
-                        Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
-                            let _ = server_handle_in.close(client_channel_in).await;
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-                maybe_bytes = rx.recv() => {
-                    match maybe_bytes {
-                        Some(bytes) => {
-                            if !bytes.is_empty() {
-                                let mut cursor = std::io::Cursor::new(bytes);
-                                if rchan.data(&mut cursor).await.is_err() {
-                                    break;
-                                }
-                            }
-                        }
-                        None => {
-                            let _ = rchan.eof().await;
-                            let _ = rchan.close().await;
-                            break;
-                        }
-                    }
-                }
-                changed = pty_size_rx.changed() => {
-                    if changed.is_err() { break; }
-                    let size = *pty_size_rx.borrow();
-                    let cols = size.0.max(1) as u32;
-                    let rows = size.1.max(1) as u32;
-                    if rchan.window_change(cols, rows, 0, 0).await.is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-    });
-
-    Ok(RelayHandle {
-        session: remote,
-        channel_id,
-        input_tx: tx,
-    })
 }
 
 /// Connect to a relay host and return an open channel for external I/O handling.

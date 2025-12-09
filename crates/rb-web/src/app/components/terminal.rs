@@ -337,15 +337,8 @@ pub fn Terminal(props: TerminalProps) -> Element {
                                 }
                             };
 
-                            // Send Ready signal with dimensions
-                            web_sys::console::log_1(&format!("Terminal: sending Ready signal with {}x{}", cols, rows).into());
-                            let ready_msg = SshClientMsg {
-                                cmd: Some(SshControl::Ready { cols, rows }),
-                                data: Vec::new(),
-                            };
-                            let _ = ws.send(ready_msg).await;
-
-                            // Then send minimize state if needed
+                            // Send minimize state FIRST if needed, so server knows
+                            // the state before Ready causes it to transition
                             if is_minimized {
                                 web_sys::console::log_1(&format!("Terminal: sending initial minimize state: {}", is_minimized).into());
                                 let msg = SshClientMsg {
@@ -354,6 +347,14 @@ pub fn Terminal(props: TerminalProps) -> Element {
                                 };
                                 let _ = ws.send(msg).await;
                             }
+
+                            // Send Ready signal with dimensions (this triggers server transition)
+                            web_sys::console::log_1(&format!("Terminal: sending Ready signal with {}x{}", cols, rows).into());
+                            let ready_msg = SshClientMsg {
+                                cmd: Some(SshControl::Ready { cols, rows }),
+                                data: Vec::new(),
+                            };
+                            let _ = ws.send(ready_msg).await;
                         }
                     }
                 });

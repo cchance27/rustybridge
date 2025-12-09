@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use rb_types::relay::RelayInfo;
+use rb_types::{relay::RelayInfo, ssh::ConnectionType};
 use russh::{ChannelId, CryptoVec, server::Session};
 use secrecy::ExposeSecret;
 use tokio::sync::{mpsc::unbounded_channel, oneshot};
@@ -112,6 +112,7 @@ impl ServerHandler {
 
                                 // We are transitioning out of the TUI; drop any existing TUI session (relay_id = 0)
                                 // so dashboards don't show both the TUI and the active relay at once.
+                                let tui_session_number = self.tui_session_number;
                                 self.end_tui_session();
 
                                 // Spawn background connect; result delivered via oneshot
@@ -154,25 +155,67 @@ impl ServerHandler {
 
                                             // Log SessionStarted audit event
                                             if let Some(conn_id) = &connection_id {
-                                                let session_str = format!("ssh_session_{}", session_number);
+                                                // Use relay session UUID from recorder as the session_id in payloads
+                                                let relay_session_id = ssh_session.recorder.session_id().to_string();
+                                                // Use connection_id (UUID) as session_id in context - this is what timeline queries by
                                                 let ctx = rb_types::audit::AuditContext::ssh(
                                                     user_id,
                                                     username_clone.clone(),
                                                     ip_address.clone().unwrap_or_else(|| "ssh".to_string()),
-                                                    session_str.clone(),
-                                                    Some(conn_id.clone()),
+                                                    conn_id.clone(),
+                                                    Some(relay_session_id.clone()),
                                                 );
 
-                                                crate::audit::log_event_from_context_best_effort(
+                                                // Log session transfer from TUI to relay (if we had a TUI session)
+                                                if let Some(tui_num) = tui_session_number {
+                                                    // TUI session doesn't have a relay session - use session number for now
+                                                    let tui_session_str = format!("tui_session_{}", tui_num);
+                                                    crate::audit!(
+                                                        &ctx,
+                                                        SessionTransferToRelay {
+                                                            from_session_id: tui_session_str,
+                                                            to_session_id: relay_session_id.clone(),
+                                                            relay_name: relay_info.name.clone(),
+                                                            relay_id: relay_info.id,
+                                                            username: username_clone.clone(),
+                                                            client_type: rb_types::audit::ClientType::Ssh,
+                                                        }
+                                                    );
+                                                }
+
+                                                crate::audit!(
                                                     &ctx,
-                                                    rb_types::audit::EventType::SessionStarted {
-                                                        session_id: session_str,
+                                                    SessionStarted {
+                                                        session_id: relay_session_id.clone(),
                                                         relay_name: relay_info.name.clone(),
                                                         relay_id: relay_info.id,
                                                         username: username_clone.clone(),
-                                                    },
-                                                )
-                                                .await;
+                                                        client_type: rb_types::audit::ClientType::Ssh,
+                                                    }
+                                                );
+
+                                                // Log relay connection and viewer joined
+                                                crate::audit!(
+                                                    &ctx,
+                                                    SessionRelayConnected {
+                                                        session_id: relay_session_id.clone(),
+                                                        relay_id: relay_info.id,
+                                                        relay_name: relay_info.name.clone(),
+                                                        username: username_clone.clone(),
+                                                        client_type: rb_types::audit::ClientType::Ssh,
+                                                    }
+                                                );
+
+                                                crate::audit!(
+                                                    &ctx,
+                                                    SessionViewerJoined {
+                                                        session_id: relay_session_id.clone(),
+                                                        username: username_clone.clone(),
+                                                        user_id,
+                                                        is_admin: false,
+                                                        client_type: rb_types::audit::ClientType::Ssh,
+                                                    }
+                                                );
                                             }
 
                                             // Track SSH connection + viewer
@@ -191,12 +234,23 @@ impl ServerHandler {
 
                                             tokio::spawn(async move {
                                                 let mut output_rx = backend_for_bridge.subscribe();
+                                                let mut close_rx = session_for_bridge.close_tx.subscribe();
                                                 let mut relay_closed = false;
                                                 let mut ping = tokio::time::interval(std::time::Duration::from_secs(5));
                                                 ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
                                                 loop {
                                                     tokio::select! {
+                                                        // Force-close signal from admin
+                                                        _ = close_rx.recv() => {
+                                                            tracing::info!(
+                                                                session_number = session_for_bridge.session_number,
+                                                                "session force-closed, terminating SSH bridge"
+                                                            );
+                                                            let _ = server_handle_for_bridge.close(channel).await;
+                                                            relay_closed = true;
+                                                            break;
+                                                        }
                                                         // Backend output -> SSH channel
                                                         Ok(data) = output_rx.recv() => {
                                                             if data.is_empty() {
@@ -241,8 +295,48 @@ impl ServerHandler {
                                                 }
 
                                                 // Decrement SSH connection + viewer counts when the SSH bridge ends.
-                                                session_for_bridge.decrement_connection(rb_types::ssh::ConnectionType::Ssh).await;
-                                                session_for_bridge.decrement_viewers(rb_types::ssh::ConnectionType::Ssh).await;
+                                                session_for_bridge.decrement_connection(ConnectionType::Ssh).await;
+                                                session_for_bridge.decrement_viewers(ConnectionType::Ssh).await;
+
+                                                // Log SSH client disconnect events ALWAYS when bridge ends
+                                                // (even if web clients are still attached)
+                                                if let Some(sid) = session_id_for_log.clone() {
+                                                    let duration = (chrono::Utc::now() - session_for_bridge.created_at).num_milliseconds();
+                                                    // Use relay session UUID from recorder as the session_id in payloads
+                                                    let relay_session_id = session_for_bridge.recorder.session_id().to_string();
+                                                    // Use connection_id (sid) as session_id in context - this is what timeline queries by
+                                                    let ctx = rb_types::audit::AuditContext::ssh(
+                                                        user_id,
+                                                        username_for_log.clone(),
+                                                        ip_address_for_log.clone().unwrap_or_else(|| "ssh".to_string()),
+                                                        sid.clone(),
+                                                        Some(relay_session_id.clone()),
+                                                    );
+
+                                                    // Log viewer left and relay disconnected for this SSH client
+                                                    crate::audit!(
+                                                        &ctx,
+                                                        SessionViewerLeft {
+                                                            session_id: relay_session_id.clone(),
+                                                            username: username_for_log.clone(),
+                                                            user_id,
+                                                            is_admin: false,
+                                                            duration_ms: duration,
+                                                            client_type: rb_types::audit::ClientType::Ssh,
+                                                        }
+                                                    );
+
+                                                    crate::audit!(
+                                                        &ctx,
+                                                        SessionRelayDisconnected {
+                                                            session_id: relay_session_id.clone(),
+                                                            relay_id: relay_id_for_log,
+                                                            relay_name: relay_name_for_log.clone(),
+                                                            username: username_for_log.clone(),
+                                                            client_type: rb_types::audit::ClientType::Ssh,
+                                                        }
+                                                    );
+                                                }
 
                                                 // If the underlying relay actually closed, or there are no more
                                                 // active connections of any type, then close and remove the session.
@@ -251,30 +345,30 @@ impl ServerHandler {
                                                     session_for_bridge.close().await;
                                                     registry_clone.remove_session(user_id, relay_info.id, session_number).await;
 
-                                                    // Log SessionEnded
+                                                    // Log SessionEnded only when session is fully closing
                                                     if let Some(sid) = session_id_for_log {
                                                         let duration =
                                                             (chrono::Utc::now() - session_for_bridge.created_at).num_milliseconds();
-                                                        let session_str = format!("ssh_session_{}", session_for_bridge.session_number);
+                                                        let relay_session_id = session_for_bridge.recorder.session_id().to_string();
                                                         let ctx = rb_types::audit::AuditContext::ssh(
                                                             user_id,
                                                             username_for_log.clone(),
-                                                            ip_address_for_log.unwrap_or_else(|| "ssh".to_string()),
-                                                            session_str.clone(),
-                                                            Some(sid.clone()),
+                                                            ip_address_for_log.clone().unwrap_or_else(|| "ssh".to_string()),
+                                                            sid.clone(),
+                                                            Some(relay_session_id.clone()),
                                                         );
 
-                                                        crate::audit::log_event_from_context_best_effort(
+                                                        crate::audit!(
                                                             &ctx,
-                                                            rb_types::audit::EventType::SessionEnded {
-                                                                session_id: session_str,
+                                                            SessionEnded {
+                                                                session_id: relay_session_id,
                                                                 relay_name: relay_name_for_log,
                                                                 relay_id: relay_id_for_log,
                                                                 username: username_for_log,
                                                                 duration_ms: duration,
-                                                            },
-                                                        )
-                                                        .await;
+                                                                client_type: rb_types::audit::ClientType::Ssh,
+                                                            }
+                                                        );
                                                     }
                                                 }
                                             });

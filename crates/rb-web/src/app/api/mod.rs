@@ -8,6 +8,7 @@ pub mod auth;
 pub mod credentials;
 pub mod groups;
 pub mod relay_list;
+pub mod relay_session_timeline;
 pub mod relays;
 pub mod roles;
 pub mod sessions;

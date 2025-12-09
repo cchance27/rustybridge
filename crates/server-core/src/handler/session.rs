@@ -71,6 +71,7 @@ impl ServerHandler {
                         relay_id,
                         username,
                         duration_ms,
+                        client_type: rb_types::audit::ClientType::Ssh,
                     },
                 )
                 .await;
@@ -178,6 +179,7 @@ impl ServerHandler {
                     relay_name: self.relay_target.clone().unwrap_or_else(|| "tui".to_string()),
                     relay_id: self.active_relay_id.unwrap_or(0),
                     username,
+                    client_type: rb_types::audit::ClientType::Ssh,
                 },
             )
             .await;

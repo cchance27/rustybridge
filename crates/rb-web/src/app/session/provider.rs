@@ -198,12 +198,22 @@ pub fn use_session_provider() -> SessionContext {
 
                         // Relay sessions (web or ssh origin) are attachable; TUI/web presence are not
                         let attachable = matches!(session_summary.kind, rb_types::ssh::SessionKind::Relay);
+                        // If no saved state exists for this browser, it's a session from another client (SSH)
+                        let has_saved_state = context
+                            .load_session_state(
+                                user.id,
+                                session_summary.relay_id,
+                                session_summary.session_number,
+                                session_summary.created_at.timestamp_millis(),
+                            )
+                            .is_some();
+                        let should_minimize = !has_saved_state;
                         context.open_restored(
                             user.id,
                             session_summary.relay_name.clone(),
                             session_summary.relay_id,
                             session_summary.session_number,
-                            false,
+                            should_minimize, // Minimize if no local state exists (SSH-origin session)
                             session_summary.connections,
                             session_summary.viewers,
                             attachable,
@@ -376,10 +386,10 @@ pub fn use_session_provider() -> SessionContext {
                     drop(sessions); // Drop the lock before calling other methods
 
                     // Also remove storage
-                    if let Some(user) = auth.read().user.as_ref() {
-                        if created_at_ts > 0 {
-                            context.remove_session_storage(user.id, relay_id, session_number, created_at_ts);
-                        }
+                    if let Some(user) = auth.read().user.as_ref()
+                        && created_at_ts > 0
+                    {
+                        context.remove_session_storage(user.id, relay_id, session_number, created_at_ts);
                     }
                 }
                 SessionEvent::List(summaries) => {

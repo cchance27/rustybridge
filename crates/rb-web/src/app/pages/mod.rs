@@ -13,7 +13,7 @@ pub mod server;
 pub mod ssh_success;
 
 pub use access::AccessPage;
-pub use admin::SessionHistory;
+pub use admin::{AuditEvents, SessionHistory};
 pub use credentials::CredentialsPage;
 pub use dashboard::DashboardPage;
 pub use login::LoginPage;

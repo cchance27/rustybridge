@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     use rb_types::{
-        audit::{AuditEvent, EventCategory, EventFilter, EventType}, state::DbHandle
+        audit::{AuditEvent, ClientType, EventCategory, EventFilter, EventType}, state::DbHandle
     };
 
     use crate::audit::events::{count_audit_events, insert_audit_event, query_audit_events};
@@ -205,6 +205,7 @@ mod tests {
                 relay_name: "relay1".to_string(),
                 relay_id: 1,
                 username: "alice".to_string(),
+                client_type: ClientType::Web,
             },
         )
         .with_session_id(session_id);
@@ -217,6 +218,7 @@ mod tests {
                 relay_id: 1,
                 username: "alice".to_string(),
                 duration_ms: 60000,
+                client_type: ClientType::Web,
             },
         )
         .with_session_id(session_id);

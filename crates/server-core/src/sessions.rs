@@ -59,6 +59,8 @@ pub struct SshSession {
     pub ssh_connections: AtomicU32,
     pub web_viewers: AtomicU32,
     pub ssh_viewers: AtomicU32,
+    // Initial connection ID (used for SessionStarted/Ended matching)
+    pub initial_connection_id: Option<String>,
     // Session origin (Web or SSH)
     pub origin: SessionOrigin,
     // Backend for I/O operations (unified interface)
@@ -90,6 +92,7 @@ impl SshSession {
         event_tx: broadcast::Sender<SessionEvent>,
         ip_address: Option<String>,
         user_agent: Option<String>,
+        initial_connection_id: Option<String>,
         recorder: Arc<SessionRecorder>,
     ) -> Self {
         let now_ms = Utc::now().timestamp_millis();
@@ -114,6 +117,7 @@ impl SshSession {
             ssh_connections: AtomicU32::new(0),
             web_viewers: AtomicU32::new(0),
             ssh_viewers: AtomicU32::new(0),
+            initial_connection_id,
             origin,
             backend,
             admin_viewers: RwLock::new(std::collections::HashSet::new()),
@@ -712,7 +716,15 @@ impl SessionRegistry {
             base
         };
 
-        let recorder = SessionRecorder::new(self.audit_db.clone(), user_id, relay_id, session_number, metadata, connection_id).await;
+        let recorder = SessionRecorder::new(
+            self.audit_db.clone(),
+            user_id,
+            relay_id,
+            session_number,
+            metadata,
+            connection_id.clone(),
+        )
+        .await;
 
         let session = Arc::new(SshSession::new(
             session_number,
@@ -726,6 +738,7 @@ impl SessionRegistry {
             self.event_tx.clone(),
             ip_address,
             user_agent,
+            connection_id.clone(),
             recorder,
         ));
 
@@ -779,7 +792,8 @@ impl SessionRegistry {
     pub async fn cleanup_expired_sessions(&self) {
         // First pass: collect keys to remove without holding the write lock for the entire duration
         // and without holding the write lock while awaiting individual session locks.
-        let candidates = {
+        // Also collect session data needed for audit logging.
+        let candidates: Vec<((i64, i64, u32), String)> = {
             let sessions = self.sessions.read().await;
             let now = Utc::now();
             let mut candidates = Vec::new();
@@ -787,60 +801,139 @@ impl SessionRegistry {
             for (key, session) in sessions.iter() {
                 // We need to read the state. This awaits a RwLock read, which is fine as long as we don't hold the global write lock.
                 let state = session.state.read().await;
-                match *state {
+                let reason = match *state {
                     SessionState::Detached { detached_at, timeout } => {
                         if now > detached_at + timeout {
-                            candidates.push(*key);
                             // Signal close - it's okay if we signal close and then don't remove (e.g. race),
                             // the session will just handle the close signal (which might be ignored if attached).
                             let _ = session.close_tx.send(());
+                            Some("detach_timeout".to_string())
+                        } else {
+                            None
                         }
                     }
-                    SessionState::Closed => {
-                        candidates.push(*key);
-                    }
+                    SessionState::Closed => Some("already_closed".to_string()),
                     SessionState::Attached => {
                         // Zombie check: if attached but no activity for 24 hours, kill it
                         let last_active = session.last_active_at();
                         if now.signed_duration_since(last_active).num_seconds() > 86400 {
-                            candidates.push(*key);
                             let _ = session.close_tx.send(());
+                            Some("zombie_cleanup".to_string())
+                        } else {
+                            None
                         }
                     }
+                };
+
+                if let Some(r) = reason {
+                    candidates.push((*key, r));
                 }
             }
             candidates
         };
 
         if !candidates.is_empty() {
-            let mut sessions = self.sessions.write().await;
+            // Struct to hold session data needed for cleanup after removal
+            struct SessionCleanupData {
+                session: Arc<SshSession>,
+                key: (i64, i64, u32),
+                reason: String,
+                duration_ms: i64,
+            }
+
+            let mut to_cleanup: Vec<SessionCleanupData> = Vec::new();
             let now = Utc::now();
 
-            for key in candidates {
-                // Re-check condition to avoid race where session became active between read and write lock
-                let should_remove = if let Some(session) = sessions.get(&key) {
-                    let state = session.state.read().await;
-                    match *state {
-                        SessionState::Detached { detached_at, timeout } => now > detached_at + timeout,
-                        SessionState::Closed => true,
-                        SessionState::Attached => {
-                            let last_active = session.last_active_at();
-                            now.signed_duration_since(last_active).num_seconds() > 86400
+            // Hold write lock only long enough to check conditions and remove sessions
+            {
+                let mut sessions = self.sessions.write().await;
+
+                for (key, reason) in candidates {
+                    // Re-check condition to avoid race where session became active between read and write lock
+                    let should_remove = if let Some(session) = sessions.get(&key) {
+                        let state = session.state.read().await;
+                        match *state {
+                            SessionState::Detached { detached_at, timeout } => now > detached_at + timeout,
+                            SessionState::Closed => true,
+                            SessionState::Attached => {
+                                let last_active = session.last_active_at();
+                                now.signed_duration_since(last_active).num_seconds() > 86400
+                            }
+                        }
+                    } else {
+                        // Already removed
+                        false
+                    };
+
+                    if should_remove {
+                        // Remove session and collect data for cleanup outside lock
+                        if let Some(session) = sessions.remove(&key) {
+                            let duration_ms = (now - session.created_at).num_milliseconds();
+                            to_cleanup.push(SessionCleanupData {
+                                session,
+                                key,
+                                reason,
+                                duration_ms,
+                            });
+
+                            // Broadcast removal event
+                            let (uid, rid, snum) = key;
+                            let _ = self.event_tx.send(SessionEvent::Removed {
+                                user_id: uid,
+                                relay_id: rid,
+                                session_number: snum,
+                            });
                         }
                     }
-                } else {
-                    // Already removed
-                    false
-                };
+                }
+            } // Write lock released here
 
-                if should_remove && sessions.remove(&key).is_some() {
-                    let (uid, rid, snum) = key;
-                    let _ = self.event_tx.send(SessionEvent::Removed {
-                        user_id: uid,
-                        relay_id: rid,
-                        session_number: snum,
+            // Now perform async close operations and audit logging WITHOUT holding the lock
+            for cleanup_data in to_cleanup {
+                let session = cleanup_data.session;
+                let key = cleanup_data.key;
+                let reason = cleanup_data.reason;
+                let duration_ms = cleanup_data.duration_ms;
+
+                let session_id = session.recorder.session_id().to_string();
+                let relay_name = session.relay_name.clone();
+                let relay_id = session.relay_id;
+                let username = session.username.clone();
+                let user_id = session.user_id;
+
+                // Close session to update end_time in DB (no lock held)
+                session.close().await;
+
+                // Log SessionTimedOut audit event ONLY for actual timeouts.
+                if reason != "already_closed" {
+                    let session_id_clone = session_id.clone();
+                    let relay_name_clone = relay_name.clone();
+                    let username_clone = username.clone();
+                    let reason_clone = reason.clone();
+                    tokio::spawn(async move {
+                        let ctx = rb_types::audit::AuditContext::system(format!("session_cleanup:{}", session_id_clone));
+                        crate::audit::log_event_from_context_best_effort(
+                            &ctx,
+                            rb_types::audit::EventType::SessionTimedOut {
+                                session_id: session_id_clone,
+                                relay_name: relay_name_clone,
+                                relay_id,
+                                username: username_clone,
+                                duration_ms,
+                                reason: reason_clone,
+                            },
+                        )
+                        .await;
                     });
                 }
+
+                tracing::info!(
+                    user_id,
+                    relay_id,
+                    session_number = key.2,
+                    reason = %reason,
+                    "Session timed out and removed"
+                );
             }
         }
     }

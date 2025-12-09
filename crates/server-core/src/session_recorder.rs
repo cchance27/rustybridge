@@ -180,6 +180,24 @@ impl SessionRecorder {
         self.session_id
     }
 
+    /// Record a participant joining an existing session (reattach).
+    /// The initial connection is recorded automatically in `new()`.
+    pub async fn record_participant_join(&self, client_session_id: &str) {
+        let now = Utc::now().timestamp_millis();
+        let session_id_str = self.session_id.to_string();
+
+        if let Err(e) =
+            sqlx::query("INSERT INTO relay_session_participants (relay_session_id, client_session_id, joined_at) VALUES (?, ?, ?)")
+                .bind(&session_id_str)
+                .bind(client_session_id)
+                .bind(now)
+                .execute(&self.db.pool)
+                .await
+        {
+            error!(session_id = %session_id_str, error = ?e, "Failed to record participant join");
+        }
+    }
+
     pub async fn record_participant_leave(&self, client_session_id: &str) {
         let now = Utc::now().timestamp_millis();
         let session_id_str = self.session_id.to_string();

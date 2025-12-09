@@ -5,7 +5,9 @@ use dioxus::prelude::ServerFnError;
 use dioxus::{
     fullstack::{JsonEncoding, WebSocketOptions, Websocket}, prelude::*
 };
-use rb_types::audit::{RecordedSessionChunk, RecordedSessionSummary};
+use rb_types::audit::{AuditEvent, RecordedSessionChunk, RecordedSessionSummary};
+#[cfg(feature = "server")]
+use rb_types::audit::{EventCategory, EventFilter};
 #[cfg(feature = "server")]
 use rb_types::auth::{ClaimLevel, ClaimType};
 use serde::{Deserialize, Serialize};
@@ -99,6 +101,373 @@ pub async fn list_my_sessions() -> Result<Vec<RecordedSession>> {
     .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     Ok(result.records.into_iter().map(|s| s.to_recorded()).collect())
+}
+
+// ==== Audit Events API ====
+
+/// Query parameters for listing audit events
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct ListEventsQuery {
+    pub page: Option<i64>,
+    pub limit: Option<i64>,
+    pub actor_id: Option<i64>,
+    pub category: Option<String>,
+    pub action_types: Option<Vec<String>>,
+    pub session_id: Option<String>,
+    pub parent_session_id: Option<String>,
+    pub start_time: Option<i64>,
+    pub end_time: Option<i64>,
+    pub sort_dir: Option<String>,
+}
+
+/// Paginated response for audit events
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct PagedEvents {
+    pub events: Vec<AuditEvent>,
+    pub total: i64,
+}
+
+/// List audit events with filtering and pagination (admin only)
+#[post("/api/audit/events", auth: WebAuthSession)]
+pub async fn list_audit_events(query: ListEventsQuery) -> Result<PagedEvents> {
+    ensure_audit_claim(&auth, ClaimLevel::View)?;
+
+    let page = query.page.unwrap_or(1).max(1);
+    let limit = query.limit.unwrap_or(50).clamp(1, 100);
+    let offset = (page - 1) * limit;
+
+    // Build filter
+    let mut filter = EventFilter::new().with_limit(limit).with_offset(offset);
+
+    if let Some(actor_id) = query.actor_id {
+        filter = filter.with_actor(actor_id);
+    }
+
+    if let Some(ref cat_str) = query.category
+        && let Ok(cat) = serde_json::from_value::<EventCategory>(serde_json::Value::String(cat_str.clone()))
+    {
+        filter = filter.with_category(cat);
+    }
+
+    if let Some(ref action_types) = query.action_types {
+        filter = filter.with_action_types(action_types.clone());
+    }
+
+    if let Some(ref session_id) = query.session_id {
+        filter.session_id = Some(session_id.clone());
+    }
+
+    if let Some(start) = query.start_time {
+        filter.start_time = Some(start);
+    }
+
+    if let Some(end) = query.end_time {
+        filter.end_time = Some(end);
+    }
+
+    // Query events
+    let events = server_core::audit::query_events(filter.clone())
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    // Count total for pagination (without limit/offset)
+    let mut count_filter = filter.clone();
+    count_filter.limit = None;
+    count_filter.offset = None;
+    let total = server_core::audit::count_events(count_filter)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    Ok(PagedEvents { events, total })
+}
+
+/// Get audit events for a specific session (for timeline view)
+#[get("/api/audit/sessions/:id/audit-events", auth: WebAuthSession)]
+pub async fn get_session_audit_events(id: String) -> Result<Vec<AuditEvent>> {
+    let summary = load_session_summary(&id).await?;
+    authorize_session_view(&auth, &summary).await?;
+
+    let events = server_core::audit::query_events_by_session(id, Some(500))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    Ok(events)
+}
+
+// ==== Group Summary API for Drill-Down View ====
+
+/// Query parameters for getting group summaries with counts
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct GroupSummaryQuery {
+    pub group_by: String,         // "actor", "session", "category"
+    pub category: Option<String>, // Optional category filter
+    pub limit: Option<i64>,       // Limit number of groups (top N)
+    pub start_time: Option<i64>,
+    pub end_time: Option<i64>,
+}
+
+/// Group summary with true count from database
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct GroupSummaryWithCount {
+    pub key: String,
+    pub label: String,
+    pub actor_id: Option<i64>,        // For actor grouping
+    pub session_id: Option<String>,   // For session grouping
+    pub category_key: Option<String>, // For category grouping
+    pub count: i64,
+    pub latest_timestamp: i64,
+}
+
+/// Get event group summaries with true counts
+#[post("/api/audit/events/groups", auth: WebAuthSession)]
+pub async fn get_event_groups(query: GroupSummaryQuery) -> Result<Vec<GroupSummaryWithCount>> {
+    ensure_audit_claim(&auth, ClaimLevel::View)?;
+
+    let mut filter = EventFilter::new();
+
+    if let Some(ref cat_str) = query.category
+        && let Ok(cat) = serde_json::from_value::<EventCategory>(serde_json::Value::String(cat_str.clone()))
+    {
+        filter = filter.with_category(cat);
+    }
+
+    if let Some(start) = query.start_time {
+        filter.start_time = Some(start);
+    }
+    if let Some(end) = query.end_time {
+        filter.end_time = Some(end);
+    }
+
+    let groups = server_core::audit::query_event_groups(&query.group_by, filter, query.limit)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let results: Vec<GroupSummaryWithCount> = groups
+        .into_iter()
+        .map(|g| {
+            let key = g.key.clone().unwrap_or_else(|| "system".to_string());
+            let label = match query.group_by.as_str() {
+                "actor" => g.actor_id.map(|id| format!("User #{}", id)).unwrap_or_else(|| "System".to_string()),
+                "session" => {
+                    let s = key.clone();
+                    if s.len() > 16 { format!("{}...", &s[..16]) } else { s }
+                }
+                "category" => key.clone(),
+                _ => key.clone(),
+            };
+
+            // Set the appropriate filter field based on grouping type
+            let (actor_id, session_id, category_key) = match query.group_by.as_str() {
+                "actor" => (g.actor_id, None, None),
+                "session" => (None, Some(key.clone()), None),
+                "category" => (None, None, Some(key.clone())),
+                _ => (None, None, None),
+            };
+
+            GroupSummaryWithCount {
+                key,
+                label,
+                actor_id,
+                session_id,
+                category_key,
+                count: g.count,
+                latest_timestamp: g.latest_timestamp,
+            }
+        })
+        .collect();
+
+    Ok(results)
+}
+
+// ==== Streaming Events API for Virtualized Scrolling ====
+
+/// Query parameters for streaming events with cursor-based pagination
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct StreamEventsQuery {
+    pub limit: Option<i64>,
+    pub cursor: Option<i64>,           // Timestamp cursor for pagination
+    pub group_by: Option<String>,      // "actor", "session", "category", or None (deprecated for drill-down)
+    pub category: Option<String>,      // Category filter
+    pub session_id: Option<String>,    // Session filter (specific session)
+    pub actor_id: Option<i64>,         // Actor filter (specific actor ID)
+    pub actor_is_null: Option<bool>,   // If true, filter to only events WHERE actor_id IS NULL
+    pub session_is_null: Option<bool>, // If true, filter to only events WHERE session_id IS NULL
+    pub start_time: Option<i64>,
+    pub end_time: Option<i64>,
+}
+
+/// A single event with group boundary marker
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct GroupedEvent {
+    pub group_key: String,
+    pub is_group_start: bool,
+    pub event: AuditEvent,
+}
+
+/// Group summary (for collapsed view)
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct GroupSummary {
+    pub key: String,
+    pub label: String,
+    pub count: i64,
+    pub latest_timestamp: i64,
+}
+
+/// Response for streaming events
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct StreamEventsResponse {
+    pub events: Vec<GroupedEvent>,
+    pub groups: Vec<GroupSummary>, // Summaries for all groups in current filter
+    pub next_cursor: Option<i64>,
+    pub has_more: bool,
+}
+
+/// Stream audit events with cursor-based pagination and grouping
+#[post("/api/audit/events/stream", auth: WebAuthSession)]
+pub async fn stream_audit_events(query: StreamEventsQuery) -> Result<StreamEventsResponse> {
+    ensure_audit_claim(&auth, ClaimLevel::View)?;
+
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+
+    // Build filter
+    let mut filter = EventFilter::new().with_limit(limit);
+
+    if let Some(ref cat_str) = query.category
+        && let Ok(cat) = serde_json::from_value::<EventCategory>(serde_json::Value::String(cat_str.clone()))
+    {
+        filter = filter.with_category(cat);
+    }
+
+    if let Some(ref session_id) = query.session_id {
+        filter.session_id = Some(session_id.clone());
+    } else if query.session_is_null == Some(true) {
+        filter.session_is_null = true;
+    }
+
+    // Actor filter for drill-down view
+    if let Some(actor_id) = query.actor_id {
+        filter = filter.with_actor(actor_id);
+    } else if query.actor_is_null == Some(true) {
+        filter.actor_is_null = true;
+    }
+
+    // Cursor-based pagination: get events before cursor timestamp
+    if let Some(cursor) = query.cursor {
+        filter.end_time = Some(cursor - 1); // Events before cursor
+    }
+
+    if let Some(start) = query.start_time {
+        filter.start_time = Some(start);
+    }
+
+    if let Some(end) = query.end_time
+        && filter.end_time.is_none()
+    {
+        filter.end_time = Some(end);
+    }
+
+    // Query events (ordered by timestamp DESC by default)
+    let mut events = server_core::audit::query_events(filter.clone())
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    // When grouping, sort events by group key first, then by timestamp DESC
+    // This ensures each group appears contiguously in the list
+    if let Some(group_by_key) = query.group_by.as_deref() {
+        events.sort_by(|a, b| {
+            let key_a = match group_by_key {
+                "actor" => a.actor_id.map(|id| format!("{:020}", id)).unwrap_or_else(|| "z_system".to_string()),
+                "session" => a.session_id.clone().unwrap_or_else(|| "z_none".to_string()),
+                "category" => format!("{:?}", a.category),
+                _ => String::new(),
+            };
+            let key_b = match group_by_key {
+                "actor" => b.actor_id.map(|id| format!("{:020}", id)).unwrap_or_else(|| "z_system".to_string()),
+                "session" => b.session_id.clone().unwrap_or_else(|| "z_none".to_string()),
+                "category" => format!("{:?}", b.category),
+                _ => String::new(),
+            };
+            // Sort by group key first, then by timestamp DESC within group
+            match key_a.cmp(&key_b) {
+                std::cmp::Ordering::Equal => b.timestamp.cmp(&a.timestamp),
+                other => other,
+            }
+        });
+    }
+
+    // Determine next cursor (timestamp of last event) - note: may not be reliable with grouping
+    let next_cursor = events.last().map(|e| e.timestamp);
+    let has_more = events.len() as i64 >= limit;
+
+    // Build grouped events with boundary markers
+    let group_by_key = query.group_by.as_deref();
+    let mut grouped_events = Vec::with_capacity(events.len());
+    let mut last_group_key: Option<String> = None;
+
+    for event in &events {
+        let group_key = match group_by_key {
+            Some("actor") => event
+                .actor_id
+                .map(|id| format!("actor:{}", id))
+                .unwrap_or_else(|| "actor:system".to_string()),
+            Some("session") => event
+                .session_id
+                .clone()
+                .map(|s| format!("session:{}", s))
+                .unwrap_or_else(|| "session:none".to_string()),
+            Some("category") => format!("category:{:?}", event.category),
+            _ => "all".to_string(),
+        };
+
+        let is_group_start = last_group_key.as_ref() != Some(&group_key);
+        last_group_key = Some(group_key.clone());
+
+        grouped_events.push(GroupedEvent {
+            group_key,
+            is_group_start,
+            event: event.clone(),
+        });
+    }
+
+    // Get group summaries (count per group) - for collapsed headers
+    // TODO: This could be optimized with a separate GROUP BY query
+    let mut group_counts: std::collections::HashMap<String, (i64, i64)> = std::collections::HashMap::new();
+    for ge in &grouped_events {
+        let entry = group_counts.entry(ge.group_key.clone()).or_insert((0, 0));
+        entry.0 += 1;
+        if ge.event.timestamp > entry.1 {
+            entry.1 = ge.event.timestamp;
+        }
+    }
+
+    let groups: Vec<GroupSummary> = group_counts
+        .into_iter()
+        .map(|(key, (count, latest))| {
+            let label = if key.starts_with("actor:") {
+                key.strip_prefix("actor:").unwrap_or(&key).to_string()
+            } else if key.starts_with("session:") {
+                let s = key.strip_prefix("session:").unwrap_or(&key);
+                if s.len() > 16 { format!("{}...", &s[..16]) } else { s.to_string() }
+            } else if key.starts_with("category:") {
+                key.strip_prefix("category:").unwrap_or(&key).to_string()
+            } else {
+                key.clone()
+            };
+            GroupSummary {
+                key,
+                label,
+                count,
+                latest_timestamp: latest,
+            }
+        })
+        .collect();
+
+    Ok(StreamEventsResponse {
+        events: grouped_events,
+        groups,
+        next_cursor,
+        has_more,
+    })
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

@@ -9,6 +9,8 @@ use super::EventCategory;
 pub struct EventFilter {
     /// Filter by actor user ID
     pub actor_id: Option<i64>,
+    /// If true, filter to only events where actor_id IS NULL
+    pub actor_is_null: bool,
     /// Filter by event category
     pub category: Option<EventCategory>,
     /// Filter by specific action types (e.g., ["user_created", "user_deleted"])
@@ -21,6 +23,12 @@ pub struct EventFilter {
     pub end_time: Option<i64>,
     /// Filter by session ID
     pub session_id: Option<String>,
+    /// Filter by multiple session IDs (OR logic)
+    pub session_ids: Option<Vec<String>>,
+    /// If true, filter to only events where session_id IS NULL or empty
+    pub session_is_null: bool,
+    /// Filter by parent session ID (e.g. relay session ID for terminal sessions)
+    pub parent_session_id: Option<String>,
     /// Maximum number of results to return
     pub limit: Option<i64>,
     /// Number of results to skip (for pagination)
@@ -73,6 +81,17 @@ impl EventFilter {
     /// Builder: Set result offset for pagination.
     pub fn with_offset(mut self, offset: i64) -> Self {
         self.offset = Some(offset);
+        self
+    }
+
+    /// Builder: Filter by parent session ID.
+    pub fn with_parent_session_id(mut self, parent_session_id: impl Into<String>) -> Self {
+        self.parent_session_id = Some(parent_session_id.into());
+        self
+    }
+    /// Builder: Filter by multiple session IDs.
+    pub fn with_session_ids(mut self, session_ids: Vec<String>) -> Self {
+        self.session_ids = Some(session_ids);
         self
     }
 }

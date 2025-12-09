@@ -8,7 +8,7 @@ use super::{AuditContext, EventCategory};
 use crate::auth::ClaimType;
 
 /// Authentication method used for login events.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthMethod {
     Password,
@@ -16,8 +16,22 @@ pub enum AuthMethod {
     Oidc,
 }
 
+/// Client type for session events (SSH client vs Web browser).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientType {
+    Ssh,
+    Web,
+}
+
+impl Default for ClientType {
+    fn default() -> Self {
+        Self::Ssh
+    }
+}
+
 /// Specific audit event types with associated structured data.
-#[derive(Debug, Clone, Serialize, Deserialize, strum::IntoStaticStr)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, strum::IntoStaticStr)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum EventType {
@@ -27,15 +41,24 @@ pub enum EventType {
         method: AuthMethod,
         connection_id: String,
         username: String,
+        #[serde(default)]
+        client_type: ClientType,
     },
     /// Failed login attempt
     LoginFailure {
         method: AuthMethod,
         reason: String,
         username: Option<String>,
+        #[serde(default)]
+        client_type: ClientType,
     },
     /// User logout or disconnection
-    Logout { username: String, reason: String },
+    Logout {
+        username: String,
+        reason: String,
+        #[serde(default)]
+        client_type: ClientType,
+    },
 
     // ==================== User Management Events ====================
     /// New user account created
@@ -231,6 +254,8 @@ pub enum EventType {
         relay_name: String,
         relay_id: i64,
         username: String,
+        #[serde(default)]
+        client_type: ClientType,
     },
     /// SSH session ended
     SessionEnded {
@@ -239,6 +264,17 @@ pub enum EventType {
         relay_id: i64,
         username: String,
         duration_ms: i64,
+        #[serde(default)]
+        client_type: ClientType,
+    },
+    /// Session timed out after being detached
+    SessionTimedOut {
+        session_id: String,
+        relay_name: String,
+        relay_id: i64,
+        username: String,
+        duration_ms: i64,
+        reason: String, // e.g., "detach_timeout" or "zombie_cleanup"
     },
     /// Session PTY resized
     SessionResized {
@@ -253,6 +289,8 @@ pub enum EventType {
         relay_id: i64,
         relay_name: String,
         username: String,
+        #[serde(default)]
+        client_type: ClientType,
     },
     /// Relay connection closed (web/ssh)
     SessionRelayDisconnected {
@@ -260,6 +298,8 @@ pub enum EventType {
         relay_id: i64,
         relay_name: String,
         username: String,
+        #[serde(default)]
+        client_type: ClientType,
     },
     /// Admin viewer added to session
     AdminViewerAdded {
@@ -273,6 +313,25 @@ pub enum EventType {
         admin_username: String,
         admin_user_id: i64,
     },
+    /// User started actively viewing session terminal (not just connected)
+    SessionViewerJoined {
+        session_id: String,
+        username: String,
+        user_id: i64,
+        is_admin: bool,
+        #[serde(default)]
+        client_type: ClientType,
+    },
+    /// User stopped actively viewing session terminal (minimized or disconnected)
+    SessionViewerLeft {
+        session_id: String,
+        username: String,
+        user_id: i64,
+        is_admin: bool,
+        duration_ms: i64,
+        #[serde(default)]
+        client_type: ClientType,
+    },
     /// Session force-closed by admin
     SessionForceClosed {
         session_id: String,
@@ -281,6 +340,16 @@ pub enum EventType {
         relay_name: String,
         target_username: String,
         reason: String,
+    },
+    /// User transferred from TUI management session to relay connection
+    SessionTransferToRelay {
+        from_session_id: String,
+        to_session_id: String,
+        relay_name: String,
+        relay_id: i64,
+        username: String,
+        #[serde(default)]
+        client_type: ClientType,
     },
 
     // ==================== Configuration Events ====================
@@ -343,12 +412,16 @@ impl EventType {
             EventType::AccessGranted { .. } | EventType::AccessRevoked { .. } => EventCategory::AccessControl,
             EventType::SessionStarted { .. }
             | EventType::SessionEnded { .. }
+            | EventType::SessionTimedOut { .. }
             | EventType::SessionResized { .. }
             | EventType::SessionRelayConnected { .. }
             | EventType::SessionRelayDisconnected { .. }
             | EventType::AdminViewerAdded { .. }
             | EventType::AdminViewerRemoved { .. }
-            | EventType::SessionForceClosed { .. } => EventCategory::Session,
+            | EventType::SessionViewerJoined { .. }
+            | EventType::SessionViewerLeft { .. }
+            | EventType::SessionForceClosed { .. }
+            | EventType::SessionTransferToRelay { .. } => EventCategory::Session,
             EventType::ServerHostKeyGenerated | EventType::OidcConfigured { .. } => EventCategory::Configuration,
             EventType::ServerStarted { .. } | EventType::ServerStopped | EventType::DatabaseMigrated { .. } => EventCategory::System,
         }
@@ -362,7 +435,7 @@ impl EventType {
 }
 
 /// Complete audit event record ready for persistence.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AuditEvent {
     /// Unique event identifier (UUIDv7)
     pub id: String,

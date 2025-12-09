@@ -4,6 +4,7 @@
 
 - Core audit type system, persistence, and logging API are implemented and wired through server-core.
 - Web, SSH/TUI, and CLI now emit strongly-typed events for user/group/relay/credential/ACL/session activity.
+- **Audit Web UI**: Admin console for browsing/filtering events and a visual "Relay Session Timeline" for inspecting session lifecycle and connections.
 - All state-changing operations in the management surfaces are moving to a **context-first** API that enforces attribution.
 
 ---
@@ -219,6 +220,25 @@ Some are wired (e.g., migrations); others can be hooked into startup/shutdown fl
 
 ---
 
+## Audit UI & Visualization
+
+### Audit Events Explorer (`/admin/audit`)
+- **Virtualized list** of all audit events.
+- **Filter by Category**: Authentication, User Management, Sessions, etc.
+- **Group by Actor/Session**: "Drill-down" view to see all events initiated by a specific user or occurring within a specific session.
+- **JSON Inspection**: View full raw event data (e.g., `client_type`, `user_agent`, custom details).
+
+### Relay Session Timeline
+- **Visual multi-track timeline** for every session.
+- **Tracks**:
+    - **Session Lifecycle**: Start/End duration.
+    - **Relay Connections**: Visualization of when the different "legs" of the session were active (Web vs SSH).
+    - **Admin Viewers**: Bars showing when admins shadowed the session, with duration and client type.
+    - **Events**: Point markers for events like `Resize`, `Clipboard`, or `Input` (future).
+- **Auto-refresh**: Live updating for active sessions.
+
+---
+
 ## Remaining Work / TODOs
 
 ### 1. Wire Remaining Event Types
@@ -234,25 +254,13 @@ Some are wired (e.g., migrations); others can be hooked into startup/shutdown fl
   - Emit `ServerStarted` / `ServerStopped` from rb-server startup/shutdown.
   - Emit `OidcConfigured` from OIDC config flows.
 
-### 2. Query & UI Surface for Audit Events
-
-- Add server-core query helpers where missing (e.g., by category/time range).
-- Expose rb-web endpoints:
-  - `/api/audit/events` with `EventFilter`-like payload.
-- Build an admin UI for events
-  - Filter by actor, category, time range, session.
-  - Link out from sessions view ("show events for this session").
-  - we should have a view that groups by parent-session and shows all events for that session in a timeline. 
-  - grouping view by relay-session
-  - it would be nice if beyond a basic table with grouping, we could add a timeline with icons w/tooltipsfor the parent-session and each event in the session, so we can see when other sessions join tui's and web sessions etc. We could maybe use a multi row timeline for the session, it's relay connections, session joins, and other events, with maybe areas filled for relays, and marker icons for audit events for that session.
-
-### 3. Hardening & DX
+### 2. Hardening & DX
 
 - Add lightweight wrappers/macros to reduce boilerplate when logging common patterns.
 - Consider feature flags to disable high-volume categories (e.g., resize events) in low-compliance deployments.
 - Review all remaining write paths for any direct `state_store` usage that bypasses server-core + audit.
 
-### 4. Retention & Export
+### 3. Retention & Export
 
 - Design retention policies for `system_events` (similar to session recording):
   - Configurable max age / max rows.
@@ -271,7 +279,7 @@ Some are wired (e.g., migrations); others can be hooked into startup/shutdown fl
 This keeps all audit logic centralized, type-safe, and easy to evolve as the platform grows.
 
 
-### 5. Future Refactoring & Improvements
+### 4. Future Refactoring & Improvements
 
 - [ ] **Event Type Verbosity**: The `EventType` enum is currently very verbose. While this provides excellent type safety and clarity, it may become unwieldy as the system grows. Consider refactoring into a more modular structure or using macros/codegen in the future.
 - [ ] **Session ID Migration**: Currently `session_number` (u32) is used in many places. This should be migrated to `session_id` (UUIDv7) strictly to prevent session enumeration attacks. This is a known technical debt item.

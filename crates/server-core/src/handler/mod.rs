@@ -210,41 +210,43 @@ impl ServerHandler {
         // Log session end event if authenticated but no specific session was started (e.g. login then disconnect)
         // If a session was started, the session handler (relay or shell) logs the end event.
         if self.session_number.is_none()
-            && let (Some(conn_id), Some(username), Some(user_id)) = (&self.connection_session_id, &self.username, self.user_id) {
-                let username = username.clone();
-                let duration = elapsed.as_millis() as i64;
-                let relay_id = self.active_relay_id.unwrap_or(0);
-                let relay_name = self.relay_target.clone().unwrap_or_else(|| "none".to_string());
+            && let (Some(conn_id), Some(username), Some(user_id)) = (&self.connection_session_id, &self.username, self.user_id)
+        {
+            let username = username.clone();
+            let duration = elapsed.as_millis() as i64;
+            let relay_id = self.active_relay_id.unwrap_or(0);
+            let relay_name = self.relay_target.clone().unwrap_or_else(|| "none".to_string());
 
-                let peer_ip = self.peer_addr.map(|a| a.ip().to_string()).unwrap_or_else(|| "unknown".to_string());
+            let peer_ip = self.peer_addr.map(|a| a.ip().to_string()).unwrap_or_else(|| "unknown".to_string());
 
-                let parent_session_id = conn_id.clone();
+            let parent_session_id = conn_id.clone();
 
-                tokio::spawn(async move {
-                    let ssh_session_str = "ssh_session_unknown".to_string();
+            tokio::spawn(async move {
+                let ssh_session_str = "ssh_session_unknown".to_string();
 
-                    // Let's fix the Context first.
-                    let ctx = rb_types::audit::AuditContext::ssh(
-                        user_id,
-                        username.clone(),
-                        peer_ip,
-                        ssh_session_str,
-                        Some(parent_session_id.clone()),
-                    );
+                // Let's fix the Context first.
+                let ctx = rb_types::audit::AuditContext::ssh(
+                    user_id,
+                    username.clone(),
+                    peer_ip,
+                    ssh_session_str,
+                    Some(parent_session_id.clone()),
+                );
 
-                    crate::audit::log_event_from_context_best_effort(
-                        &ctx,
-                        rb_types::audit::EventType::SessionEnded {
-                            session_id: parent_session_id,
-                            relay_name,
-                            relay_id,
-                            username,
-                            duration_ms: duration,
-                        },
-                    )
-                    .await;
-                });
-            }
+                crate::audit::log_event_from_context_best_effort(
+                    &ctx,
+                    rb_types::audit::EventType::SessionEnded {
+                        session_id: parent_session_id,
+                        relay_name,
+                        relay_id,
+                        username,
+                        duration_ms: duration,
+                        client_type: rb_types::audit::ClientType::Ssh,
+                    },
+                )
+                .await;
+            });
+        }
     }
 }
 

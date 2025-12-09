@@ -609,7 +609,7 @@ pub async fn query_sessions(query: SessionQuery, include_sizes: bool) -> ServerR
             relay_id: row.get("relay_host_id"),
             session_number: row.get("session_number"),
             start_time: row.get("start_time"),
-            end_time: row.try_get("end_time").ok(),
+            end_time: row.try_get("end_time").ok().flatten().filter(|t| *t > 0),
             metadata,
             username,
             relay_name,
@@ -654,7 +654,7 @@ pub async fn get_session_summary(session_id: &str) -> ServerResult<Option<Sessio
             relay_id: row.get("relay_host_id"),
             session_number: row.get("session_number"),
             start_time: row.get("start_time"),
-            end_time: row.try_get("end_time").ok(),
+            end_time: row.try_get("end_time").ok().flatten().filter(|t| *t > 0),
             metadata,
             username,
             relay_name,
@@ -670,6 +670,45 @@ pub async fn get_session_summary(session_id: &str) -> ServerResult<Option<Sessio
     } else {
         Ok(None)
     }
+}
+
+/// Get all client connection IDs that participated in a relay session.
+/// These IDs correspond to the session_id field in audit events.
+/// Includes both:
+/// - The initiator connection ID from the relay_sessions table
+/// - Any additional participant connection IDs from relay_session_participants
+pub async fn get_session_participant_connection_ids(relay_session_id: &str) -> ServerResult<Vec<String>> {
+    let audit_db = state_store::audit::audit_db().await.map_err(ServerError::StateStore)?;
+    let pool = &audit_db.pool;
+
+    // First, get the initiator connection ID from the relay_sessions table itself
+    let initiator: Option<String> = sqlx::query_scalar("SELECT initiator_client_session_id FROM relay_sessions WHERE id = ?")
+        .bind(relay_session_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(ServerError::Database)?
+        .flatten();
+
+    // Then get all participant connection IDs
+    let participant_ids: Vec<String> =
+        sqlx::query_scalar("SELECT DISTINCT client_session_id FROM relay_session_participants WHERE relay_session_id = ?")
+            .bind(relay_session_id)
+            .fetch_all(pool)
+            .await
+            .map_err(ServerError::Database)?;
+
+    // Combine and deduplicate (initiator may also be in participants table)
+    let mut connection_ids: Vec<String> = Vec::with_capacity(participant_ids.len() + 1);
+    if let Some(init_id) = initiator {
+        connection_ids.push(init_id);
+    }
+    for id in participant_ids {
+        if !connection_ids.contains(&id) {
+            connection_ids.push(id);
+        }
+    }
+
+    Ok(connection_ids)
 }
 
 // --- Session chunks retrieval for replay ---

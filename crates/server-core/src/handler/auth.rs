@@ -54,6 +54,7 @@ impl ServerHandler {
                     method: AuthMethod::Password,
                     connection_id,
                     username: login.username.clone(),
+                    client_type: rb_types::audit::ClientType::Ssh,
                 })
                 .await;
 
@@ -70,6 +71,7 @@ impl ServerHandler {
                     method: AuthMethod::Password,
                     reason: "invalid credentials".to_string(),
                     username: Some(login.username.clone()),
+                    client_type: rb_types::audit::ClientType::Ssh,
                 })
                 .await;
 
@@ -126,6 +128,7 @@ impl ServerHandler {
                     method: AuthMethod::PublicKey,
                     connection_id,
                     username: login.username.clone(),
+                    client_type: rb_types::audit::ClientType::Ssh,
                 })
                 .await;
 
@@ -141,6 +144,7 @@ impl ServerHandler {
                     method: AuthMethod::PublicKey,
                     reason: "key not found".to_string(),
                     username: Some(login.username.clone()),
+                    client_type: rb_types::audit::ClientType::Ssh,
                 })
                 .await;
 
@@ -249,6 +253,7 @@ impl ServerHandler {
                                 method: AuthMethod::Oidc,
                                 connection_id,
                                 username: login.username.clone(),
+                                client_type: rb_types::audit::ClientType::Ssh,
                             })
                             .await;
 

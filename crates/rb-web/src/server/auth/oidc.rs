@@ -290,6 +290,7 @@ pub async fn oidc_callback(
                 method: AuthMethod::Oidc,
                 connection_id: session_id.clone(),
                 username: username_log,
+                client_type: rb_types::audit::ClientType::Web,
             },
             Some(ip_address),
             Some(session_id),

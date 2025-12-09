@@ -214,9 +214,14 @@ fn SessionRow(session: RecordedSession) -> Element {
                 div { class: "flex gap-2 justify-end",
                     {export_dropdown}
                     Link {
+                        to: "/admin/sessions/{session.id}/timeline",
+                        class: "btn btn-sm btn-ghost",
+                        "📋 Timeline"
+                    }
+                    Link {
                         to: "/admin/sessions/{session.id}/replay",
                         class: "btn btn-sm btn-primary",
-                        "Replay"
+                        "▶ Replay"
                     }
                 }
             }

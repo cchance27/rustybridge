@@ -52,6 +52,7 @@ pub async fn log_oidc_failure(ip_address: Option<String>, session_id: String, us
             method: rb_types::audit::AuthMethod::Oidc,
             username: username.or_else(|| Some("unknown".to_string())),
             reason,
+            client_type: rb_types::audit::ClientType::Web,
         },
         ip_address,
         Some(session_id),

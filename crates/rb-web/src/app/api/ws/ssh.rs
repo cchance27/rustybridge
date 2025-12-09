@@ -149,6 +149,7 @@ pub async fn ssh_terminal_ws(
     };
 
     let username = effective_username;
+    let authenticated_username = user.username.clone(); // Admin's actual username for audit events
     let user_id = effective_user_id;
     let relay_id = relay.id;
     let axum_session_id = auth.session.get_session_id();
@@ -194,7 +195,7 @@ pub async fn ssh_terminal_ws(
             );
             if let Ok((socket, is_minimized, _dims)) = wait_for_client_ready(socket).await {
                 let registry_for_upgrade = registry_inner.clone();
-                let is_admin_viewer = target_user_id.is_some();
+                let is_admin_viewer = authenticated_user_id != existing.user_id;
                 let admin_user_id_for_attach = if is_admin_viewer { Some(authenticated_user_id) } else { None };
                 handle_reattach(
                     socket,
@@ -203,6 +204,11 @@ pub async fn ssh_terminal_ws(
                     is_minimized,
                     is_admin_viewer,
                     admin_user_id_for_attach,
+                    if is_admin_viewer {
+                        Some(authenticated_username.clone())
+                    } else {
+                        None
+                    },
                     ip_address.clone(),
                     user_agent_str.clone(),
                     None,
@@ -274,6 +280,7 @@ async fn handle_reattach(
     initial_minimized: bool,
     is_admin_viewer: bool,
     admin_user_id: Option<i64>,
+    admin_username: Option<String>,
     ip_address: Option<String>,
     user_agent: Option<String>,
     pre_subscribed_rx: Option<tokio::sync::broadcast::Receiver<Vec<u8>>>,
@@ -286,10 +293,9 @@ async fn handle_reattach(
     // Generate a connection ID for this WebSocket session (or use provided)
     let connection_id = override_connection_id.unwrap_or_else(|| Uuid::now_v7().to_string());
 
-    // Record the connection
-    let registry_for_audit = registry.clone();
+    // Build audit context
     let user_id_for_audit = if let Some(uid) = admin_user_id { uid } else { session.user_id };
-    let ua_for_audit = user_agent.clone();
+    let username_for_audit = admin_username.clone().unwrap_or_else(|| session.username.clone());
     let audit_ctx = AuditContext::web(
         user_id_for_audit,
         session.username.clone(),
@@ -301,27 +307,33 @@ async fn handle_reattach(
 
     let _session_started_at = std::time::Instant::now();
 
-    tokio::spawn(async move {
-        if let Err(e) =
-            server_core::record_web_connection_with_context(&registry_for_audit, &audit_ctx_clone, ua_for_audit, axum_session_id).await
-        {
-            tracing::warn!("Failed to record web connection: {}", e);
-        }
-    });
-    // Audit: relay connected (reattach or new viewer)
+    // Record connection first (await to ensure FK exists for participant join)
+    let connection_id_for_record = connection_id.clone();
+    if let Err(e) =
+        server_core::record_web_connection_with_context(&registry, &audit_ctx_clone, user_agent.clone(), axum_session_id.clone()).await
+    {
+        tracing::warn!(connection_id = %connection_id_for_record, "Failed to record web connection: {}", e);
+    }
+
+    // Record this connection as a participant for timeline tracking
+    session.recorder.record_participant_join(&connection_id).await;
+
+    // Audit: session relay connected
     log_event_from_context_best_effort(
         &audit_ctx,
         EventType::SessionRelayConnected {
             session_id: connection_id.clone(),
-            relay_id: session.relay_id,
             relay_name: session.relay_name.clone(),
-            username: session.username.clone(),
+            relay_id: session.relay_id,
+            username: username_for_audit.clone(),
+            client_type: rb_types::audit::ClientType::Web,
         },
     )
     .await;
 
     // Track minimize state for this connection
     let mut is_minimized = initial_minimized;
+    let mut view_start_time: Option<std::time::Instant> = None;
 
     session.attach().await;
 
@@ -332,7 +344,7 @@ async fn handle_reattach(
             &audit_ctx,
             EventType::AdminViewerAdded {
                 session_id: connection_id.clone(),
-                admin_username: session.username.clone(),
+                admin_username: admin_username.clone().unwrap_or_else(|| "unknown".to_string()),
                 admin_user_id: admin_id,
             },
         )
@@ -371,6 +383,19 @@ async fn handle_reattach(
     // Increment viewers only if not minimized
     if !is_minimized {
         session.increment_viewers(rb_types::ssh::ConnectionType::Web).await;
+        // Viewer joined (on attach)
+        log_event_from_context_best_effort(
+            &audit_ctx,
+            EventType::SessionViewerJoined {
+                session_id: connection_id.clone(),
+                username: username_for_audit.clone(),
+                user_id: user_id_for_audit,
+                is_admin: is_admin_viewer,
+                client_type: rb_types::audit::ClientType::Web,
+            },
+        )
+        .await;
+        view_start_time = Some(std::time::Instant::now());
     }
 
     tracing::info!(
@@ -455,8 +480,38 @@ async fn handle_reattach(
                                         is_minimized = *minimized;
                                         if is_minimized {
                                             session.decrement_viewers(rb_types::ssh::ConnectionType::Web).await;
+
+                                            // Viewer left (minimized)
+                                            if let Some(start) = view_start_time.take() {
+                                                log_event_from_context_best_effort(
+                                                    &audit_ctx,
+                                                    EventType::SessionViewerLeft {
+                                                        session_id: connection_id.clone(),
+                                                        username: username_for_audit.clone(),
+                                                        user_id: user_id_for_audit,
+                                                        is_admin: is_admin_viewer,
+                                                        duration_ms: start.elapsed().as_millis() as i64,
+                                                        client_type: rb_types::audit::ClientType::Web,
+                                                    },
+                                                )
+                                                .await;
+                                            }
                                         } else {
                                             session.increment_viewers(rb_types::ssh::ConnectionType::Web).await;
+
+                                            // Viewer joined (restored)
+                                            log_event_from_context_best_effort(
+                                                &audit_ctx,
+                                                EventType::SessionViewerJoined {
+                                                    session_id: connection_id.clone(),
+                                                    username: username_for_audit.clone(),
+                                                    user_id: user_id_for_audit,
+                                                    is_admin: is_admin_viewer,
+                                                    client_type: rb_types::audit::ClientType::Web,
+                                                },
+                                            )
+                                            .await;
+                                            view_start_time = Some(std::time::Instant::now());
                                         }
                                     }
                                 }
@@ -495,6 +550,22 @@ async fn handle_reattach(
 
     if !is_minimized {
         session.decrement_viewers(rb_types::ssh::ConnectionType::Web).await;
+
+        // Viewer left (disconnected)
+        if let Some(start) = view_start_time.take() {
+            log_event_from_context_best_effort(
+                &audit_ctx,
+                EventType::SessionViewerLeft {
+                    session_id: connection_id.clone(),
+                    username: username_for_audit.clone(),
+                    user_id: user_id_for_audit,
+                    is_admin: is_admin_viewer,
+                    duration_ms: start.elapsed().as_millis() as i64,
+                    client_type: rb_types::audit::ClientType::Web,
+                },
+            )
+            .await;
+        }
     }
 
     log_event_from_context_best_effort(
@@ -503,19 +574,8 @@ async fn handle_reattach(
             session_id: connection_id.clone(),
             relay_id: session.relay_id,
             relay_name: session.relay_name.clone(),
-            username: session.username.clone(),
-        },
-    )
-    .await;
-    let duration_ms = _session_started_at.elapsed().as_millis() as i64;
-    log_event_from_context_best_effort(
-        &audit_ctx,
-        EventType::SessionEnded {
-            session_id: connection_id.clone(),
-            relay_name: session.relay_name.clone(),
-            relay_id: session.relay_id,
-            username: session.username.clone(),
-            duration_ms,
+            username: username_for_audit.clone(),
+            client_type: rb_types::audit::ClientType::Web,
         },
     )
     .await;
@@ -527,7 +587,7 @@ async fn handle_reattach(
             &audit_ctx,
             EventType::AdminViewerRemoved {
                 session_id: connection_id.clone(),
-                admin_username: session.username.clone(),
+                admin_username: admin_username.clone().unwrap_or_else(|| "unknown".to_string()),
                 admin_user_id: admin_id,
             },
         )
@@ -766,6 +826,7 @@ async fn handle_new_session(
             relay_name: relay_name.clone(),
             relay_id,
             username: username_for_audit.clone(),
+            client_type: rb_types::audit::ClientType::Web,
         },
     )
     .await;
@@ -778,32 +839,62 @@ async fn handle_new_session(
     let session_number_for_cleanup = session_number;
     let relay_name_for_logging = relay_name.clone();
 
+    // Capture context for SessionEnded
+    let audit_ctx_for_task = audit_ctx.clone();
+    let connection_id_for_task = connection_id.clone();
+    let username_for_task = username_for_audit.clone(); // Use the audit username (handles admin masquerade)
+
     // Spawn task to append backend output to session history
     tokio::spawn(async move {
         use server_core::sessions::session_backend::SessionBackend;
         let mut output_rx = backend.as_ref().subscribe();
+        let mut close_rx = session_for_history.close_tx.subscribe();
+
         loop {
-            match output_rx.recv().await {
-                Ok(data) => {
-                    if data.is_empty() {
-                        // EOF marker
-                        tracing::info!("SSH connection closed");
-                        session_for_history.close().await;
-                        break;
+            tokio::select! {
+                res = output_rx.recv() => {
+                    match res {
+                        Ok(data) => {
+                            if data.is_empty() {
+                                // EOF marker
+                                tracing::info!("SSH connection closed");
+                                session_for_history.close().await;
+                                break;
+                            }
+                            // Append to history
+                            session_for_history.touch().await;
+                            session_for_history.append_to_history(&data).await;
+                        }
+                        Err(_) => {
+                            // Channel closed
+                            tracing::info!("Backend output channel closed");
+                            session_for_history.close().await;
+                            break;
+                        }
                     }
-                    // Append to history
-                    session_for_history.touch().await;
-                    session_for_history.append_to_history(&data).await;
                 }
-                Err(_) => {
-                    // Channel closed
-                    tracing::info!("Backend output channel closed");
-                    session_for_history.close().await;
+                _ = close_rx.recv() => {
+                    tracing::info!("Session force closed signal received");
                     break;
                 }
             }
         }
         tracing::info!(relay = %relay_name_for_logging, "session history loop terminated");
+
+        // Log SessionEnded
+        let duration_ms = (chrono::Utc::now() - session_for_history.created_at).num_milliseconds();
+        log_event_from_context_best_effort(
+            &audit_ctx_for_task,
+            EventType::SessionEnded {
+                session_id: connection_id_for_task,
+                relay_name: relay_name_for_logging,
+                relay_id: relay_id_for_cleanup,
+                username: username_for_task,
+                duration_ms,
+                client_type: rb_types::audit::ClientType::Web,
+            },
+        )
+        .await;
 
         // Remove the session from the registry after shutdown
         registry_for_cleanup
@@ -831,6 +922,7 @@ async fn handle_new_session(
         current_minimized,
         false,
         None,
+        None, // Not an admin viewer
         ip_address,
         user_agent,
         Some(initial_rx),
