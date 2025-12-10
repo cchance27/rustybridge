@@ -3,13 +3,13 @@ use secrecy::ExposeSecret;
 use serial_test::serial;
 use sqlx::Row;
 
+mod common;
+
 #[tokio::test]
 #[serial]
 async fn rotation_handles_whitespace_in_inputs() -> Result<()> {
-    // Use in-memory DB and set passphrase with trailing whitespace
-    unsafe {
-        std::env::set_var("RB_SERVER_DB_URL", "sqlite:file:rotation_whitespace_test?mode=memory&cache=shared");
-    }
+    // Use in-memory DB for both server and audit, set passphrase with trailing whitespace
+    common::set_test_db_env("rotation_whitespace_test");
     unsafe {
         std::env::set_var("RB_SERVER_SECRETS_PASSPHRASE", "test-secret  \n"); // Trailing whitespace
     }

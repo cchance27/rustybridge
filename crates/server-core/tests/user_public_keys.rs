@@ -2,12 +2,12 @@ use anyhow::Result;
 use serial_test::serial;
 use sqlx::Row;
 
+mod common;
+
 #[tokio::test]
 #[serial]
 async fn add_user_public_key_stores_key() -> Result<()> {
-    unsafe {
-        std::env::set_var("RB_SERVER_DB_URL", "sqlite:file:user_pubkey_test?mode=memory&cache=shared");
-    }
+    common::set_test_db_env("user_pubkey_test");
     // Secrets aren't used directly here but set for consistency with other tests.
     unsafe {
         std::env::set_var("RB_SERVER_SECRETS_PASSPHRASE", "pubkey-passphrase");
@@ -46,9 +46,7 @@ async fn add_user_public_key_stores_key() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn list_and_remove_user_public_key() -> Result<()> {
-    unsafe {
-        std::env::set_var("RB_SERVER_DB_URL", "sqlite:file:user_pubkey_test2?mode=memory&cache=shared");
-    }
+    common::set_test_db_env("user_pubkey_test2");
     unsafe {
         std::env::set_var("RB_SERVER_SECRETS_PASSPHRASE", "pubkey-passphrase");
     }

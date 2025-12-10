@@ -3,13 +3,13 @@ use secrecy::ExposeSecret;
 use serial_test::serial;
 use sqlx::{Row, SqlitePool};
 
+mod common;
+
 #[tokio::test]
 #[serial]
 async fn rotation_reencrypts_credentials_and_options() -> Result<()> {
-    // Use in-memory DB and set OLD passphrase
-    unsafe {
-        std::env::set_var("RB_SERVER_DB_URL", "sqlite:file:rotation_test?mode=memory&cache=shared");
-    }
+    // Use in-memory DB for both server and audit, and set OLD passphrase
+    common::set_test_db_env("rotation_test");
     unsafe {
         std::env::set_var("RB_SERVER_SECRETS_PASSPHRASE", "old-secret");
     }

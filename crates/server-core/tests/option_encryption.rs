@@ -2,12 +2,12 @@ use anyhow::Result;
 use serial_test::serial;
 use sqlx::{Row, SqlitePool};
 
+mod common;
+
 #[tokio::test]
 #[serial]
 async fn option_encryption_and_masked_listing() -> Result<()> {
-    unsafe {
-        std::env::set_var("RB_SERVER_DB_URL", "sqlite:file:option_test?mode=memory&cache=shared");
-    }
+    common::set_test_db_env("option_test");
     unsafe {
         std::env::set_var("RB_SERVER_SECRETS_PASSPHRASE", "pass-old");
     }
