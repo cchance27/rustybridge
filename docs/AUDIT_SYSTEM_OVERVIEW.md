@@ -6,6 +6,7 @@
 - Web, SSH/TUI, and CLI now emit strongly-typed events for user/group/relay/credential/ACL/session activity.
 - **Audit Web UI**: Admin console for browsing/filtering events and a visual "Relay Session Timeline" for inspecting session lifecycle and connections.
 - All state-changing operations in the management surfaces are moving to a **context-first** API that enforces attribution.
+- **Hardening Complete**: The `server-core` crate uses a unified `audit!` macro for consistent logging. Write paths have been audited to ensure no sensitive operations bypass audit logging.
 
 ---
 
@@ -20,7 +21,7 @@ Web / CLI / SSH/TUI
   ▼
 server-core business logic
   • functions take `&AuditContext`
-  • log via `server_core::audit::*`
+  • log via `audit!(ctx, Event { ... })`
   ▼
 state-store audit layer
   • `insert_audit_event` / `query_audit_events`
@@ -47,6 +48,8 @@ SQLite `audit.db`
 - `crates/server-core/src/audit/`
   - `logger.rs` – `log_event`, `log_event_simple_*`, `log_event_with_context_*`, `log_event_from_context_*`.
   - `query.rs` – helpers to query/filter events from server-core.
+- `crates/server-core/src/macros.rs`:
+    - `audit!` – Primary macro for logging events with context.
 
 ---
 
@@ -75,7 +78,7 @@ Every business function that changes state now prefers a signature like:
 pub async fn add_user(ctx: &AuditContext, username: &str, password: &str) -> ServerResult<()>;
 ```
 
-and uses `log_event_from_context_best_effort` to record the corresponding `EventType`.
+and uses the `audit!` macro to record the corresponding `EventType`.
 
 ---
 
@@ -90,7 +93,7 @@ Emitted from `server-core/src/handler/auth.rs`:
 
 ### User Management
 
-Emitted from `server-core/src/user/mod.rs`:
+Emitted from `server-core/src/user/mod.rs` and `server-core/src/api.rs`:
 
 - `UserCreated { username }`
 - `UserDeleted { username, user_id }`
@@ -99,6 +102,8 @@ Emitted from `server-core/src/user/mod.rs`:
 - `UserSshKeyRemoved { username, user_id, key_id }`
 - `UserClaimAdded { username, user_id, claim }`
 - `UserClaimRemoved { username, user_id, claim }`
+- `OidcLinked { username, user_id, provider, subject }`
+- `OidcUnlinked { username, user_id, provider }`
 
 ### Group Management
 
@@ -250,28 +255,7 @@ Some are wired (e.g., migrations); others can be hooked into startup/shutdown fl
 
 ## Remaining Work / TODOs
 
-### 1. Wire Remaining Event Types
-
-- ✅ **Role management events**: All RBAC events now wired from `server-core/src/api.rs`:
-  - `RoleCreated`, `RoleDeleted`, `RoleAssignedToUser/Group`, `RoleRevokedFromUser/Group`, `RoleClaimAdded/Removed`
-
-- ✅ **SSH key audit events**: Now wired from `server-core/src/api.rs`:
-  - `UserSshKeyAdded`, `UserSshKeyRemoved` (ID-based variants)
-
-- ✅ **Server lifecycle events**:
-  - `ServerStarted` emitted on startup (in `rb-server` main after migrations)
-  - `ServerStopped` emitted on graceful shutdown (Ctrl+C signal handler)
-
-- ✅ **OIDC configuration**:
-  - `OidcConfigured` emitted when setting OIDC issuer URL via CLI
-
-### 2. Hardening & DX
-
-- Add lightweight wrappers/macros to reduce boilerplate when logging common patterns.
-- Consider feature flags to disable high-volume categories (e.g., resize events) in low-compliance deployments.
-- Review all remaining write paths for any direct `state_store` usage that bypasses server-core + audit.
-
-### 3. Retention & Export
+### 1. Retention & Export
 
 - Design retention policies for `system_events` (similar to session recording):
   - Configurable max age / max rows.
@@ -284,13 +268,13 @@ Some are wired (e.g., migrations); others can be hooked into startup/shutdown fl
 
 1. Add a new variant to `EventType` in `rb-types/src/audit/event.rs`.
 2. Map it to an `EventCategory` and an `action_type()` string.
-3. Log it from server-core using `audit!(ctx, UserCreated { username });`.
+3. Log it from server-core using `crate::audit!(ctx, UserCreated { username });`.
 4. (Optional) Add filtering support in any UIs that should expose it.
 
 This keeps all audit logic centralized, type-safe, and easy to evolve as the platform grows.
 
 
-### 4. Future Refactoring & Improvements
+### 3. Future Refactoring & Improvements
 
 - [ ] **Event Type Verbosity**: The `EventType` enum is currently very verbose. While this provides excellent type safety and clarity, it may become unwieldy as the system grows. Consider refactoring into a more modular structure or using macros/codegen in the future.
 - [ ] **Session ID Migration**: Currently `session_number` (u32) is used in many places. This should be migrated to `session_id` (UUIDv7) strictly to prevent session enumeration attacks. This is a known technical debt item.

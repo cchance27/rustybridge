@@ -912,18 +912,17 @@ impl SessionRegistry {
                     let reason_clone = reason.clone();
                     tokio::spawn(async move {
                         let ctx = rb_types::audit::AuditContext::system(format!("session_cleanup:{}", session_id_clone));
-                        crate::audit::log_event_from_context_best_effort(
+                        crate::audit!(
                             &ctx,
-                            rb_types::audit::EventType::SessionTimedOut {
+                            SessionTimedOut {
                                 session_id: session_id_clone,
                                 relay_name: relay_name_clone,
                                 relay_id,
                                 username: username_clone,
                                 duration_ms,
                                 reason: reason_clone,
-                            },
-                        )
-                        .await;
+                            }
+                        );
                     });
                 }
 

@@ -261,16 +261,15 @@ pub async fn handle_management_action(
             };
 
             // Log capture event with context
-            crate::audit::log_event_from_context_best_effort(
+            crate::audit!(
                 ctx,
-                rb_types::audit::EventType::RelayHostKeyCaptured {
+                RelayHostKeyCaptured {
                     name: review.host.clone(),
                     relay_id: review.host_id,
                     key_type: review.new_key_type.clone(),
                     fingerprint: review.new_fingerprint.clone(),
-                },
-            )
-            .await;
+                }
+            );
 
             return Ok(Some(AppAction::ReviewHostkey(review)));
         }

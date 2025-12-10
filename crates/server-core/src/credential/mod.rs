@@ -524,28 +524,26 @@ pub async fn assign_credential_by_ids(ctx: &rb_types::audit::AuditContext, host_
 
     if let Some(relay) = state_store::fetch_relay_host_by_id(&pool, host_id).await? {
         for key in existing_keys {
-            crate::audit::log_event_from_context_best_effort(
+            crate::audit!(
                 ctx,
-                rb_types::audit::EventType::RelayOptionCleared {
+                RelayOptionCleared {
                     relay_name: relay.name.clone(),
                     relay_id: host_id,
                     key,
-                },
-            )
-            .await;
+                }
+            );
         }
 
         for (key, is_secure) in set_keys {
-            crate::audit::log_event_from_context_best_effort(
+            crate::audit!(
                 ctx,
-                rb_types::audit::EventType::RelayOptionSet {
+                RelayOptionSet {
                     relay_name: relay.name.clone(),
                     relay_id: host_id,
                     key,
                     is_secure,
-                },
-            )
-            .await;
+                }
+            );
         }
     }
 
@@ -575,25 +573,23 @@ pub async fn unassign_credential_by_id(ctx: &rb_types::audit::AuditContext, host
     // Log audit event
     if let Some(relay) = relay_info {
         for key in existing_keys {
-            crate::audit::log_event_from_context_best_effort(
+            crate::audit!(
                 ctx,
-                rb_types::audit::EventType::RelayOptionCleared {
+                RelayOptionCleared {
                     relay_name: relay.name.clone(),
                     relay_id: host_id,
                     key,
-                },
-            )
-            .await;
+                }
+            );
         }
 
-        crate::audit::log_event_from_context_best_effort(
+        crate::audit!(
             ctx,
-            rb_types::audit::EventType::CredentialUnassigned {
+            CredentialUnassigned {
                 relay_name: relay.name,
                 relay_id: host_id,
-            },
-        )
-        .await;
+            }
+        );
     }
 
     Ok(())

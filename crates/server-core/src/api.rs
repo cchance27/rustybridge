@@ -180,12 +180,32 @@ pub async fn update_oidc_profile_by_subject(
         .map_err(ServerError::StateStore)
 }
 
-pub async fn delete_oidc_link_for_user(user_id: i64) -> ServerResult<u64> {
+pub async fn delete_oidc_link_for_user(ctx: &AuditContext, user_id: i64) -> ServerResult<u64> {
     let db = server_db_handle().await?;
     let pool = db.into_pool();
-    state_store::delete_oidc_link_for_user(&pool, user_id)
+
+    // Fetch details for audit log
+    let link_info = state_store::get_oidc_link_for_user(&pool, user_id).await.ok().flatten();
+    let username = state_store::fetch_username_by_id(&pool, user_id).await.ok().flatten();
+
+    let rows = state_store::delete_oidc_link_for_user(&pool, user_id)
         .await
-        .map_err(ServerError::StateStore)
+        .map_err(ServerError::StateStore)?;
+
+    if rows > 0 {
+        if let (Some(u), Some(l)) = (username, link_info) {
+            crate::audit!(
+                ctx,
+                OidcUnlinked {
+                    username: u,
+                    user_id,
+                    provider: l.provider_id,
+                }
+            );
+        }
+    }
+
+    Ok(rows)
 }
 
 pub async fn get_oidc_link_for_user(user_id: i64) -> ServerResult<Option<OidcLinkInfo>> {
@@ -309,16 +329,15 @@ pub async fn assign_role_to_user(ctx: &AuditContext, user_id: i64, role_id: i64)
 
     // Log audit event
     if let (Some(username), Some(role_name)) = (username, role_name) {
-        crate::audit::log_event_from_context_best_effort(
+        crate::audit!(
             ctx,
-            rb_types::audit::EventType::RoleAssignedToUser {
+            RoleAssignedToUser {
                 role_name,
                 role_id,
                 username,
                 user_id,
-            },
-        )
-        .await;
+            }
+        );
     }
 
     Ok(())
@@ -338,16 +357,15 @@ pub async fn revoke_role_from_user(ctx: &AuditContext, user_id: i64, role_id: i6
 
     // Log audit event
     if let (Some(username), Some(role_name)) = (username, role_name) {
-        crate::audit::log_event_from_context_best_effort(
+        crate::audit!(
             ctx,
-            rb_types::audit::EventType::RoleRevokedFromUser {
+            RoleRevokedFromUser {
                 role_name,
                 role_id,
                 username,
                 user_id,
-            },
-        )
-        .await;
+            }
+        );
     }
 
     Ok(())
@@ -361,14 +379,13 @@ pub async fn create_role(ctx: &AuditContext, name: &str, description: Option<&st
         .map_err(ServerError::StateStore)?;
 
     // Log audit event
-    crate::audit::log_event_from_context_best_effort(
+    crate::audit!(
         ctx,
-        rb_types::audit::EventType::RoleCreated {
+        RoleCreated {
             name: name.to_string(),
             description: description.map(|s| s.to_string()),
-        },
-    )
-    .await;
+        }
+    );
 
     Ok(())
 }
@@ -387,7 +404,7 @@ pub async fn delete_role(ctx: &AuditContext, role_id: i64) -> ServerResult<()> {
     // Log audit event only if role existed AND a row was actually deleted
     if let Some(name) = role_name {
         if rows_affected > 0 {
-            crate::audit::log_event_from_context_best_effort(ctx, rb_types::audit::EventType::RoleDeleted { name, role_id }).await;
+            crate::audit!(ctx, RoleDeleted { name, role_id });
         }
     }
 
@@ -407,15 +424,14 @@ pub async fn add_claim_to_role(ctx: &AuditContext, role_id: i64, claim: &ClaimTy
 
     // Log audit event
     if let Some(role_name) = role_name {
-        crate::audit::log_event_from_context_best_effort(
+        crate::audit!(
             ctx,
-            rb_types::audit::EventType::RoleClaimAdded {
+            RoleClaimAdded {
                 role_name,
                 role_id,
                 claim: claim.clone(),
-            },
-        )
-        .await;
+            }
+        );
     }
 
     Ok(())
@@ -434,15 +450,14 @@ pub async fn remove_claim_from_role(ctx: &AuditContext, role_id: i64, claim: &Cl
 
     // Log audit event
     if let Some(role_name) = role_name {
-        crate::audit::log_event_from_context_best_effort(
+        crate::audit!(
             ctx,
-            rb_types::audit::EventType::RoleClaimRemoved {
+            RoleClaimRemoved {
                 role_name,
                 role_id,
                 claim: claim.clone(),
-            },
-        )
-        .await;
+            }
+        );
     }
 
     Ok(())
@@ -480,16 +495,15 @@ pub async fn assign_role_to_group_by_ids(ctx: &AuditContext, group_id: i64, role
 
     // Log audit event
     if let (Some(group_name), Some(role_name)) = (group_name, role_name) {
-        crate::audit::log_event_from_context_best_effort(
+        crate::audit!(
             ctx,
-            rb_types::audit::EventType::RoleAssignedToGroup {
+            RoleAssignedToGroup {
                 role_name,
                 role_id,
                 group_name,
                 group_id,
-            },
-        )
-        .await;
+            }
+        );
     }
 
     Ok(())
@@ -509,16 +523,15 @@ pub async fn revoke_role_from_group_by_ids(ctx: &AuditContext, group_id: i64, ro
 
     // Log audit event
     if let (Some(group_name), Some(role_name)) = (group_name, role_name) {
-        crate::audit::log_event_from_context_best_effort(
+        crate::audit!(
             ctx,
-            rb_types::audit::EventType::RoleRevokedFromGroup {
+            RoleRevokedFromGroup {
                 role_name,
                 role_id,
                 group_name,
                 group_id,
-            },
-        )
-        .await;
+            }
+        );
     }
 
     Ok(())
@@ -562,16 +575,15 @@ pub async fn add_user_public_key_by_id(ctx: &AuditContext, user_id: i64, public_
 
     // Log audit event
     if let Some(username) = username {
-        crate::audit::log_event_from_context_best_effort(
+        crate::audit!(
             ctx,
-            rb_types::audit::EventType::UserSshKeyAdded {
+            UserSshKeyAdded {
                 username,
                 user_id,
                 key_id,
                 fingerprint: Some(fingerprint),
-            },
-        )
-        .await;
+            }
+        );
     }
 
     Ok(key_id)
@@ -590,8 +602,7 @@ pub async fn delete_user_public_key_by_id(ctx: &AuditContext, key_id: i64) -> Se
 
     // Log audit event
     if let Some((user_id, username)) = key_info {
-        crate::audit::log_event_from_context_best_effort(ctx, rb_types::audit::EventType::UserSshKeyRemoved { username, user_id, key_id })
-            .await;
+        crate::audit!(ctx, UserSshKeyRemoved { username, user_id, key_id });
     }
 
     Ok(())

@@ -70,18 +70,17 @@ pub async fn cleanup_stale_sessions() -> ServerResult<()> {
             };
 
             // Log SessionForceClosed event
-            crate::audit::log_event_from_context_best_effort(
+            crate::audit!(
                 &ctx,
-                rb_types::audit::EventType::SessionForceClosed {
+                SessionForceClosed {
                     session_id: session_id.clone(),
                     session_number,
                     relay_id,
                     relay_name: relay_name.clone(),
                     target_username,
                     reason: "Server Restart".to_string(),
-                },
-            )
-            .await;
+                }
+            );
         }
     }
 
