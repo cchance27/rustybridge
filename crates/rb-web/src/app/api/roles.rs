@@ -43,8 +43,7 @@ pub async fn create_role(name: String, description: Option<String>) -> Result<()
 )]
 pub async fn delete_role(id: i64) -> Result<(), ServerFnError> {
     ensure_role_claim(&auth, ClaimLevel::Delete)?;
-    let user = auth.current_user.as_ref().map(|u| u.username.as_str()).unwrap_or("<unknown>");
-    server_core::delete_role(&audit.0, id, user)
+    server_core::delete_role(&audit.0, id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }

@@ -113,7 +113,16 @@ Emitted from `server-core/src/group/mod.rs`:
 
 ### Role Management (RBAC)
 
-Types exist in `EventType`; wiring from role APIs is not fully implemented yet.
+Emitted from `server-core/src/api.rs`:
+
+- `RoleCreated { name, description }`
+- `RoleDeleted { name, role_id }`
+- `RoleAssignedToUser { role_name, role_id, username, user_id }`
+- `RoleRevokedFromUser { role_name, role_id, username, user_id }`
+- `RoleAssignedToGroup { role_name, role_id, group_name, group_id }`
+- `RoleRevokedFromGroup { role_name, role_id, group_name, group_id }`
+- `RoleClaimAdded { role_name, role_id, claim }`
+- `RoleClaimRemoved { role_name, role_id, claim }`
 
 ### Relay Hosts
 
@@ -243,16 +252,18 @@ Some are wired (e.g., migrations); others can be hooked into startup/shutdown fl
 
 ### 1. Wire Remaining Event Types
 
-- Role management events:
-  - `RoleCreated`, `RoleDeleted`, `RoleAssignedToUser/Group`, `RoleRevokedFromUser/Group`, `RoleClaimAdded/Removed` – ensure all role APIs call `log_event_from_context_best_effort`.
+- ✅ **Role management events**: All RBAC events now wired from `server-core/src/api.rs`:
+  - `RoleCreated`, `RoleDeleted`, `RoleAssignedToUser/Group`, `RoleRevokedFromUser/Group`, `RoleClaimAdded/Removed`
 
-- Investigate that all remaining actions that users and admins can take are audit-enforced. 
-  - We should make sure that any mutations in server-core are audit-enforced with proper context.
-  - We should confirm all rb-web and tui, and rb-server-cli functions are properly integrating and using audits.
+- ✅ **SSH key audit events**: Now wired from `server-core/src/api.rs`:
+  - `UserSshKeyAdded`, `UserSshKeyRemoved` (ID-based variants)
 
-- Configuration/system events:
-  - Emit `ServerStarted` / `ServerStopped` from rb-server startup/shutdown.
-  - Emit `OidcConfigured` from OIDC config flows.
+- ✅ **Server lifecycle events**:
+  - `ServerStarted` emitted on startup (in `rb-server` main after migrations)
+  - `ServerStopped` emitted on graceful shutdown (Ctrl+C signal handler)
+
+- ✅ **OIDC configuration**:
+  - `OidcConfigured` emitted when setting OIDC issuer URL via CLI
 
 ### 2. Hardening & DX
 
@@ -273,7 +284,7 @@ Some are wired (e.g., migrations); others can be hooked into startup/shutdown fl
 
 1. Add a new variant to `EventType` in `rb-types/src/audit/event.rs`.
 2. Map it to an `EventCategory` and an `action_type()` string.
-3. Log it from server-core using `log_event_from_context_best_effort(&ctx, EventType::YourNewEvent { ... })`.
+3. Log it from server-core using `audit!(ctx, UserCreated { username });`.
 4. (Optional) Add filtering support in any UIs that should expose it.
 
 This keeps all audit logic centralized, type-safe, and easy to evolve as the platform grows.

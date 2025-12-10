@@ -2,6 +2,8 @@ use dioxus::prelude::*;
 use rb_types::ssh::SshKey;
 
 #[cfg(feature = "server")]
+use crate::server::audit::WebAuditContext;
+#[cfg(feature = "server")]
 use crate::server::auth::guards::{WebAuthSession, ensure_authenticated};
 
 #[get(
@@ -28,26 +30,23 @@ pub async fn get_my_ssh_keys() -> Result<Vec<SshKey>, ServerFnError> {
 
 #[post(
     "/api/my/ssh_keys",
-    auth: WebAuthSession
+    auth: WebAuthSession,
+    audit: WebAuditContext
 )]
 pub async fn add_my_ssh_key(public_key: String, comment: Option<String>) -> Result<(), ServerFnError> {
     let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    server_core::add_user_public_key_by_id(
-        &rb_types::audit::AuditContext::system("rb-web"),
-        user.id,
-        &public_key,
-        comment.as_deref(),
-    )
-    .await
-    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    server_core::add_user_public_key_by_id(&audit.0, user.id, &public_key, comment.as_deref())
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     Ok(())
 }
 
 #[delete(
     "/api/my/ssh_keys/{key_id}",
-    auth: WebAuthSession
+    auth: WebAuthSession,
+    audit: WebAuditContext
 )]
 pub async fn delete_my_ssh_key(key_id: i64) -> Result<(), ServerFnError> {
     let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
@@ -61,7 +60,7 @@ pub async fn delete_my_ssh_key(key_id: i64) -> Result<(), ServerFnError> {
         return Err(ServerFnError::new("Key not found or access denied"));
     }
 
-    server_core::delete_user_public_key_by_id(&rb_types::audit::AuditContext::system("rb-web"), key_id)
+    server_core::delete_user_public_key_by_id(&audit.0, key_id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 

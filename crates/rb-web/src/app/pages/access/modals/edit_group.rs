@@ -89,7 +89,7 @@ pub fn EditGroupModal(
             if let Some(Ok(all_roles)) = roles.value()().as_ref()
                 && let Some(role) = all_roles.iter().find(|r| r.name == role_name)
             {
-                match assign_role_to_group(group_id_for_add, role.id).await {
+                match assign_role_to_group(role.id, group_id_for_add).await {
                     Ok(_) => {
                         groups.restart();
                         roles.restart(); // Update roles too as counts change
@@ -117,7 +117,7 @@ pub fn EditGroupModal(
             if let Some(Ok(all_roles)) = roles.value()().as_ref()
                 && let Some(role) = all_roles.iter().find(|r| r.name == role_name)
             {
-                match revoke_role_from_group(group_id_for_remove, role.id).await {
+                match revoke_role_from_group(role.id, group_id_for_remove).await {
                     Ok(_) => {
                         groups.restart();
                         roles.restart();

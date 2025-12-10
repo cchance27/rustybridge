@@ -192,7 +192,7 @@ pub fn EditUserModal(
             if let Some(Ok(all_roles)) = roles.value()().as_ref()
                 && let Some(role) = all_roles.iter().find(|r| r.name == role_name)
             {
-                match assign_role_to_user(user_id_for_add, role.id).await {
+                match assign_role_to_user(role.id, user_id_for_add).await {
                     Ok(_) => {
                         users.restart();
                         roles.restart();
@@ -217,7 +217,7 @@ pub fn EditUserModal(
             if let Some(Ok(all_roles)) = roles.value()().as_ref()
                 && let Some(role) = all_roles.iter().find(|r| r.name == role_name)
             {
-                match revoke_role_from_user(user_id_for_remove, role.id).await {
+                match revoke_role_from_user(role.id, user_id_for_remove).await {
                     Ok(_) => {
                         users.restart();
                         roles.restart();

@@ -296,62 +296,155 @@ pub async fn user_has_relay_access(user_id: i64, relay_id: i64) -> ServerResult<
 // --- Role helpers (ID-based) ---
 
 pub async fn assign_role_to_user(ctx: &AuditContext, user_id: i64, role_id: i64) -> ServerResult<()> {
-    let _ = ctx;
     let db = server_db_handle().await?;
     let mut conn = db.into_pool().acquire().await.map_err(ServerError::Database)?;
+
+    // Fetch names for audit log
+    let username = state_store::fetch_username_by_id(&mut *conn, user_id).await?;
+    let role_name = state_store::fetch_role_name_by_id(&mut *conn, role_id).await?;
+
     state_store::assign_role_to_user_by_ids(&mut *conn, user_id, role_id)
         .await
         .map_err(ServerError::StateStore)?;
+
+    // Log audit event
+    if let (Some(username), Some(role_name)) = (username, role_name) {
+        crate::audit::log_event_from_context_best_effort(
+            ctx,
+            rb_types::audit::EventType::RoleAssignedToUser {
+                role_name,
+                role_id,
+                username,
+                user_id,
+            },
+        )
+        .await;
+    }
+
     Ok(())
 }
 
 pub async fn revoke_role_from_user(ctx: &AuditContext, user_id: i64, role_id: i64) -> ServerResult<()> {
-    let _ = ctx;
     let db = server_db_handle().await?;
     let mut conn = db.into_pool().acquire().await.map_err(ServerError::Database)?;
+
+    // Fetch names for audit log
+    let username = state_store::fetch_username_by_id(&mut *conn, user_id).await?;
+    let role_name = state_store::fetch_role_name_by_id(&mut *conn, role_id).await?;
+
     state_store::revoke_role_from_user_by_ids(&mut conn, user_id, role_id)
         .await
         .map_err(ServerError::StateStore)?;
+
+    // Log audit event
+    if let (Some(username), Some(role_name)) = (username, role_name) {
+        crate::audit::log_event_from_context_best_effort(
+            ctx,
+            rb_types::audit::EventType::RoleRevokedFromUser {
+                role_name,
+                role_id,
+                username,
+                user_id,
+            },
+        )
+        .await;
+    }
+
     Ok(())
 }
 
 pub async fn create_role(ctx: &AuditContext, name: &str, description: Option<&str>) -> ServerResult<()> {
-    let _ = ctx;
     let db = server_db_handle().await?;
     let pool = db.into_pool();
     state_store::create_role(&pool, name, description)
         .await
         .map_err(ServerError::StateStore)?;
+
+    // Log audit event
+    crate::audit::log_event_from_context_best_effort(
+        ctx,
+        rb_types::audit::EventType::RoleCreated {
+            name: name.to_string(),
+            description: description.map(|s| s.to_string()),
+        },
+    )
+    .await;
+
     Ok(())
 }
 
-pub async fn delete_role(ctx: &AuditContext, role_id: i64, _role_name: &str) -> ServerResult<()> {
-    let _ = ctx;
+pub async fn delete_role(ctx: &AuditContext, role_id: i64) -> ServerResult<()> {
     let db = server_db_handle().await?;
     let pool = db.into_pool();
-    state_store::delete_role_by_id(&pool, role_id)
+
+    // Fetch role name for audit log BEFORE deletion
+    let role_name = state_store::fetch_role_name_by_id(&pool, role_id).await?;
+
+    let rows_affected = state_store::delete_role_by_id(&pool, role_id)
         .await
         .map_err(ServerError::StateStore)?;
+
+    // Log audit event only if role existed AND a row was actually deleted
+    if let Some(name) = role_name {
+        if rows_affected > 0 {
+            crate::audit::log_event_from_context_best_effort(ctx, rb_types::audit::EventType::RoleDeleted { name, role_id }).await;
+        }
+    }
+
     Ok(())
 }
 
-pub async fn add_claim_to_role(ctx: &AuditContext, role_id: i64, claim: &ClaimType<'_>) -> ServerResult<()> {
-    let _ = ctx;
+pub async fn add_claim_to_role(ctx: &AuditContext, role_id: i64, claim: &ClaimType<'static>) -> ServerResult<()> {
     let db = server_db_handle().await?;
     let pool = db.into_pool();
+
+    // Fetch role name for audit log
+    let role_name = state_store::fetch_role_name_by_id(&pool, role_id).await?;
+
     state_store::add_claim_to_role_by_id(&pool, role_id, claim)
         .await
         .map_err(ServerError::StateStore)?;
+
+    // Log audit event
+    if let Some(role_name) = role_name {
+        crate::audit::log_event_from_context_best_effort(
+            ctx,
+            rb_types::audit::EventType::RoleClaimAdded {
+                role_name,
+                role_id,
+                claim: claim.clone(),
+            },
+        )
+        .await;
+    }
+
     Ok(())
 }
 
-pub async fn remove_claim_from_role(ctx: &AuditContext, role_id: i64, claim: &ClaimType<'_>) -> ServerResult<()> {
-    let _ = ctx;
+pub async fn remove_claim_from_role(ctx: &AuditContext, role_id: i64, claim: &ClaimType<'static>) -> ServerResult<()> {
     let db = server_db_handle().await?;
     let pool = db.into_pool();
+
+    // Fetch role name for audit log
+    let role_name = state_store::fetch_role_name_by_id(&pool, role_id).await?;
+
     state_store::remove_claim_from_role_by_id(&pool, role_id, claim)
         .await
         .map_err(ServerError::StateStore)?;
+
+    // Log audit event
+    if let Some(role_name) = role_name {
+        crate::audit::log_event_from_context_best_effort(
+            ctx,
+            rb_types::audit::EventType::RoleClaimRemoved {
+                role_name,
+                role_id,
+                claim: claim.clone(),
+            },
+        )
+        .await;
+    }
+
     Ok(())
 }
 
@@ -374,21 +467,61 @@ pub async fn list_role_groups_by_id(role_id: i64) -> ServerResult<Vec<String>> {
 }
 
 pub async fn assign_role_to_group_by_ids(ctx: &AuditContext, group_id: i64, role_id: i64) -> ServerResult<()> {
-    let _ = ctx;
     let db = server_db_handle().await?;
     let pool = db.into_pool();
+
+    // Fetch names for audit log
+    let group_name = state_store::fetch_group_name_by_id(&pool, group_id).await?;
+    let role_name = state_store::fetch_role_name_by_id(&pool, role_id).await?;
+
     state_store::assign_role_to_group_by_ids(&pool, group_id, role_id)
         .await
-        .map_err(ServerError::StateStore)
+        .map_err(ServerError::StateStore)?;
+
+    // Log audit event
+    if let (Some(group_name), Some(role_name)) = (group_name, role_name) {
+        crate::audit::log_event_from_context_best_effort(
+            ctx,
+            rb_types::audit::EventType::RoleAssignedToGroup {
+                role_name,
+                role_id,
+                group_name,
+                group_id,
+            },
+        )
+        .await;
+    }
+
+    Ok(())
 }
 
 pub async fn revoke_role_from_group_by_ids(ctx: &AuditContext, group_id: i64, role_id: i64) -> ServerResult<()> {
-    let _ = ctx;
     let db = server_db_handle().await?;
     let pool = db.into_pool();
+
+    // Fetch names for audit log
+    let group_name = state_store::fetch_group_name_by_id(&pool, group_id).await?;
+    let role_name = state_store::fetch_role_name_by_id(&pool, role_id).await?;
+
     state_store::revoke_role_from_group_by_ids(&pool, group_id, role_id)
         .await
-        .map_err(ServerError::StateStore)
+        .map_err(ServerError::StateStore)?;
+
+    // Log audit event
+    if let (Some(group_name), Some(role_name)) = (group_name, role_name) {
+        crate::audit::log_event_from_context_best_effort(
+            ctx,
+            rb_types::audit::EventType::RoleRevokedFromGroup {
+                role_name,
+                role_id,
+                group_name,
+                group_id,
+            },
+        )
+        .await;
+    }
+
+    Ok(())
 }
 
 // --- Claims and keys ---
@@ -410,21 +543,58 @@ pub async fn list_user_public_keys_by_id(user_id: i64) -> ServerResult<Vec<(i64,
 }
 
 pub async fn add_user_public_key_by_id(ctx: &AuditContext, user_id: i64, public_key: &str, comment: Option<&str>) -> ServerResult<i64> {
-    let _ = ctx;
+    use russh::keys::ssh_key;
+
     let db = server_db_handle().await?;
     let pool = db.into_pool();
-    state_store::add_user_public_key_by_id(&pool, user_id, public_key, comment)
+
+    // Parse and validate the public key
+    let parsed_key =
+        ssh_key::PublicKey::from_openssh(public_key).map_err(|e| ServerError::InvalidConfig(format!("invalid public key: {}", e)))?;
+    let fingerprint = parsed_key.fingerprint(Default::default()).to_string();
+
+    // Fetch username for audit log
+    let username = state_store::fetch_username_by_id(&pool, user_id).await?;
+
+    let key_id = state_store::add_user_public_key_by_id(&pool, user_id, public_key, comment)
         .await
-        .map_err(ServerError::StateStore)
+        .map_err(ServerError::StateStore)?;
+
+    // Log audit event
+    if let Some(username) = username {
+        crate::audit::log_event_from_context_best_effort(
+            ctx,
+            rb_types::audit::EventType::UserSshKeyAdded {
+                username,
+                user_id,
+                key_id,
+                fingerprint: Some(fingerprint),
+            },
+        )
+        .await;
+    }
+
+    Ok(key_id)
 }
 
 pub async fn delete_user_public_key_by_id(ctx: &AuditContext, key_id: i64) -> ServerResult<()> {
-    let _ = ctx;
     let db = server_db_handle().await?;
     let pool = db.into_pool();
+
+    // Fetch key details for audit log before deletion
+    let key_info = state_store::fetch_public_key_by_id(&pool, key_id).await?;
+
     state_store::delete_user_public_key(&pool, key_id)
         .await
-        .map_err(ServerError::StateStore)
+        .map_err(ServerError::StateStore)?;
+
+    // Log audit event
+    if let Some((user_id, username)) = key_info {
+        crate::audit::log_event_from_context_best_effort(ctx, rb_types::audit::EventType::UserSshKeyRemoved { username, user_id, key_id })
+            .await;
+    }
+
+    Ok(())
 }
 
 // --- Group helpers ---
