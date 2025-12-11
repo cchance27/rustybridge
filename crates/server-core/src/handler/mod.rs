@@ -6,7 +6,7 @@ use russh::{ChannelId, CryptoVec, server::Session};
 use tokio::sync::{
     mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel}, watch
 };
-use tracing::info;
+use tracing::{info, warn};
 use tui_core::{AppAction, AppSession, backend::RemoteBackend};
 
 use crate::{relay::RelayHandle, sessions::SessionRegistry};
@@ -177,9 +177,9 @@ impl ServerHandler {
             let user = self.username.clone();
             tokio::spawn(async move {
                 if let Err(e) = crate::auth::ssh_auth::abandon_ssh_auth_session(&code).await {
-                    tracing::warn!(%code, ?user, error = %e, "failed to mark abandoned SSH OIDC session");
+                    warn!(%code, ?user, error = %e, "failed to mark abandoned SSH OIDC session");
                 } else {
-                    tracing::info!(%code, ?user, "abandoned SSH OIDC session marked as abandoned on disconnect");
+                    info!(%code, ?user, "abandoned SSH OIDC session marked as abandoned on disconnect");
                 }
             });
         }

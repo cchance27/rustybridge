@@ -6,7 +6,7 @@ use rb_types::{
     audit::{AuthMethod, EventType}, auth::{AuthDecision, LoginTarget}
 };
 use russh::server::Auth;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use super::{ServerHandler, display_addr};
 use crate::auth::{
@@ -99,7 +99,7 @@ impl ServerHandler {
         let key_bytes = match public_key.to_bytes() {
             Ok(b) => b,
             Err(e) => {
-                warn!("Failed to encode SSH key: {}", e);
+                error!(error = %e, "failed to encode ssh key");
                 return Ok(Auth::reject());
             }
         };
@@ -108,7 +108,7 @@ impl ServerHandler {
         if let Ok(parsed_key) = ssh_key::PublicKey::from_bytes(&key_bytes)
             && parsed_key.algorithm().as_str().contains("-cert-")
         {
-            warn!("SSH Certificate auth attempted but CA not configured");
+            error!("ssh certificate auth attempted but CA not configured");
             return Ok(Auth::reject());
         }
 
@@ -156,7 +156,7 @@ impl ServerHandler {
                 Ok(Auth::reject())
             }
             Err(e) => {
-                warn!("Failed to verify public key: {}", e);
+                error!(error = %e, "failed to verify public key");
                 Ok(Auth::reject())
             }
         }
@@ -195,7 +195,7 @@ impl ServerHandler {
                     info!(
                         peer = %display_addr(self.peer_addr),
                         user = %login.username,
-                        "SSH OIDC keyboard-interactive session created"
+                        "ssh oidc keyboard-interactive session created"
                     );
 
                     return Ok(Auth::Partial {
@@ -205,7 +205,7 @@ impl ServerHandler {
                     });
                 }
                 Err(e) => {
-                    warn!("Failed to create SSH auth session: {}", e);
+                    error!(error = %e, "failed to create ssh auth session");
                     return Ok(Auth::reject());
                 }
             }
@@ -230,7 +230,7 @@ impl ServerHandler {
                         if auth_user_id == session.requested_user_id {
                             // One-time consume on success
                             if let Err(e) = mark_ssh_auth_session_used(code, auth_user_id).await {
-                                warn!("Failed to mark SSH auth session as used: {}", e);
+                                error!(error = %e, "failed to mark ssh auth session as used");
                                 return Ok(Auth::reject());
                             }
 
@@ -261,13 +261,13 @@ impl ServerHandler {
                                 peer = %display_addr(self.peer_addr),
                                 user = %login.username,
                                 user_id = %auth_user_id,
-                                "OIDC keyboard-interactive authentication accepted"
+                                "oidc keyboard-interactive authentication accepted"
                             );
                             return Ok(Auth::Accept);
                         } else {
                             // Mismatch: reject and invalidate the session
                             if let Err(e) = reject_ssh_auth_session(code, Some(auth_user_id)).await {
-                                warn!("Failed to reject mismatched SSH auth session: {}", e);
+                                error!(error = %e, "failed to reject mismatched ssh auth session");
                             }
 
                             self.pending_ssh_auth_code = None;
@@ -279,7 +279,7 @@ impl ServerHandler {
                                     requested_user = %login.username,
                                 requested_user_id = %session.requested_user_id,
                                 authenticated_user_id = %auth_user_id,
-                                "OIDC authentication user mismatch for SSH login"
+                                "oidc authentication user mismatch for ssh login"
                             );
                             self.deny_keyboard_interactive = true;
                             if !self.ssh_auth_failure_banner_sent {
@@ -297,7 +297,7 @@ impl ServerHandler {
                         warn!(
                             peer = %display_addr(self.peer_addr),
                             user = %login.username,
-                            "OIDC authentication rejected or expired"
+                            "oidc authentication rejected or expired"
                         );
                         if !self.ssh_auth_failure_banner_sent {
                             self.ssh_auth_failure_banner_sent = true;
@@ -323,7 +323,7 @@ impl ServerHandler {
                     warn!(
                         peer = %display_addr(self.peer_addr),
                         user = %login.username,
-                        "OIDC SSH auth session missing or expired"
+                        "oidc ssh auth session missing or expired"
                     );
                     if !self.ssh_auth_failure_banner_sent {
                         self.ssh_auth_failure_banner_sent = true;
@@ -332,7 +332,7 @@ impl ServerHandler {
                     return Ok(Auth::reject());
                 }
                 Err(e) => {
-                    warn!("Failed to check SSH auth session: {}", e);
+                    error!(error = %e, "failed to check ssh auth session");
                     self.pending_ssh_auth_code = None;
                     self.last_ssh_auth_check = None;
                     self.ssh_auth_message_shown = false;
@@ -365,11 +365,11 @@ impl ServerHandler {
             // Generate connection ID and record metadata
             match crate::record_ssh_connection(&registry, user_id, ip_address, None, self.connection_session_id.clone()).await {
                 Ok(conn_id) => {
-                    tracing::info!("Recorded SSH connection: {}", conn_id);
+                    info!(conn_id = %conn_id, "recorded ssh connection");
                     self.connection_session_id = Some(conn_id);
                 }
                 Err(e) => {
-                    tracing::error!("Failed to record SSH connection: {:?}", e);
+                    error!(error = %e, "failed to record ssh connection");
                 }
             }
         }

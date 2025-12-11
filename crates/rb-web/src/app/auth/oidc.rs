@@ -1,5 +1,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "server")]
+use tracing::info;
 
 #[cfg(feature = "server")]
 use crate::server::auth::guards::WebAuthSession;
@@ -65,7 +67,7 @@ pub async fn unlink_oidc() -> Result<(), ServerFnError> {
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
 
     if result > 0 {
-        tracing::info!(user_id = %user.id, "OIDC account unlinked via server function");
+        info!(user_id = %user.id, "oidc account unlinked via server function");
         // Clear cached user data (including OIDC profile info)
         auth.cache_clear_user(user.id);
         Ok(())
@@ -132,7 +134,7 @@ pub async fn unlink_user_oidc(user_id: i64) -> Result<(), ServerFnError> {
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
 
     if result > 0 {
-        tracing::info!(
+        info!(
             admin_user = ?admin_user.id,
             target_user = %user_id,
             "OIDC account unlinked by admin"

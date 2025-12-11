@@ -1,5 +1,6 @@
 use axum::response::{IntoResponse, Redirect};
 use server_core::api as sc_api;
+use tracing::{error, info, warn};
 
 use crate::server::auth::WebAuthSession;
 
@@ -28,16 +29,16 @@ pub async fn oidc_unlink(
         Ok(result) => {
             let rows_affected = result;
             if rows_affected > 0 {
-                tracing::info!(user_id = %user_id, rows = %rows_affected, "OIDC account unlinked");
+                info!(user_id = %user_id, rows = %rows_affected, "oidc account unlinked");
                 auth.cache_clear_user(user_id);
                 Redirect::to("/?success=oidc_unlinked").into_response()
             } else {
-                tracing::warn!(user_id = %user_id, "No OIDC link found to unlink");
+                warn!(user_id = %user_id, "no oidc link found to unlink");
                 Redirect::to("/oidc/error?error=no_link_found").into_response()
             }
         }
         Err(e) => {
-            tracing::error!(user_id = %user_id, error = %e, "Failed to unlink OIDC account");
+            error!(user_id = %user_id, error = %e, "failed to unlink oidc account");
             Redirect::to("/oidc/error?error=unlink_failed").into_response()
         }
     }

@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "web")]
+use tracing::warn;
 
 /// Storage backend type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,8 +39,8 @@ impl BrowserStorage {
 
                 match storage.get_item(key) {
                     Ok(value) => value,
-                    Err(e) => {
-                        web_sys::console::warn_2(&format!("Failed to get item from storage: {}", key).into(), &e);
+                    Err(_e) => {
+                        warn!(key = %key, "failed to get item from storage");
                         None
                     }
                 }
@@ -68,7 +70,7 @@ impl BrowserStorage {
 
                 storage.set_item(key, value).map_err(|e| {
                     let err_msg = format!("Failed to set item in storage '{}': {:?}", key, e);
-                    web_sys::console::warn_1(&err_msg.clone().into());
+                    warn!(key = %key, "failed to set item in storage");
                     err_msg
                 })
             }
@@ -99,7 +101,7 @@ impl BrowserStorage {
 
                     storage.remove_item(key).map_err(|e| {
                         let err_msg = format!("Failed to remove item from storage '{}': {:?}", key, e);
-                        web_sys::console::warn_1(&err_msg.clone().into());
+                        warn!(key = %key, "failed to remove item from storage");
                         err_msg
                     })
                 }
@@ -129,7 +131,7 @@ impl BrowserStorage {
 
                 storage.clear().map_err(|e| {
                     let err_msg = format!("Failed to clear storage: {:?}", e);
-                    web_sys::console::warn_1(&err_msg.clone().into());
+                    warn!("failed to clear storage");
                     err_msg
                 })
             }
@@ -185,7 +187,7 @@ impl BrowserStorage {
             Ok(v) => Some(v),
             #[cfg(feature = "web")]
             Err(e) => {
-                web_sys::console::warn_1(&format!("Failed to parse JSON from storage key '{}': {} (value: {})", key, e, value).into());
+                warn!(key = %key, error = %e, value = %value, "failed to parse json from storage");
                 None
             }
             #[cfg(not(feature = "web"))]

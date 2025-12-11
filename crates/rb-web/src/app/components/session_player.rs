@@ -2,6 +2,7 @@ use base64::{Engine as _, prelude::BASE64_STANDARD};
 use dioxus::{
     fullstack::{WebSocketOptions, use_websocket}, prelude::*
 };
+use tracing::debug;
 
 use crate::app::{
     api::audit::{SessionChunk, SessionStreamClient, SessionStreamServer, get_session_events, session_stream_ws, session_summary}, components::structured_tooltip::{StructuredTooltip, TooltipSection}
@@ -465,13 +466,12 @@ pub fn SessionPlayer(session_id: String) -> Element {
             let end_time = summary.last_chunk_ts.or(summary.end_time).unwrap_or(start_time);
             let duration_ms = end_time.saturating_sub(start_time);
 
-            #[cfg(feature = "web")]
-            web_sys::console::log_1(
-                &format!(
-                    "Session Info: start={}, end={}, last_chunk={:?}, duration={}",
-                    start_time, end_time, summary.last_chunk_ts, duration_ms
-                )
-                .into(),
+            debug!(
+                start = start_time,
+                end = end_time,
+                last_chunk_ts = ?summary.last_chunk_ts,
+                duration_ms,
+                "session info"
             );
 
             Some((start_time, end_time, duration_ms))
@@ -548,18 +548,16 @@ pub fn SessionPlayer(session_id: String) -> Element {
                                             return; // Success - exit the retry loop
                                         }
                                         Err(e) => {
-                                            #[cfg(feature = "web")]
-                                            web_sys::console::warn_1(
-                                                &format!("Failed to initialize terminal (attempt {}): {:?}", retry_count + 1, e).into(),
+                                            warn!(
+                                                attempt = retry_count + 1,
+                                                error = ?e,
+                                                "failed to initialize terminal"
                                             );
                                             // Continue to next retry
                                         }
                                     }
                                 } else {
-                                    #[cfg(feature = "web")]
-                                    web_sys::console::warn_1(
-                                        &format!("Terminal container not found (attempt {}), retrying...", retry_count + 1).into(),
-                                    );
+                                    warn!(attempt = retry_count + 1, "terminal container not found, retrying");
                                     // Continue to next retry
                                 }
                             }

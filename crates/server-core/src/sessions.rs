@@ -13,6 +13,7 @@ use rb_types::ssh::{
 };
 use session_backend::SessionBackend;
 use tokio::sync::{RwLock, broadcast};
+use tracing::{debug, info, warn};
 
 use crate::session_recorder::SessionRecorder;
 
@@ -197,7 +198,7 @@ impl SshSession {
         }
 
         let count = self.active_connections.fetch_add(1, Ordering::SeqCst) + 1;
-        tracing::debug!(
+        debug!(
             user_id = self.user_id,
             relay_id = self.relay_id,
             session_number = self.session_number,
@@ -211,7 +212,7 @@ impl SshSession {
         if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
             // Only warn if there are subscribers (otherwise it's expected)
             if self.event_tx.receiver_count() > 0 {
-                tracing::warn!(
+                warn!(
                     session_number = self.session_number,
                     error = ?e,
                     "Failed to broadcast connection count increment"
@@ -266,7 +267,7 @@ impl SshSession {
 
         let count = if old_count > 0 { old_count - 1 } else { 0 };
 
-        tracing::debug!(
+        debug!(
             user_id = self.user_id,
             relay_id = self.relay_id,
             session_number = self.session_number,
@@ -280,7 +281,7 @@ impl SshSession {
         if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
             // Only warn if there are subscribers (otherwise it's expected)
             if self.event_tx.receiver_count() > 0 {
-                tracing::warn!(
+                warn!(
                     session_number = self.session_number,
                     error = ?e,
                     "Failed to broadcast connection count decrement"
@@ -304,7 +305,7 @@ impl SshSession {
                 let _ = self.ssh_viewers.fetch_add(1, Ordering::SeqCst);
             }
         }
-        tracing::debug!(
+        debug!(
             user_id = self.user_id,
             relay_id = self.relay_id,
             session_number = self.session_number,
@@ -318,7 +319,7 @@ impl SshSession {
         if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
             // Only warn if there are subscribers (otherwise it's expected)
             if self.event_tx.receiver_count() > 0 {
-                tracing::warn!(
+                warn!(
                     session_number = self.session_number,
                     error = ?e,
                     "Failed to broadcast viewer count increment"
@@ -371,7 +372,7 @@ impl SshSession {
                     .ok();
             }
         }
-        tracing::debug!(
+        debug!(
             user_id = self.user_id,
             relay_id = self.relay_id,
             session_number = self.session_number,
@@ -385,7 +386,7 @@ impl SshSession {
         if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await)) {
             // Only warn if there are subscribers (otherwise it's expected)
             if self.event_tx.receiver_count() > 0 {
-                tracing::warn!(
+                warn!(
                     session_number = self.session_number,
                     error = ?e,
                     "Failed to broadcast viewer count decrement"
@@ -419,7 +420,7 @@ impl SshSession {
     pub async fn add_admin_viewer(&self, admin_user_id: i64) {
         let mut admin_viewers = self.admin_viewers.write().await;
         admin_viewers.insert(admin_user_id);
-        tracing::info!(
+        info!(
             session_number = self.session_number,
             admin_user_id,
             admin_count = admin_viewers.len(),
@@ -430,7 +431,7 @@ impl SshSession {
         if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await))
             && self.event_tx.receiver_count() > 0
         {
-            tracing::warn!(
+            warn!(
                 session_number = self.session_number,
                 error = ?e,
                 "Failed to broadcast admin viewer addition"
@@ -442,7 +443,7 @@ impl SshSession {
     pub async fn remove_admin_viewer(&self, admin_user_id: i64) {
         let mut admin_viewers = self.admin_viewers.write().await;
         admin_viewers.remove(&admin_user_id);
-        tracing::info!(
+        info!(
             session_number = self.session_number,
             admin_user_id,
             admin_count = admin_viewers.len(),
@@ -453,7 +454,7 @@ impl SshSession {
         if let Err(e) = self.event_tx.send(SessionEvent::Updated(self.user_id, self.to_summary().await))
             && self.event_tx.receiver_count() > 0
         {
-            tracing::warn!(
+            warn!(
                 session_number = self.session_number,
                 error = ?e,
                 "Failed to broadcast admin viewer removal"
@@ -640,7 +641,7 @@ impl SessionRegistry {
 
         let ip_address = ip_address.map(|s| {
             if s.len() > MAX_IP_LEN {
-                tracing::warn!(original_len = s.len(), "IP address exceeds max length, truncating");
+                warn!(original_len = s.len(), "ip address exceeds max length, truncating");
                 s.chars().take(MAX_IP_LEN).collect()
             } else {
                 s
@@ -649,7 +650,7 @@ impl SessionRegistry {
 
         let user_agent = user_agent.map(|s| {
             if s.len() > MAX_USER_AGENT_LEN {
-                tracing::warn!(original_len = s.len(), "User agent exceeds max length, truncating");
+                warn!(original_len = s.len(), "user agent exceeds max length, truncating");
                 s.chars().take(MAX_USER_AGENT_LEN).collect()
             } else {
                 s
@@ -657,14 +658,14 @@ impl SessionRegistry {
         });
 
         let username = if username.len() > MAX_USERNAME_LEN {
-            tracing::warn!(original_len = username.len(), "Username exceeds max length, truncating");
+            warn!(original_len = username.len(), "username exceeds max length, truncating");
             username.chars().take(MAX_USERNAME_LEN).collect()
         } else {
             username
         };
 
         let relay_name = if relay_name.len() > MAX_RELAY_NAME_LEN {
-            tracing::warn!(original_len = relay_name.len(), "Relay name exceeds max length, truncating");
+            warn!(original_len = relay_name.len(), "relay name exceeds max length, truncating");
             relay_name.chars().take(MAX_RELAY_NAME_LEN).collect()
         } else {
             relay_name
@@ -926,7 +927,7 @@ impl SessionRegistry {
                     });
                 }
 
-                tracing::info!(
+                info!(
                     user_id,
                     relay_id,
                     session_number = key.2,

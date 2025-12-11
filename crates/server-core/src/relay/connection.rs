@@ -104,7 +104,7 @@ pub async fn start_bridge_backend(
         relay_name: relay.name.clone(),
         warning_callback: Arc::new(|msg| {
             Box::pin(async move {
-                tracing::warn!("{}", msg);
+                warn!("{}", msg);
             })
         }),
         action_tx: action_tx.clone(),
@@ -261,7 +261,7 @@ pub async fn connect_to_relay_backend(
         if is_secure {
             if let Ok((decrypted, is_legacy)) = crate::secrets::decrypt_string_if_encrypted(&v) {
                 if is_legacy {
-                    warn!("Upgrading legacy v1 secret for relay option '{}'", k);
+                    warn!(key = %k, "upgrading legacy v1 secret for relay option");
                     if let Ok(new_enc) =
                         crate::secrets::encrypt_string(SecretBoxedString::new(Box::new(decrypted.expose_secret().to_string())))
                     {
@@ -317,7 +317,7 @@ pub async fn connect_to_relay_channel(
         if is_secure {
             if let Ok((decrypted, is_legacy)) = crate::secrets::decrypt_string_if_encrypted(&v) {
                 if is_legacy {
-                    warn!("Upgrading legacy v1 secret for relay option '{}'", k);
+                    warn!(key = %k, "upgrading legacy v1 secret for relay option");
                     if let Ok(new_enc) =
                         crate::secrets::encrypt_string(SecretBoxedString::new(Box::new(decrypted.expose_secret().to_string())))
                     {
@@ -411,7 +411,7 @@ pub async fn connect_to_relay_local(relay_name: &str, base_username: &str) -> Re
         if is_secure {
             if let Ok((decrypted, is_legacy)) = crate::secrets::decrypt_string_if_encrypted(&v) {
                 if is_legacy {
-                    warn!("Upgrading legacy v1 secret for relay option '{}'", k);
+                    warn!(key = %k, "upgrading legacy v1 secret for relay option");
                     if let Ok(new_enc) =
                         crate::secrets::encrypt_string(SecretBoxedString::new(Box::new(decrypted.expose_secret().to_string())))
                     {

@@ -37,7 +37,8 @@ fn get_track_config(track: &str) -> TrackConfig {
             color: "text-secondary",
             bg_color: "bg-secondary/20",
         },
-        "events" | _ => TrackConfig {
+        _ => TrackConfig {
+            // "events" + any other track
             icon: "⚡",
             label: "Events",
             color: "text-warning",
@@ -142,11 +143,7 @@ fn TimelineView(
             .max()
             .unwrap_or(min_ts);
 
-        let max_ts = if is_active {
-            effective_end_time.max(max_event_ts)
-        } else {
-            effective_end_time.max(max_event_ts)
-        };
+        let max_ts = effective_end_time.max(max_event_ts);
 
         (min_ts.min(info.start_time), max_ts)
     };

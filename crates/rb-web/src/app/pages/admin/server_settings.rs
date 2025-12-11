@@ -13,6 +13,7 @@ pub fn ServerSettings() -> Element {
     // Load current settings and stats
     let settings = use_resource(get_retention_settings);
     let mut stats = use_resource(get_database_stats);
+    let mut server_log_level = use_resource(crate::app::api::settings::get_server_log_level);
 
     // Original config from server (for change detection)
     let mut original_config = use_signal(|| None::<RetentionConfig>);
@@ -47,6 +48,64 @@ pub fn ServerSettings() -> Element {
 
                 // Main content
                 if settings().is_some() {
+
+                    // Server Log Level Section
+                    div { class: "card bg-base-200 p-6 mb-8",
+                        div { class: "flex justify-between items-center",
+                            div {
+                                h2 { class: "text-xl font-semibold", "Logging Configuration" }
+                                p { class: "text-sm opacity-70", "Control the verbosity of server-side logs." }
+                                match server_log_level() {
+                                    Some(Ok(info)) if info.overridden_by_env => rsx! {
+                                        p { class: "text-xs opacity-70 mt-1 text-warning",
+                                            "Note: the RUST_LOG environment variable is set; runtime log output follows RUST_LOG and may not reflect changes made here."
+                                        }
+                                    },
+                                    _ => rsx! {},
+                                }
+                            }
+
+                            match server_log_level() {
+                                Some(Ok(current_level)) => rsx! {
+                                    div { class: "dropdown dropdown-end",
+                                        div { tabindex: "0", role: "button", class: "btn m-1",
+                                            "{current_level.level.to_uppercase()}"
+                                            svg { xmlns: "http://www.w3.org/2000/svg", class: "h-4 w-4 ml-2", fill: "none", view_box: "0 0 24 24", stroke: "currentColor",
+                                                path { stroke_linecap: "round", stroke_linejoin: "round", stroke_width: "2", d: "M19 9l-7 7-7-7" }
+                                            }
+                                        }
+                                        ul { tabindex: "0", class: "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52",
+                                            for level in ["error", "warn", "info", "debug", "trace"] {
+                                                li {
+                                                    a {
+                                                        class: if current_level.level.to_lowercase() == level { "active" } else { "" },
+                                                        onclick: move |_| {
+                                                            let lvl = level.to_string();
+                                                            spawn(async move {
+                                                                use crate::app::api::settings::update_server_log_level;
+                                                                match update_server_log_level(lvl).await {
+                                                                    Ok(_) => {
+                                                                        server_log_level.restart();
+                                                                        use_toast().success("Server log level updated");
+                                                                    }
+                                                                    Err(e) => {
+                                                                         use_toast().error(&format!("Failed to update log level: {}", e));
+                                                                    }
+                                                                }
+                                                            });
+                                                        },
+                                                        "{level.to_uppercase()}"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                _ => rsx! { span { class: "loading loading-spinner" } }
+                            }
+                        }
+                    }
+
                     // Retention Policy Section
                     RetentionSection {
                         config: config(),

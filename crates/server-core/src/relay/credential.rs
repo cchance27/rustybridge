@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use secrecy::ExposeSecret;
 use serde_json::Value as JsonValue;
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::{
     error::{ServerError, ServerResult}, secrets::{SecretBoxedString, SecretVec, decrypt_secret, encrypt_secret}
@@ -70,7 +70,7 @@ pub async fn fetch_and_resolve_credential(
         match decrypt_secret(&cred.salt, &cred.nonce, &cred.secret) {
             Ok((pt, is_legacy)) => {
                 if is_legacy {
-                    warn!("Upgrading legacy v1 credential '{}' ({})", cred_id, cred.kind);
+                    warn!(cred_id, kind = %cred.kind, "upgrading legacy v1 credential");
                     if let Ok(blob) = encrypt_secret(pt.expose_secret()) {
                         let _ = sqlx::query("UPDATE relay_credentials SET salt = ?, nonce = ?, secret = ? WHERE id = ?")
                             .bind(blob.salt)
@@ -84,7 +84,7 @@ pub async fn fetch_and_resolve_credential(
                 pt
             }
             Err(e) => {
-                warn!("failed to decrypt credential {}: {}", cred_id, e);
+                error!(cred_id, error = %e, "failed to decrypt credential");
                 return Err(e);
             }
         }

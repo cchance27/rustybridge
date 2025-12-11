@@ -7,6 +7,8 @@ pub mod oidc;
 pub mod ssh_auth;
 pub mod ssh_cert;
 
+use tracing::error;
+
 use crate::error::{ServerError, ServerResult};
 
 pub fn parse_login_target(input: &str) -> LoginTarget {
@@ -27,7 +29,7 @@ pub async fn authenticate_password(login: &LoginTarget, password: &str) -> Serve
     let handle = match state_store::server_db().await {
         Ok(h) => h,
         Err(e) => {
-            tracing::error!(error = %e, "failed to open server database during authentication");
+            error!(error = %e, "failed to open server database during authentication");
             return Ok(AuthDecision::Reject);
         }
     };
@@ -38,7 +40,7 @@ pub async fn authenticate_password(login: &LoginTarget, password: &str) -> Serve
             None => return Ok(AuthDecision::Reject),
         },
         Err(e) => {
-            tracing::error!(
+            error!(
                 error = %e,
                 user = %login.username,
                 "failed to fetch user password hash"
@@ -52,7 +54,7 @@ pub async fn authenticate_password(login: &LoginTarget, password: &str) -> Serve
     let parsed = match PasswordHash::new(&stored) {
         Ok(ph) => ph,
         Err(e) => {
-            tracing::error!(
+            error!(
                 error = %e,
                 user = %login.username,
                 "invalid stored password hash"

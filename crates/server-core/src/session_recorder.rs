@@ -7,7 +7,7 @@ use std::{
 use chrono::Utc;
 use rb_types::state::DbHandle;
 use tokio::sync::Mutex;
-use tracing::error;
+use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::secrets;
@@ -118,7 +118,7 @@ impl SessionRecorder {
         .await
         {
             // Without the parent row, every chunk insert would FK-fail and be dropped.
-            error!(session_id = %session_id_str, error = ?e, "Failed to create session record; recording will be discarded");
+            error!(session_id = %session_id_str, error = ?e, "failed to create session record; recording will be discarded");
             recording_enabled.store(false, Ordering::Relaxed);
         }
 
@@ -132,7 +132,7 @@ impl SessionRecorder {
                     .execute(&db.pool)
                     .await
         {
-            error!(session_id = %session_id_str, error = ?e, "Failed to record initiator participant");
+            error!(session_id = %session_id_str, error = ?e, "failed to record initiator participant");
         }
 
         let buffer = Arc::new(Mutex::new(Vec::new()));
@@ -163,7 +163,7 @@ impl SessionRecorder {
                     if !recorder.recording_enabled.load(Ordering::Relaxed) {
                         // Clear buffers one last time before exiting
                         recorder.flush().await;
-                        tracing::debug!(session_id = %recorder.session_id, "Background flush task exiting (recording disabled)");
+                        debug!(session_id = %recorder.session_id, "background flush task exiting (recording disabled)");
                         break;
                     }
                     recorder.flush().await;
@@ -194,7 +194,7 @@ impl SessionRecorder {
                 .execute(&self.db.pool)
                 .await
         {
-            error!(session_id = %session_id_str, error = ?e, "Failed to record participant join");
+            error!(session_id = %session_id_str, error = ?e, "failed to record participant join");
         }
     }
 
@@ -211,7 +211,7 @@ impl SessionRecorder {
         .execute(&self.db.pool)
         .await
         {
-            error!(session_id = %session_id_str, error = ?e, "Failed to record participant leave");
+            error!(session_id = %session_id_str, error = ?e, "failed to record participant leave");
         }
     }
 
@@ -452,7 +452,7 @@ impl SessionRecorder {
         let mut tx = match self.db.pool.begin().await {
             Ok(tx) => tx,
             Err(e) => {
-                error!(error = ?e, "Failed to begin transaction for flush");
+                error!(error = ?e, "failed to begin transaction for flush");
                 // Requeue chunks so we can retry on next flush instead of losing data.
                 let mut buffer = self.buffer.lock().await;
 
@@ -498,7 +498,7 @@ impl SessionRecorder {
             let compressed = match zstd::encode_all(chunk.data.as_slice(), COMPRESSION_LEVEL) {
                 Ok(c) => c,
                 Err(e) => {
-                    error!(error = ?e, "Failed to compress chunk, requeueing batch");
+                    error!(error = ?e, "failed to compress chunk, requeueing batch");
                     remaining_chunks.push(coalesced_chunk);
                     remaining_chunks.extend(iter);
                     break;
@@ -510,7 +510,7 @@ impl SessionRecorder {
             let encrypted_blob = match secrets::encrypt_secret(&compressed) {
                 Ok(b) => b,
                 Err(e) => {
-                    error!(error = ?e, "Failed to encrypt chunk, requeueing batch");
+                    error!(error = ?e, "failed to encrypt chunk, requeueing batch");
                     remaining_chunks.push(coalesced_chunk);
                     remaining_chunks.extend(iter);
                     break;
@@ -556,7 +556,7 @@ impl SessionRecorder {
             .await;
 
             if let Err(e) = res {
-                error!(error = ?e, "Failed to insert chunk, requeueing batch");
+                error!(error = ?e, "failed to insert chunk, requeueing batch");
                 remaining_chunks.push(coalesced_chunk);
                 remaining_chunks.extend(iter);
                 break;
@@ -573,7 +573,7 @@ impl SessionRecorder {
 
         if !successful_chunks.is_empty() {
             if let Err(e) = tx.commit().await {
-                error!(error = ?e, "Failed to commit flush transaction, requeueing all chunks");
+                error!(error = ?e, "failed to commit flush transaction, requeueing all chunks");
                 let mut all_chunks = successful_chunks;
                 all_chunks.append(&mut remaining_chunks);
 
@@ -662,7 +662,7 @@ impl SessionRecorder {
         .await;
 
         if let Err(e) = res {
-            error!(error = ?e, "Failed to update session end time and sizes");
+            error!(error = ?e, "failed to update session end time and sizes");
         }
     }
 }

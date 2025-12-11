@@ -6,7 +6,7 @@ use rb_types::{relay::RelayInfo, ssh::ConnectionType};
 use russh::{ChannelId, CryptoVec, server::Session};
 use secrecy::ExposeSecret;
 use tokio::sync::{mpsc::unbounded_channel, oneshot};
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::{ServerHandler, display_addr};
 use crate::{
@@ -57,7 +57,7 @@ impl ServerHandler {
                                                 match decrypt_string_if_encrypted(&v) {
                                                     Ok((val, is_legacy)) => {
                                                         if is_legacy {
-                                                            warn!("Upgrading legacy v1 secret for relay option '{}'", k);
+                                                            warn!(key = %k, "upgrading legacy v1 secret for relay option");
                                                             if let Ok(new_enc) = encrypt_string(SecretBoxedString::new(Box::new(
                                                                 val.expose_secret().to_string(),
                                                             ))) {
@@ -243,7 +243,7 @@ impl ServerHandler {
                                                     tokio::select! {
                                                         // Force-close signal from admin
                                                         _ = close_rx.recv() => {
-                                                            tracing::info!(
+                                                            info!(
                                                                 session_number = session_for_bridge.session_number,
                                                                 "session force-closed, terminating SSH bridge"
                                                             );
@@ -284,7 +284,7 @@ impl ServerHandler {
                                                             // Send an empty data packet; if the SSH channel is gone, this write will fail.
                                                             let payload = CryptoVec::new();
                                                             if server_handle_for_bridge.data(channel, payload).await.is_err() {
-                                                                tracing::info!(
+                                                                info!(
                                                                     session_number = session_for_bridge.session_number,
                                                                     "ssh_bridge_ping_failed; closing ssh side"
                                                                 );

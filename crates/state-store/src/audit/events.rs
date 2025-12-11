@@ -122,32 +122,34 @@ async fn execute_filtered_query(db: &DbHandle, filter: &EventFilter) -> DbResult
     }
 
     if let Some(ref session_ids) = filter.session_ids
-        && !session_ids.is_empty() {
-            builder.push(" AND session_id IN (");
-            for (i, sid) in session_ids.iter().enumerate() {
-                if i > 0 {
-                    builder.push(", ");
-                }
-                builder.push_bind(sid);
+        && !session_ids.is_empty()
+    {
+        builder.push(" AND session_id IN (");
+        for (i, sid) in session_ids.iter().enumerate() {
+            if i > 0 {
+                builder.push(", ");
             }
-            builder.push(")");
+            builder.push_bind(sid);
         }
+        builder.push(")");
+    }
 
     if let Some(ref parent_session_id) = filter.parent_session_id {
         builder.push(" AND parent_session_id = ").push_bind(parent_session_id);
     }
 
     if let Some(ref action_types) = filter.action_types
-        && !action_types.is_empty() {
-            builder.push(" AND action_type IN (");
-            for (i, at) in action_types.iter().enumerate() {
-                if i > 0 {
-                    builder.push(", ");
-                }
-                builder.push_bind(at);
+        && !action_types.is_empty()
+    {
+        builder.push(" AND action_type IN (");
+        for (i, at) in action_types.iter().enumerate() {
+            if i > 0 {
+                builder.push(", ");
             }
-            builder.push(")");
+            builder.push_bind(at);
         }
+        builder.push(")");
+    }
 
     builder.push(" ORDER BY timestamp DESC");
 
@@ -187,31 +189,33 @@ pub async fn count_audit_events(db: &DbHandle, filter: &EventFilter) -> DbResult
     }
 
     if let Some(ref session_ids) = filter.session_ids
-        && !session_ids.is_empty() {
-            builder.push(" AND session_id IN (");
-            for (i, sid) in session_ids.iter().enumerate() {
-                if i > 0 {
-                    builder.push(", ");
-                }
-                builder.push_bind(sid);
+        && !session_ids.is_empty()
+    {
+        builder.push(" AND session_id IN (");
+        for (i, sid) in session_ids.iter().enumerate() {
+            if i > 0 {
+                builder.push(", ");
             }
-            builder.push(")");
+            builder.push_bind(sid);
         }
+        builder.push(")");
+    }
     if let Some(ref parent_session_id) = filter.parent_session_id {
         builder.push(" AND parent_session_id = ").push_bind(parent_session_id);
     }
 
     if let Some(ref action_types) = filter.action_types
-        && !action_types.is_empty() {
-            builder.push(" AND action_type IN (");
-            for (i, at) in action_types.iter().enumerate() {
-                if i > 0 {
-                    builder.push(", ");
-                }
-                builder.push_bind(at);
+        && !action_types.is_empty()
+    {
+        builder.push(" AND action_type IN (");
+        for (i, at) in action_types.iter().enumerate() {
+            if i > 0 {
+                builder.push(", ");
             }
-            builder.push(")");
+            builder.push_bind(at);
         }
+        builder.push(")");
+    }
 
     let query = builder.build();
     let row = query.fetch_one(&db.pool).await?;
@@ -272,32 +276,34 @@ pub async fn count_events_by_group(db: &DbHandle, group_by: &str, filter: &Event
     }
 
     if let Some(ref session_ids) = filter.session_ids
-        && !session_ids.is_empty() {
-            builder.push(" AND session_id IN (");
-            for (i, sid) in session_ids.iter().enumerate() {
-                if i > 0 {
-                    builder.push(", ");
-                }
-                builder.push_bind(sid);
+        && !session_ids.is_empty()
+    {
+        builder.push(" AND session_id IN (");
+        for (i, sid) in session_ids.iter().enumerate() {
+            if i > 0 {
+                builder.push(", ");
             }
-            builder.push(")");
+            builder.push_bind(sid);
         }
+        builder.push(")");
+    }
 
     if let Some(ref parent_session_id) = filter.parent_session_id {
         builder.push(" AND parent_session_id = ").push_bind(parent_session_id);
     }
 
     if let Some(ref action_types) = filter.action_types
-        && !action_types.is_empty() {
-            builder.push(" AND action_type IN (");
-            for (i, at) in action_types.iter().enumerate() {
-                if i > 0 {
-                    builder.push(", ");
-                }
-                builder.push_bind(at);
+        && !action_types.is_empty()
+    {
+        builder.push(" AND action_type IN (");
+        for (i, at) in action_types.iter().enumerate() {
+            if i > 0 {
+                builder.push(", ");
             }
-            builder.push(")");
+            builder.push_bind(at);
         }
+        builder.push(")");
+    }
 
     builder.push(format!(" GROUP BY {} ORDER BY count DESC", group_column));
 

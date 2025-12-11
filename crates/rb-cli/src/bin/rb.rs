@@ -12,10 +12,7 @@ async fn main() -> Result<()> {
     let args = match cmd.try_get_matches() {
         Ok(m) => ClientArgs::from_arg_matches(&m).map_err(|e| anyhow::anyhow!(e.to_string()))?,
         Err(e) => {
-            if e.kind() == ErrorKind::DisplayHelp {
-                e.print()?;
-                return Ok(());
-            } else if e.kind() == ErrorKind::DisplayVersion {
+            if e.kind() == ErrorKind::DisplayHelp || e.kind() == ErrorKind::DisplayVersion {
                 e.print()?;
                 return Ok(());
             } else {

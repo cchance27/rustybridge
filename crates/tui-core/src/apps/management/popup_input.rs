@@ -8,7 +8,7 @@ use crate::{AppAction, TuiResult};
 
 impl super::ManagementApp {
     pub fn handle_popup_input(&mut self, input: &[u8]) -> TuiResult<AppAction> {
-        tracing::trace!("ManagementApp popup input: {:?}", input);
+        tracing::trace!(?input, "management app popup input");
 
         match &mut self.popup {
             PopupState::None => {

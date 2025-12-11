@@ -24,7 +24,7 @@ pub async fn run_startup_cleanup() -> ServerResult<()> {
 
     // Run retention cleanup on startup
     if let Err(e) = crate::retention::run_retention_cleanup().await {
-        warn!(error = ?e, "Startup retention cleanup failed (non-fatal)");
+        warn!(error = ?e, "startup retention cleanup failed (non-fatal)");
     }
 
     Ok(())
@@ -55,7 +55,7 @@ async fn cleanup_stale_sessions_internal() -> ServerResult<()> {
     let ctx = rb_types::audit::AuditContext::system("startup-cleanup");
 
     if !stale_sessions.is_empty() {
-        info!(count = stale_sessions.len(), "Cleaning up stale sessions from previous server run");
+        info!(count = stale_sessions.len(), "cleaning up stale sessions from previous server run");
 
         for (session_id, user_id, relay_name, relay_id, session_number) in stale_sessions {
             // Update the session end_time
@@ -65,7 +65,7 @@ async fn cleanup_stale_sessions_internal() -> ServerResult<()> {
                 .execute(pool)
                 .await
             {
-                warn!(session_id = %session_id, error = ?e, "Failed to update stale session end_time");
+                warn!(session_id = %session_id, error = ?e, "failed to update stale session end_time");
                 continue;
             }
 
@@ -73,7 +73,7 @@ async fn cleanup_stale_sessions_internal() -> ServerResult<()> {
                 session_id = %session_id,
                 user_id = user_id,
                 relay_name = %relay_name,
-                "Marked stale session as closed (server restart cleanup)"
+                "marked stale session as closed (server restart cleanup)"
             );
 
             // Fetch username for audit log if possible
@@ -106,7 +106,7 @@ async fn cleanup_stale_sessions_internal() -> ServerResult<()> {
         .map_err(crate::error::ServerError::Database)?;
 
     if participants_result.rows_affected() > 0 {
-        info!(count = participants_result.rows_affected(), "Cleaned up stale session participants");
+        info!(count = participants_result.rows_affected(), "cleaned up stale session participants");
     }
 
     // 3. Clean up stale client_sessions (SSH/Web client connections)
@@ -117,7 +117,7 @@ async fn cleanup_stale_sessions_internal() -> ServerResult<()> {
         .map_err(crate::error::ServerError::Database)?;
 
     if client_sessions_result.rows_affected() > 0 {
-        info!(count = client_sessions_result.rows_affected(), "Cleaned up stale client sessions");
+        info!(count = client_sessions_result.rows_affected(), "cleaned up stale client sessions");
     }
 
     // 4. Clean up stale session_connections (legacy table, keeping just in case)
@@ -128,7 +128,7 @@ async fn cleanup_stale_sessions_internal() -> ServerResult<()> {
         .unwrap_or_default();
 
     if !stale_connections.is_empty() {
-        info!(count = stale_connections.len(), "Cleaning up stale session_connections");
+        info!(count = stale_connections.len(), "cleaning up stale session_connections");
         for conn_id in stale_connections {
             let _ = sqlx::query("UPDATE session_connections SET disconnected_at = ? WHERE id = ?")
                 .bind(now)

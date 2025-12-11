@@ -66,12 +66,12 @@ pub async fn run_retention_cleanup() -> ServerResult<RetentionResult> {
             session_events_deleted = result.session_events_deleted,
             orphan_events_deleted = result.orphan_events_deleted,
             duration_ms = result.duration_ms,
-            "Retention cleanup completed"
+            "retention cleanup completed"
         );
     }
 
     for (area, error) in &result.errors {
-        warn!(area = %area, error = %error, "Retention cleanup error");
+        warn!(area = %area, error = %error, "retention cleanup error");
     }
 
     Ok(result)
@@ -123,7 +123,7 @@ async fn vacuum_single_db(db_name: &str, db: &rb_types::state::DbHandle, db_path
         file_size_before_kb,
         file_size_after_kb,
         bytes_reclaimed = result.bytes_reclaimed(),
-        "Database vacuum completed"
+        "database vacuum completed"
     );
 
     Ok(result)
@@ -140,7 +140,7 @@ pub async fn vacuum_all_databases() -> ServerResult<Vec<VacuumResult>> {
         let path = state_store::audit::audit_db_path();
         match vacuum_single_db("audit", &db, &path).await {
             Ok(r) => results.push(r),
-            Err(e) => warn!(error = ?e, "Audit DB vacuum failed"),
+            Err(e) => warn!(error = ?e, "audit db vacuum failed"),
         }
     }
 
@@ -149,7 +149,7 @@ pub async fn vacuum_all_databases() -> ServerResult<Vec<VacuumResult>> {
         let path = state_store::server_db_path();
         match vacuum_single_db("server", &db, &path).await {
             Ok(r) => results.push(r),
-            Err(e) => warn!(error = ?e, "Server DB vacuum failed"),
+            Err(e) => warn!(error = ?e, "server db vacuum failed"),
         }
     }
 

@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use tracing::debug;
 
 use super::session_window::SessionWindow;
 #[cfg(feature = "web")]
@@ -51,9 +52,8 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
             spawn(async move {
                 let mut eval = dioxus::document::eval(
                     r#"
-                    console.log('Setting up rb-toast-notification listener');
                     window.addEventListener('rb-toast-notification', (event) => {
-                        console.log('Received rb-toast-notification event:', event.detail);
+                        console.log('received rb-toast-notification event', event.detail);
                         const detail = event.detail;
                         dioxus.send({
                             message: detail.message,
@@ -204,8 +204,7 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                                                     disabled: !attachable,
                                                     onclick: move |_| {
                                                         if !attachable {
-                                                            #[cfg(feature = "web")]
-                                                            web_sys::console::log_1(&"OpenSessions: SSH-origin session is view-only in web".into());
+                                                            debug!("open sessions: SSH-origin session is view-only in web");
                                                             return;
                                                         }
                                                         if minimized {

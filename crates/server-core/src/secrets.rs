@@ -15,6 +15,7 @@ use rand::{Rng, RngCore};
 use rb_types::credentials::EncryptedBlob;
 use secrecy::{ExposeSecret, SecretBox};
 use sha2::Sha256;
+use tracing::warn;
 
 use crate::error::{ServerError, ServerResult};
 
@@ -155,7 +156,7 @@ fn get_or_create_master_salt() -> ServerResult<Vec<u8>> {
         if let Ok(changed) = ensure_secure_permissions(&path)
             && changed
         {
-            tracing::warn!(
+            warn!(
                 salt_file = %path.display(),
                 "Fixed insecure salt file permissions to 0600"
             );

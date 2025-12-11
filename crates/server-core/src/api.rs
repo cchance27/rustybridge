@@ -13,6 +13,7 @@ use rb_types::{
 use secrecy::ExposeSecret;
 use sqlx::{Row, SqlitePool};
 use state_store::ClaimType;
+use tracing::error;
 
 use crate::{
     error::{ServerError, ServerResult}, secrets, sessions::SessionRegistry
@@ -193,16 +194,17 @@ pub async fn delete_oidc_link_for_user(ctx: &AuditContext, user_id: i64) -> Serv
         .map_err(ServerError::StateStore)?;
 
     if rows > 0
-        && let (Some(u), Some(l)) = (username, link_info) {
-            crate::audit!(
-                ctx,
-                OidcUnlinked {
-                    username: u,
-                    user_id,
-                    provider: l.provider_id,
-                }
-            );
-        }
+        && let (Some(u), Some(l)) = (username, link_info)
+    {
+        crate::audit!(
+            ctx,
+            OidcUnlinked {
+                username: u,
+                user_id,
+                provider: l.provider_id,
+            }
+        );
+    }
 
     Ok(rows)
 }
@@ -402,9 +404,10 @@ pub async fn delete_role(ctx: &AuditContext, role_id: i64) -> ServerResult<()> {
 
     // Log audit event only if role existed AND a row was actually deleted
     if let Some(name) = role_name
-        && rows_affected > 0 {
-            crate::audit!(ctx, RoleDeleted { name, role_id });
-        }
+        && rows_affected > 0
+    {
+        crate::audit!(ctx, RoleDeleted { name, role_id });
+    }
 
     Ok(())
 }
@@ -995,7 +998,7 @@ pub async fn fetch_session_chunks(session_id: &str) -> ServerResult<Vec<SessionC
     for row in rows {
         let encrypted: Vec<u8> = row.get("data");
         let plaintext = decrypt_chunk(&encrypted).map_err(|e| {
-            tracing::warn!("chunk decrypt failed: {}", e);
+            error!(error = %e, "chunk decrypt failed");
             e
         })?;
 

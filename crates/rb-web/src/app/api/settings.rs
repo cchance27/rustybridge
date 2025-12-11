@@ -142,3 +142,63 @@ pub async fn vacuum_all_databases() -> Result<Vec<VacuumResult>, ServerFnError> 
     }
     Ok(result)
 }
+
+// --------------------------------
+// Log Level Configuration
+// --------------------------------
+
+/// Server log level information returned to the admin UI.
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+pub struct ServerLogLevelResponse {
+    /// The persisted log level from the server database (e.g. "info", "debug").
+    pub level: String,
+    /// Whether the effective runtime log configuration is currently overridden
+    /// by the `RUST_LOG` environment variable.
+    pub overridden_by_env: bool,
+}
+
+/// Get current server log level
+#[get(
+    "/api/admin/settings/log_level",
+    auth: WebAuthSession
+)]
+pub async fn get_server_log_level() -> Result<ServerLogLevelResponse, ServerFnError> {
+    ensure_server_claim(&auth, ClaimLevel::View)?;
+
+    let level = server_core::logging::get_server_log_level()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let overridden_by_env = matches!(
+        std::env::var("RUST_LOG"),
+        Ok(s) if !s.trim().is_empty()
+    );
+
+    Ok(ServerLogLevelResponse {
+        level,
+        overridden_by_env,
+    })
+}
+
+/// Update server log level
+#[post(
+    "/api/admin/settings/log_level",
+    auth: WebAuthSession,
+    audit: WebAuditContext
+)]
+pub async fn update_server_log_level(level: String) -> Result<(), ServerFnError> {
+    ensure_server_claim(&auth, ClaimLevel::Edit)?;
+
+    // Log audit event
+    server_core::audit::log_event_from_context_best_effort(
+        &audit.0,
+        rb_types::audit::EventType::ServerSettingsUpdated {
+            setting_name: "log_level".to_string(),
+        },
+    )
+    .await;
+
+    server_core::logging::set_server_log_level(&level)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}

@@ -4,7 +4,7 @@ use rb_types::relay::RelayInfo;
 use russh::{
     client, keys::{HashAlg, PublicKey}
 };
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     error::{ServerError, ServerResult}, secrets::{SecretBoxedString, encrypt_string}
@@ -33,7 +33,7 @@ pub fn hostkey_fetch_timeout() -> ServerResult<Duration> {
             }
             let normalized = secs.min(MAX_FETCH_HOSTKEY_TIMEOUT_SECS);
             if (normalized - secs).abs() > f64::EPSILON {
-                tracing::warn!(
+                warn!(
                     env = FETCH_HOSTKEY_TIMEOUT_ENV,
                     requested = secs,
                     used = normalized,
@@ -71,8 +71,6 @@ pub async fn update_relay_host_by_id(
     state_store::update_relay_host(&mut *tx, host_id, new_name, ip, port).await?;
 
     tx.commit().await.map_err(ServerError::Database)?;
-
-    info!(relay_host_id = host_id, context = %ctx, "relay host updated");
 
     // Log audit event
     crate::audit!(
@@ -203,11 +201,9 @@ async fn add_relay_host_inner(endpoint: &str, name: &str, fetch_hostkey: bool) -
 
     tx.commit().await.map_err(ServerError::Database)?;
 
-    info!(relay_host = name, ip, port, "relay host saved");
-
     // Attempt to fetch host key and optionally store it.
     if fetch_hostkey && let Err(err) = fetch_and_optionally_store_hostkey(&pool, name, &ip, port as u16).await {
-        tracing::warn!(?err, relay_host = name, "failed to fetch/store host key during add-host");
+        warn!(?err, relay_host = name, "failed to fetch/store host key during add-host");
     }
     Ok(())
 }
@@ -345,8 +341,6 @@ pub async fn delete_relay_host_by_id(ctx: &rb_types::audit::AuditContext, id: i6
     let relay_info = state_store::fetch_relay_host_by_id(&pool, id).await?;
 
     sqlx::query("DELETE FROM relay_hosts WHERE id = ?").bind(id).execute(&pool).await?;
-    info!(relay_host_id = id, context = %ctx, "relay host deleted");
-
     // Log audit event
     if let Some(relay) = relay_info {
         crate::audit!(

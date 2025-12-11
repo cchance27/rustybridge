@@ -49,11 +49,9 @@ pub async fn add_user(ctx: &rb_types::audit::AuditContext, user: &str, password:
     let hash = crate::auth::hash_password(password)?;
     let user_id = state_store::create_user(&mut *tx, user, &hash).await?;
 
-    let promoted = maybe_promote_first_user(&mut tx, user, user_id).await?;
+    let _promoted = maybe_promote_first_user(&mut tx, user, user_id).await?;
 
     tx.commit().await.map_err(ServerError::Database)?;
-
-    info!(user, first_user = promoted, context = %ctx, "user added");
 
     // Log audit event with full context
     crate::audit!(
@@ -79,8 +77,6 @@ pub async fn update_user_password_by_id(ctx: &rb_types::audit::AuditContext, use
     let hash = crate::auth::hash_password(password)?;
     state_store::update_user_password_by_id(&pool, user_id, &hash).await?;
 
-    info!(user_id, context = %ctx, "user password updated");
-
     // Log audit event
     crate::audit!(ctx, UserPasswordChanged { username, user_id });
 
@@ -98,8 +94,6 @@ pub async fn add_claim_to_user_by_id(ctx: &rb_types::audit::AuditContext, user_i
         .ok_or_else(|| ServerError::not_found("user", user_id.to_string()))?;
 
     state_store::add_claim_to_user_by_id(&pool, user_id, claim).await?;
-
-    info!(user_id, claim = %claim, context = %ctx, "user claim added");
 
     // Log audit event
     crate::audit!(
@@ -129,8 +123,6 @@ pub async fn remove_claim_from_user_by_id(
         .ok_or_else(|| ServerError::not_found("user", user_id.to_string()))?;
 
     state_store::remove_claim_from_user_by_id(&pool, user_id, claim).await?;
-
-    info!(user_id, claim = %claim, context = %ctx, "user claim removed");
 
     // Log audit event
     crate::audit!(
@@ -171,8 +163,6 @@ pub async fn add_user_public_key(
         .ok_or_else(|| ServerError::not_found("user", username))?;
 
     let id = state_store::add_user_public_key_by_id(&pool, user_id, public_key, comment).await?;
-    info!(user = username, key_id = id, context = %ctx, "user public key added");
-
     // Log audit event
     crate::audit!(
         ctx,
@@ -233,8 +223,6 @@ pub async fn delete_user_public_key(ctx: &rb_types::audit::AuditContext, usernam
     state_store::delete_user_public_key(&mut *tx, key_id).await?;
 
     tx.commit().await.map_err(ServerError::Database)?;
-
-    info!(user = username, key_id, context = %ctx, "user public key deleted");
 
     // Log audit event
     crate::audit!(
@@ -319,8 +307,6 @@ pub async fn remove_user_by_id(ctx: &rb_types::audit::AuditContext, user_id: i64
     state_store::delete_user_by_id(&mut *tx, user_id).await?;
 
     tx.commit().await.map_err(ServerError::Database)?;
-
-    info!(user_id, context = %ctx, "user removed and access revoked");
 
     // Log audit event with full context
     crate::audit!(ctx, UserDeleted { username, user_id });

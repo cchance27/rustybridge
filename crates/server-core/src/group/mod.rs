@@ -3,7 +3,6 @@
 //! This module handles adding, removing, listing, and configuring groups and group memberships.
 
 use rb_types::auth::ClaimType;
-use tracing::info;
 
 use crate::error::{ServerError, ServerResult};
 
@@ -25,8 +24,6 @@ pub async fn add_group(ctx: &rb_types::audit::AuditContext, name: &str) -> Serve
     }
 
     state_store::create_group(&pool, name).await?;
-    info!(group = name, context = %ctx, "group added");
-
     // Log audit event with full context
     crate::audit!(ctx, GroupCreated { name: name.to_string() });
 
@@ -51,8 +48,6 @@ pub async fn update_group_name(ctx: &rb_types::audit::AuditContext, group_id: i6
         .ok_or_else(|| ServerError::not_found("group", group_id.to_string()))?;
 
     state_store::update_group_name(&pool, group_id, new_name).await?;
-
-    info!(group_id, old_name, new_name, context = %ctx, "group renamed");
 
     // Log audit event
     crate::audit!(
@@ -81,8 +76,6 @@ pub async fn add_user_to_group_by_ids(ctx: &rb_types::audit::AuditContext, user_
         .ok_or_else(|| ServerError::not_found("group", group_id.to_string()))?;
 
     state_store::add_user_to_group_by_ids(&pool, user_id, group_id).await?;
-
-    info!(user_id, group_id, context = %ctx, "user added to group");
 
     // Log audit event
     crate::audit!(
@@ -113,8 +106,6 @@ pub async fn remove_user_from_group_by_ids(ctx: &rb_types::audit::AuditContext, 
 
     state_store::remove_user_from_group_by_ids(&pool, user_id, group_id).await?;
 
-    info!(user_id, group_id, context = %ctx, "user removed from group");
-
     // Log audit event
     crate::audit!(
         ctx,
@@ -139,8 +130,6 @@ pub async fn add_claim_to_group_by_id(ctx: &rb_types::audit::AuditContext, group
         .ok_or_else(|| ServerError::not_found("group", group_id.to_string()))?;
 
     state_store::add_claim_to_group_by_id(&pool, group_id, claim).await?;
-
-    info!(group_id, claim = %claim, context = %ctx, "group claim added");
 
     // Log audit event
     crate::audit!(
@@ -169,8 +158,6 @@ pub async fn remove_claim_from_group_by_id(
         .ok_or_else(|| ServerError::not_found("group", group_id.to_string()))?;
 
     state_store::remove_claim_from_group_by_id(&pool, group_id, claim).await?;
-
-    info!(group_id, claim = %claim, context = %ctx, "group claim removed");
 
     // Log audit event
     crate::audit!(
@@ -210,8 +197,6 @@ pub async fn remove_group_by_id(ctx: &rb_types::audit::AuditContext, group_id: i
     state_store::delete_group_by_id(&mut *tx, group_id).await?;
 
     tx.commit().await.map_err(ServerError::Database)?;
-
-    info!(group_id, context = %ctx, "group removed and access revoked");
 
     // Log audit event with full context
     crate::audit!(ctx, GroupDeleted { name, group_id });

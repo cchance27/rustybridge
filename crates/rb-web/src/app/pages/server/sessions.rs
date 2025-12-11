@@ -3,6 +3,7 @@ use dioxus::{
     fullstack::{WebSocketOptions, use_websocket}, prelude::*
 };
 use rb_types::ssh::SessionEvent;
+use tracing::debug;
 
 use crate::app::{
     api::{
@@ -15,8 +16,7 @@ use crate::app::{
 #[component]
 pub fn SessionsSection() -> Element {
     let mut sessions = use_resource(|| async move {
-        #[cfg(feature = "web")]
-        web_sys::console::log_1(&"ServerSessions: Fetching session list".into());
+        debug!("server sessions: fetching session list");
 
         list_all_sessions().await
     });
@@ -39,8 +39,7 @@ pub fn SessionsSection() -> Element {
                 TimeoutFuture::new(5000).await; // Wait 5 seconds
                 // Check if resource value is None (still loading)
                 if sessions_fallback.value().read().is_none() {
-                    #[cfg(feature = "web")]
-                    web_sys::console::warn_1(&"ServerSessions: Resource still loading after 5s, attempting restart".into());
+                    warn!("server sessions: resource still loading after 5s, attempting restart");
                     sessions_fallback.restart();
                 }
             });
@@ -62,22 +61,19 @@ pub fn SessionsSection() -> Element {
     // Listen for server-wide session changes and refresh the table when events arrive.
     let mut ws = use_websocket(move || {
         let client_id = client_id.clone();
-        #[cfg(feature = "web")]
-        web_sys::console::log_1(&format!("ServerSessions: Opening WebSocket with client_id: {}", client_id).into());
+        debug!(client_id = %client_id, "server sessions: opening websocket");
         async move { ssh_web_events(client_id, Some("all".to_string()), WebSocketOptions::new()).await }
     });
 
     // Log component lifecycle for debugging
     use_effect(move || {
-        #[cfg(feature = "web")]
-        web_sys::console::log_1(&"ServerSessions mounted, WebSocket connection active".into());
+        debug!("server sessions: mounted, websocket connection active");
     });
 
     {
         let mut sessions_handle = sessions;
         use_coroutine(move |_rx: UnboundedReceiver<()>| async move {
-            #[cfg(feature = "web")]
-            web_sys::console::log_1(&"ServerSessions: WebSocket event listener starting".into());
+            debug!("server sessions: websocket event listener starting");
 
             let mut connected = false;
             let mut pending_refresh = false;
@@ -105,8 +101,7 @@ pub fn SessionsSection() -> Element {
                     Ok(Ok(event)) => {
                         if !connected {
                             connected = true;
-                            #[cfg(feature = "web")]
-                            web_sys::console::log_1(&"ServerSessions: WebSocket connected and receiving events".into());
+                            debug!("server sessions: websocket connected and receiving events");
                         }
 
                         if matches!(
@@ -120,15 +115,13 @@ pub fn SessionsSection() -> Element {
                         }
                     }
                     Ok(Err(_)) => {
-                        #[cfg(feature = "web")]
-                        web_sys::console::log_1(&"ServerSessions: WebSocket event listener ended".into());
+                        debug!("server sessions: websocket event listener ended");
                         break;
                     }
                     Err(_) => {
                         // Timeout - if we have pending refresh, do it now
                         if pending_refresh {
-                            #[cfg(feature = "web")]
-                            web_sys::console::log_1(&"ServerSessions: Refreshing session list (debounced)".into());
+                            debug!("server sessions: refreshing session list (debounced)");
                             sessions_handle.restart();
                             pending_refresh = false;
                         }

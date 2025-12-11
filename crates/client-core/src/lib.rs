@@ -99,7 +99,7 @@ pub async fn run_client(args: ClientConfig) -> ClientResult<()> {
     }
     let config = Arc::new(config);
     let target = format!("{host}:{port}");
-    info!("connecting to {target}");
+    info!(target = %target, "connecting to host");
     let mut session = client::connect(config, (host.as_str(), port), handler).await?;
 
     authenticate(
@@ -154,10 +154,10 @@ pub async fn run_client(args: ClientConfig) -> ClientResult<()> {
     match Arc::try_unwrap(session) {
         Ok(handle) => {
             if let Err(err) = handle.await {
-                warn!(?err, "SSH session shutdown error");
+                warn!(?err, "ssh session shutdown error");
             }
         }
-        Err(_) => warn!("SSH session handle still in use; skipping shutdown wait"),
+        Err(_) => warn!("ssh session handle still in use; skipping shutdown wait"),
     }
     Ok(outcome?)
 }

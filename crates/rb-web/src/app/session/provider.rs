@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use chrono::{DateTime, Utc};
 use dioxus::{fullstack::use_websocket, prelude::*};
 use rb_types::ssh::{SessionEvent, SessionStateSummary, UserSessionSummary, WebSessionMeta};
+use tracing::{debug, error, warn};
 
 use crate::app::{
     auth::hooks::use_auth, session::types::{Session, SessionStatus, WindowGeometry}, storage::{BrowserStorage, StorageType}
@@ -62,13 +63,11 @@ struct SessionStorageData {
 pub fn use_session_provider() -> SessionContext {
     // Try to get existing context first - if it exists, return it immediately
     if let Some(existing_context) = try_consume_context::<SessionContext>() {
-        #[cfg(feature = "web")]
-        web_sys::console::log_1(&"SessionProvider: Reusing existing context".into());
+        debug!("session provider: reusing existing context");
         return existing_context;
     }
 
-    #[cfg(feature = "web")]
-    web_sys::console::log_1(&"SessionProvider: Creating NEW context and WebSocket connections".into());
+    debug!("session provider: creating new context and websocket connections");
 
     let sessions = use_signal(Vec::new);
     let drag_state = use_signal(|| None);
@@ -81,14 +80,12 @@ pub fn use_session_provider() -> SessionContext {
     let current_client_id = use_signal(|| {
         let storage = BrowserStorage::new(StorageType::Session);
         if let Some(existing_id) = storage.get("rb-client-id") {
-            #[cfg(feature = "web")]
-            web_sys::console::log_1(&format!("Reusing existing client ID: {}", existing_id).into());
+            debug!(client_id = %existing_id, "reusing existing client id");
             existing_id
         } else {
             let new_id = uuid::Uuid::new_v4().to_string();
             let _ = storage.set("rb-client-id", &new_id);
-            #[cfg(feature = "web")]
-            web_sys::console::log_1(&format!("Generated new client ID: {}", new_id).into());
+            debug!(client_id = %new_id, "generated new client id");
             new_id
         }
     });
@@ -178,13 +175,11 @@ pub fn use_session_provider() -> SessionContext {
                             continue;
                         }
 
-                        #[cfg(feature = "web")]
-                        web_sys::console::log_1(
-                            &format!(
-                                "Restoring (deferred) session: relay_id={}, session_number={}, user_id={}",
-                                session_summary.relay_id, session_summary.session_number, user.id
-                            )
-                            .into(),
+                        debug!(
+                            relay_id = session_summary.relay_id,
+                            session_number = session_summary.session_number,
+                            user_id = user.id,
+                            "restoring deferred session"
                         );
 
                         // Track active session keys for cleanup
@@ -258,15 +253,13 @@ pub fn use_session_provider() -> SessionContext {
     let client_id_val = current_client_id.peek().clone();
     let mut ws = use_websocket(move || {
         let client_id = client_id_val.clone();
-        #[cfg(feature = "web")]
-        web_sys::console::log_1(&format!("Opening WebSocket connection with client_id: {}", client_id).into());
+        debug!(client_id = %client_id, "opening websocket connection");
         async move { ssh_web_events(client_id, None, WebSocketOptions::new()).await }
     });
 
     // Log component lifecycle for debugging
     use_effect(move || {
-        #[cfg(feature = "web")]
-        web_sys::console::log_1(&"SessionProvider mounted, WebSocket connection active".into());
+        debug!("session provider mounted, websocket connection active");
     });
 
     let auth = use_auth();
@@ -311,13 +304,10 @@ pub fn use_session_provider() -> SessionContext {
                             existing.viewers = summary.viewers;
                             existing.status = SessionStatus::Connected;
 
-                            #[cfg(feature = "web")]
-                            web_sys::console::log_1(
-                                &format!(
-                                    "Updated connecting session {} with session_number {}",
-                                    existing.id, summary.session_number
-                                )
-                                .into(),
+                            debug!(
+                                session_id = %existing.id,
+                                session_number = summary.session_number,
+                                "updated connecting session"
                             );
                         } else {
                             // Drop the write lock before calling open_restored
@@ -393,8 +383,7 @@ pub fn use_session_provider() -> SessionContext {
                     }
                 }
                 SessionEvent::List(summaries) => {
-                    #[cfg(feature = "web")]
-                    web_sys::console::log_1(&format!("Received {} sessions from WebSocket", summaries.len()).into());
+                    debug!(count = summaries.len(), "received sessions from websocket");
 
                     // If auth not ready yet, stash for immediate restore when it arrives
                     if auth.read().user.is_none() {
@@ -404,8 +393,7 @@ pub fn use_session_provider() -> SessionContext {
 
                     // Check if restoration is already in progress - prevent duplicate restoration
                     if *restoration_in_progress.read() {
-                        #[cfg(feature = "web")]
-                        web_sys::console::log_1(&"Session restoration already in progress, skipping duplicate List event".into());
+                        debug!("session restoration already in progress, skipping duplicate list event");
                         continue;
                     }
 
@@ -428,16 +416,12 @@ pub fn use_session_provider() -> SessionContext {
                                 continue;
                             }
 
-                            #[cfg(feature = "web")]
-                            {
-                                web_sys::console::log_1(
-                                    &format!(
-                                        "Restoring session: relay_id={}, session_number={}, user_id={}",
-                                        session_summary.relay_id, session_summary.session_number, user.id
-                                    )
-                                    .into(),
-                                );
-                            }
+                            debug!(
+                                relay_id = session_summary.relay_id,
+                                session_number = session_summary.session_number,
+                                user_id = user.id,
+                                "restoring session"
+                            );
 
                             // Track active session keys for cleanup
                             let key = context.get_session_storage_key(
@@ -509,8 +493,7 @@ pub fn use_session_provider() -> SessionContext {
             }
         }
         if !success {
-            #[cfg(feature = "web")]
-            web_sys::console::error_1(&format!("Failed to connect to WebSocket").into());
+            error!("failed to connect to websocket");
         }
     });
 
@@ -562,29 +545,24 @@ impl SessionContext {
         let key = self.get_session_storage_key(user_id, relay_id, session_number, created_at);
         let result: std::option::Option<SessionStorageData> = self.get_storage().get_json(&key);
 
-        #[cfg(feature = "web")]
-        {
-            web_sys::console::log_1(
-                &format!(
-                    "load_session_state: user_id={}, relay_id={}, session_number={}, created_at={}, key={}, found={}",
-                    user_id,
-                    relay_id,
-                    session_number,
-                    created_at,
-                    key,
-                    result.is_some()
-                )
-                .into(),
+        debug!(
+            user_id,
+            relay_id,
+            session_number,
+            created_at,
+            key = %key,
+            found = result.is_some(),
+            "load_session_state"
+        );
+        if let Some(ref data) = result {
+            debug!(
+                x = data.geometry.x,
+                y = data.geometry.y,
+                width = data.geometry.width,
+                height = data.geometry.height,
+                minimized = data.minimized,
+                "loaded geometry"
             );
-            if let Some(ref data) = result {
-                web_sys::console::log_1(
-                    &format!(
-                        "  Loaded geometry: x={}, y={}, w={}, h={}, minimized={}",
-                        data.geometry.x, data.geometry.y, data.geometry.width, data.geometry.height, data.minimized
-                    )
-                    .into(),
-                );
-            }
         }
 
         result
@@ -655,12 +633,10 @@ impl SessionContext {
 
         // Check cap
         if sessions.read().len() >= MAX_SESSIONS {
+            warn!(max_sessions = MAX_SESSIONS, "session cap reached");
             #[cfg(feature = "web")]
-            {
-                web_sys::console::warn_1(&"Session cap reached (4)".into());
-                if let Some(toast) = self.toast() {
-                    toast.warning("Maximum 4 concurrent SSH sessions allowed");
-                }
+            if let Some(toast) = self.toast() {
+                toast.warning("Maximum 4 concurrent SSH sessions allowed");
             }
             return;
         }
@@ -803,7 +779,7 @@ impl SessionContext {
             let _sessions_signal = self.sessions;
 
             spawn(async move {
-                web_sys::console::log_1(&format!("Attempting to send explicit close command for session {}", id_owned).into());
+                debug!(session_id = %id_owned, "sending explicit close command");
 
                 // Try to send close command via eval to the Terminal's WebSocket
                 // The Terminal component stores its socket in a signal, but we don't have direct access

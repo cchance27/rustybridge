@@ -5,6 +5,8 @@ use gloo_events::EventListener;
 use js_sys::Reflect;
 use serde::Serialize;
 #[cfg(feature = "web")]
+use tracing::{debug, error, warn};
+#[cfg(feature = "web")]
 use web_sys::wasm_bindgen::{JsCast, JsValue};
 
 #[derive(Clone, Props, PartialEq, Serialize)]
@@ -88,7 +90,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
 
                     // Serialize terminal_id to JSON to prevent XSS
                     let terminal_id_json = serde_json::to_string(&terminal_id).unwrap_or_else(|_| "\"\"".to_string());
-                    web_sys::console::log_1(&format!("Terminal script starting for {terminal_id_json}").into());
+                    debug!(terminal_id = %terminal_id_json, "terminal script starting");
                     spawn(async move {
                         let script = format!(
                             r#"
@@ -111,9 +113,9 @@ pub fn Terminal(props: TerminalProps) -> Element {
                         );
 
                         match dioxus::document::eval(&script).recv::<bool>().await {
-                            Ok(true) => web_sys::console::log_1(&format!("Terminal init success: {}", terminal_id).into()),
-                            Ok(false) => web_sys::console::error_1(&format!("Terminal init failed: {}", terminal_id).into()),
-                            Err(e) => web_sys::console::error_1(&format!("Terminal init recv error: {}", e).into()),
+                            Ok(true) => debug!(terminal_id = %terminal_id, "terminal init success"),
+                            Ok(false) => error!(terminal_id = %terminal_id, "terminal init failed"),
+                            Err(e) => error!(terminal_id = %terminal_id, error = %e, "terminal init recv error"),
                         }
                     });
                 }
@@ -151,7 +153,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
                     async move {
                         if let Some(ws) = socket.read().as_ref() {
                             use rb_types::ssh::{SshClientMsg, SshControl};
-                            web_sys::console::log_1(&format!("Terminal: sending minimize state: {}", val).into());
+                            debug!(minimized = val, "terminal: sending minimize state");
                             let msg = SshClientMsg {
                                 cmd: Some(SshControl::Minimize(val)),
                                 data: Vec::new(),
@@ -181,16 +183,14 @@ pub fn Terminal(props: TerminalProps) -> Element {
                     let window = web_sys::window().expect("window available");
                     let id = term_id.clone();
                     let listener = EventListener::new(&window, "terminal-close-requested", move |event| {
-                        web_sys::console::log_1(&format!("Terminal: close request event received for id {}", id).into());
+                        debug!(terminal_id = %id, "terminal: close request event received");
                         let detail = event
                             .dyn_ref::<web_sys::CustomEvent>()
                             .and_then(|evt| evt.detail().dyn_into::<JsValue>().ok());
                         if let Some(detail) = detail {
                             if let Ok(term_id_value) = Reflect::get(&detail, &JsValue::from_str("termId")) {
                                 if term_id_value == JsValue::from_str(&id) {
-                                    web_sys::console::log_1(
-                                        &format!("Terminal: close request matched for term {} - sending SshControl::Close", id).into(),
-                                    );
+                                    debug!(terminal_id = %id, "terminal: close request matched, sending SshControl::Close");
                                     spawn({
                                         let socket = socket.clone();
                                         async move {
@@ -203,12 +203,10 @@ pub fn Terminal(props: TerminalProps) -> Element {
                                                 };
                                                 match ws.send(msg).await {
                                                     Ok(_) => {
-                                                        web_sys::console::log_1(&"Terminal: explicit close command sent to server".into());
+                                                        debug!("terminal: explicit close command sent to server");
                                                     }
                                                     Err(err) => {
-                                                        web_sys::console::error_1(
-                                                            &format!("Terminal: error sending explicit close command: {}", err).into(),
-                                                        );
+                                                        error!(error = %err, "terminal: error sending explicit close command");
                                                     }
                                                 }
                                             }
@@ -255,12 +253,12 @@ pub fn Terminal(props: TerminalProps) -> Element {
 
                         use crate::app::api::ws::ssh::ssh_terminal_ws;
 
-                        web_sys::console::log_1(&format!("Terminal: attempting to connect relay {relay_name}").into());
+                        debug!(relay_name = %relay_name, "terminal: attempting to connect relay");
                         let result = ssh_terminal_ws(relay_name, initial_session_number, target_user_id, WebSocketOptions::new()).await;
 
                         match &result {
                             Ok(_) => {
-                                web_sys::console::log_1(&"Terminal: websocket handle acquired".into());
+                                debug!("terminal: websocket handle acquired");
                                 connected.set(true);
 
                                 // Expose WebSocket to window object for close helper
@@ -279,16 +277,16 @@ pub fn Terminal(props: TerminalProps) -> Element {
                                 });
                             }
                             Err(err) => {
-                                web_sys::console::error_1(&format!("Terminal: websocket connect failed: {err}").into());
+                                error!(error = %err, "terminal: websocket connect failed");
                                 connected.set(false);
                             }
                         }
 
                         if let Some(result) = result.ok() {
-                            web_sys::console::log_1(&"Terminal: websocket connected".into());
+                            debug!("terminal: websocket connected");
                             socket.set(Some(Rc::new(result)));
                         } else {
-                            web_sys::console::error_1(&"Terminal: websocket connect failed.".into());
+                            error!("terminal: websocket connect failed");
                         }
                     }
                 });
@@ -328,11 +326,11 @@ pub fn Terminal(props: TerminalProps) -> Element {
 
                             let (cols, rows) = match dims_eval.recv::<Dims>().await {
                                 Ok(dims) => {
-                                    web_sys::console::log_1(&format!("Terminal: got dimensions {}x{}", dims.cols, dims.rows).into());
+                                    debug!(cols = dims.cols, rows = dims.rows, "terminal: got dimensions");
                                     (dims.cols, dims.rows)
                                 }
                                 Err(_) => {
-                                    web_sys::console::warn_1(&"Terminal: failed to get dimensions, using default 80x24".into());
+                                    warn!("terminal: failed to get dimensions, using default 80x24");
                                     (80, 24)
                                 }
                             };
@@ -340,7 +338,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
                             // Send minimize state FIRST if needed, so server knows
                             // the state before Ready causes it to transition
                             if is_minimized {
-                                web_sys::console::log_1(&format!("Terminal: sending initial minimize state: {}", is_minimized).into());
+                                debug!(minimized = is_minimized, "terminal: sending initial minimize state");
                                 let msg = SshClientMsg {
                                     cmd: Some(SshControl::Minimize(true)),
                                     data: Vec::new(),
@@ -349,7 +347,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
                             }
 
                             // Send Ready signal with dimensions (this triggers server transition)
-                            web_sys::console::log_1(&format!("Terminal: sending Ready signal with {}x{}", cols, rows).into());
+                            debug!(cols, rows, "terminal: sending ready signal");
                             let ready_msg = SshClientMsg {
                                 cmd: Some(SshControl::Ready { cols, rows }),
                                 data: Vec::new(),
@@ -380,12 +378,12 @@ pub fn Terminal(props: TerminalProps) -> Element {
 
             spawn(async move {
                 let Some(socket_tx_handle) = socket_for_send.read().as_ref().cloned() else {
-                    web_sys::console::warn_1(&"Terminal: websocket send handle missing".into());
+                    warn!("terminal: websocket send handle missing");
                     return;
                 };
 
                 let Some(socket_rx_handle) = socket_for_recv.read().as_ref().cloned() else {
-                    web_sys::console::warn_1(&"Terminal: websocket recv handle missing".into());
+                    warn!("terminal: websocket recv handle missing");
                     return;
                 };
 
@@ -421,13 +419,13 @@ pub fn Terminal(props: TerminalProps) -> Element {
 
                         match result.recv::<bool>().await {
                             Ok(val) => {
-                                web_sys::console::log_1(&format!("Rust: Input setup attempt result: {}", val).into());
+                                debug!(success = val, "rust: input setup attempt result");
                                 if val {
                                     break result;
                                 }
                             }
                             Err(e) => {
-                                web_sys::console::warn_1(&format!("Rust: Input setup recv error: {}", e).into());
+                                warn!(error = %e, "rust: input setup recv error");
                             }
                         }
 
@@ -435,7 +433,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
                         gloo_timers::future::TimeoutFuture::new(500).await;
                     };
 
-                    web_sys::console::log_1(&"Rust: Input setup successful, starting receive loop".into());
+                    debug!("rust: input setup successful, starting receive loop");
 
                     // Loop to read from terminal input and send to WebSocket
                     while let Ok(json_val) = eval.recv().await {
@@ -446,7 +444,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
                             let msg = SshClientMsg { cmd: None, data: bytes };
 
                             if let Err(err) = socket_tx.send(msg).await {
-                                web_sys::console::error_1(&format!("WebSocket send error: {}", err).into());
+                                error!(error = %err, "websocket send error");
                                 break;
                             }
                         }
@@ -473,12 +471,12 @@ pub fn Terminal(props: TerminalProps) -> Element {
 
                     match ready_eval.recv::<bool>().await {
                         Ok(true) => {
-                            web_sys::console::log_1(&format!("Terminal: instance ready for {}", terminal_id).into());
+                            debug!(terminal_id = %terminal_id, "terminal: instance ready");
                             break;
                         }
                         Ok(false) => {}
                         Err(e) => {
-                            web_sys::console::warn_1(&format!("Terminal: readiness check error for {}: {}", terminal_id, e).into());
+                            warn!(terminal_id = %terminal_id, error = %e, "terminal: readiness check error");
                         }
                     }
 
@@ -492,7 +490,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
                         Ok(msg) => {
                             // Server sends session_id in first message
                             if let Some(session_num) = msg.session_id {
-                                web_sys::console::log_1(&format!("Terminal: connected to session #{}", session_num).into());
+                                debug!(session_number = session_num, "terminal: connected to session");
 
                                 if !session_number_set {
                                     // Inform SessionContext which backend session number this window is bound to
@@ -508,7 +506,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
                             }
 
                             if msg.eof {
-                                web_sys::console::log_1(&"Terminal: received EOF from SSH session".into());
+                                debug!("terminal: received EOF from SSH session");
 
                                 if let Some(handler) = on_close {
                                     handler.call(());
@@ -538,9 +536,9 @@ pub fn Terminal(props: TerminalProps) -> Element {
                         Err(e) => {
                             let msg = format!("WebSocket error: {}", e);
                             if msg.contains("Connection closed") {
-                                web_sys::console::warn_1(&msg.into());
+                                warn!(error = %e, "websocket connection closed");
                             } else {
-                                web_sys::console::error_1(&msg.into());
+                                error!(error = %e, "websocket error");
                             }
 
                             if let Some(handler) = on_close {
@@ -604,14 +602,14 @@ pub fn Terminal(props: TerminalProps) -> Element {
 
                         match result.recv::<bool>().await {
                             Ok(true) => {
-                                web_sys::console::log_1(&format!("Rust: Resize setup successful for {}", terminal_id_resize).into());
+                                debug!(terminal_id = %terminal_id_resize, "rust: resize setup successful");
                                 break result;
                             }
                             Ok(false) => {
                                 // Retry if not ready
                             }
                             Err(e) => {
-                                web_sys::console::warn_1(&format!("Rust: Resize setup recv error: {}", e).into());
+                                warn!(error = %e, "rust: resize setup recv error");
                             }
                         }
                         gloo_timers::future::TimeoutFuture::new(500).await;
@@ -627,7 +625,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
                         if let Ok(resize) = serde_json::from_value::<ResizeData>(json_val) {
                             use rb_types::ssh::{SshClientMsg, SshControl};
 
-                            web_sys::console::log_1(&format!("Rust: Sending resize {}x{}", resize.cols, resize.rows).into());
+                            debug!(cols = resize.cols, rows = resize.rows, "rust: sending resize");
 
                             let msg = SshClientMsg {
                                 cmd: Some(SshControl::Resize {
@@ -638,7 +636,7 @@ pub fn Terminal(props: TerminalProps) -> Element {
                             };
 
                             if let Err(err) = socket_tx.send(msg).await {
-                                web_sys::console::error_1(&format!("WebSocket send error (resize): {}", err).into());
+                                error!(error = %err, "websocket send error (resize)");
                                 break;
                             }
                         }

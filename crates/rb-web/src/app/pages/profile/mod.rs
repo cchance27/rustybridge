@@ -1,4 +1,6 @@
 use dioxus::prelude::*;
+#[cfg(feature = "web")]
+use web_sys::wasm_bindgen::JsCast;
 mod sessions;
 
 use crate::{
@@ -312,6 +314,73 @@ pub fn ProfilePage() -> Element {
                                     div { class: "text-xs opacity-50 mt-4 pl-1",
                                         span { class: "text-primary", "* " }
                                         "Settings marked with an asterisk are stored locally in your browser and are not synced across devices."
+                                    }
+                                }
+                            }
+
+                            // Log Level Configuration
+                            div { class: "divider" }
+                            div { class: "flex justify-between items-center",
+                                div {
+                                    h3 { class: "font-medium", "Browser Log Level" }
+                                    p { class: "text-sm opacity-70", "Control verbosity of browser console logs (reload required to apply fully)*" }
+                                }
+                                {
+                                    let mut client_log_level = use_signal(crate::app::logging::get_log_level);
+                                    let current_level = client_log_level.read();
+
+                                    let level_str = match *current_level {
+                                        tracing::level_filters::LevelFilter::ERROR => "error",
+                                        tracing::level_filters::LevelFilter::WARN => "warn",
+                                        tracing::level_filters::LevelFilter::INFO => "info",
+                                        tracing::level_filters::LevelFilter::DEBUG => "debug",
+                                        tracing::level_filters::LevelFilter::TRACE => "trace",
+                                        _ => "warn",
+                                    };
+
+                                    rsx! {
+                                        div { class: "dropdown dropdown-end",
+                                            div { tabindex: "0", role: "button", class: "btn btn-sm m-1",
+                                                "{level_str.to_uppercase()}"
+                                                svg { xmlns: "http://www.w3.org/2000/svg", class: "h-4 w-4 ml-2", fill: "none", view_box: "0 0 24 24", stroke: "currentColor",
+                                                    path { stroke_linecap: "round", stroke_linejoin: "round", stroke_width: "2", d: "M19 9l-7 7-7-7" }
+                                                }
+                                            }
+                                            ul { tabindex: "0", class: "dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52",
+                                                for level in ["error", "warn", "info", "debug", "trace"] {
+                                                    li {
+                                                        a {
+                                                            class: if level_str == level { "active" } else { "" },
+                                                            onclick: move |_| {
+                                                                let new_level = match level {
+                                                                    "error" => tracing::level_filters::LevelFilter::ERROR,
+                                                                    "warn" => tracing::level_filters::LevelFilter::WARN,
+                                                                    "info" => tracing::level_filters::LevelFilter::INFO,
+                                                                    "debug" => tracing::level_filters::LevelFilter::DEBUG,
+                                                                    "trace" => tracing::level_filters::LevelFilter::TRACE,
+                                                                    _ => tracing::level_filters::LevelFilter::WARN,
+                                                                };
+                                                                crate::app::logging::set_log_level(new_level);
+                                                                client_log_level.set(new_level);
+
+                                                                // Close dropdown by blurring
+                                                                #[cfg(feature = "web")]
+                                                                if let Some(window) = web_sys::window() {
+                                                                    if let Some(document) = window.document() {
+                                                                        if let Some(element) = document.active_element() {
+                                                                            if let Ok(html_element) = element.dyn_into::<web_sys::HtmlElement>() {
+                                                                                html_element.blur().ok();
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            },
+                                                            "{level.to_uppercase()}"
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
