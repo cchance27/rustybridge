@@ -5,6 +5,10 @@ pub mod tui_input;
 pub fn init_tracing() {
     use tracing::level_filters::LevelFilter;
     use tracing_subscriber::{EnvFilter, fmt, prelude::*, reload};
+
+    // Set up panic hook to route panics through tracing
+    std::panic::set_hook(Box::new(tracing_panic::panic_hook));
+
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,axum_session=warn"));
     let (reload_layer, handle) = reload::Layer::new(env_filter.clone());
     let _ = tracing_subscriber::registry().with(reload_layer).with(fmt::layer()).try_init();
