@@ -192,8 +192,8 @@ pub async fn delete_oidc_link_for_user(ctx: &AuditContext, user_id: i64) -> Serv
         .await
         .map_err(ServerError::StateStore)?;
 
-    if rows > 0 {
-        if let (Some(u), Some(l)) = (username, link_info) {
+    if rows > 0
+        && let (Some(u), Some(l)) = (username, link_info) {
             crate::audit!(
                 ctx,
                 OidcUnlinked {
@@ -203,7 +203,6 @@ pub async fn delete_oidc_link_for_user(ctx: &AuditContext, user_id: i64) -> Serv
                 }
             );
         }
-    }
 
     Ok(rows)
 }
@@ -402,11 +401,10 @@ pub async fn delete_role(ctx: &AuditContext, role_id: i64) -> ServerResult<()> {
         .map_err(ServerError::StateStore)?;
 
     // Log audit event only if role existed AND a row was actually deleted
-    if let Some(name) = role_name {
-        if rows_affected > 0 {
+    if let Some(name) = role_name
+        && rows_affected > 0 {
             crate::audit!(ctx, RoleDeleted { name, role_id });
         }
-    }
 
     Ok(())
 }

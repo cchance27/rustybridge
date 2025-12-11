@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
                 let audit_db = audit_db_handle().await?;
 
                 // Clean up any stale sessions from previous server runs
-                server_core::startup_cleanup::cleanup_stale_sessions().await?;
+                server_core::startup_cleanup::run_startup_cleanup().await?;
 
                 let registry = std::sync::Arc::new(server_core::sessions::SessionRegistry::new(audit_db));
 
@@ -105,7 +105,7 @@ async fn main() -> Result<()> {
                 let audit_db = audit_db_handle().await?;
 
                 // Clean up any stale sessions from previous server runs
-                server_core::startup_cleanup::cleanup_stale_sessions().await?;
+                server_core::startup_cleanup::run_startup_cleanup().await?;
 
                 // Graceful shutdown with signal handling
                 let ssh_task = run_ssh_server(

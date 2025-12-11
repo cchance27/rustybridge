@@ -7,6 +7,7 @@
 - **Audit Web UI**: Admin console for browsing/filtering events and a visual "Relay Session Timeline" for inspecting session lifecycle and connections.
 - All state-changing operations in the management surfaces are moving to a **context-first** API that enforces attribution.
 - **Hardening Complete**: The `server-core` crate uses a unified `audit!` macro for consistent logging. Write paths have been audited to ensure no sensitive operations bypass audit logging.
+- **Retention & Cleanup**: Configurable cascading retention policies with background cleanup task and admin UI for managing session data and orphan events.
 
 ---
 
@@ -253,14 +254,72 @@ Some are wired (e.g., migrations); others can be hooked into startup/shutdown fl
 
 ---
 
-## Remaining Work / TODOs
+## Retention & Cleanup
 
-### 1. Retention & Export
+The audit system includes configurable retention policies with **cascading cleanup** to maintain referential integrity across tables.
 
-- Design retention policies for `system_events` (similar to session recording):
-  - Configurable max age / max rows.
-  - Background cleanup task in server-core.
-- Optional export path (JSON/CSV) for external SIEM ingestion.
+### Retention Policies
+
+Two policy groups are configurable via the Server Settings admin UI:
+
+1. **Session Data Policy** - Controls all session-related data:
+   - `relay_sessions` (session metadata)
+   - `session_chunks` (terminal recordings)
+   - `relay_session_participants` (viewer tracking)
+   - `client_sessions` (SSH/Web connections)
+   - `system_events` linked to sessions
+
+2. **Orphan Events Policy** - Controls system events not tied to any session:
+   - Server startup/shutdown
+   - User/group/role management events
+   - Configuration changes
+
+Each policy supports:
+- **Max Age (days)**: Delete data older than N days
+- **Max Size (KB)**: Iteratively delete oldest data until under size limit
+- **Enabled toggle**: Enable/disable automatic cleanup
+
+### Cascading Cleanup Logic
+
+When a `relay_session` is deleted, all related data is cleaned up in the correct order to maintain referential integrity:
+
+1. **Find related client_sessions** (initiator + all participants)
+2. **Delete system_events** tied to those client sessions or the relay session
+3. **Delete relay_session** (chunks and participants cascade via FK)
+4. **Delete orphaned client_sessions** (only if not referenced by other relay_sessions)
+
+This ensures no foreign key violations and no orphaned records.
+
+### Size-Based Cleanup
+
+When `max_size_kb` is exceeded:
+1. Get total size of session data (or orphan events)
+2. If over limit, delete the **oldest** relay_session (cascading)
+3. Re-check size, repeat until under limit
+4. Uses `tokio::task::yield_now()` to prevent blocking
+
+### Background Cleanup Task
+
+A periodic background task runs retention cleanup automatically:
+- Interval configurable via `cleanup_interval_secs` (default: 1 hour)
+- Runs at server startup for immediate cleanup
+- Logs `AuditRetentionRun` events with detailed stats
+
+### Admin UI (Server Settings)
+
+The `/admin/settings` page provides:
+- **Policy Configuration**: Enable/disable, max age, max size for each policy group
+- **Database Stats**: Size breakdown per table with row counts
+  - Recordings (chunks), Sessions, Connections, Participants, Session Events, Orphan Events
+- **Manual Cleanup**: "Run Cleanup Now" button with toast notification showing detailed results
+- **Real-time feedback**: Save button appears immediately as values change
+
+### Audit Events
+
+- `AuditRetentionRun` - Logged after each cleanup with:
+  - `sessions_deleted`, `client_sessions_deleted`, `session_events_deleted`, `orphan_events_deleted`
+  - `duration_ms`, `is_automated` (background vs manual)
+
 
 ---
 
@@ -274,7 +333,14 @@ Some are wired (e.g., migrations); others can be hooked into startup/shutdown fl
 This keeps all audit logic centralized, type-safe, and easy to evolve as the platform grows.
 
 
-### 3. Future Refactoring & Improvements
+## Future Improvements
 
-- [ ] **Event Type Verbosity**: The `EventType` enum is currently very verbose. While this provides excellent type safety and clarity, it may become unwieldy as the system grows. Consider refactoring into a more modular structure or using macros/codegen in the future.
-- [ ] **Session ID Migration**: Currently `session_number` (u32) is used in many places. This should be migrated to `session_id` (UUIDv7) strictly to prevent session enumeration attacks. This is a known technical debt item.
+### Export Feature (TODO)
+- Optional export path (JSON/CSV) for external SIEM ingestion
+- Reusable across all audit tables
+- Export based on current filters/grouping from history view
+- Non-blocking implementation to avoid performance impact
+
+### Refactoring Considerations
+- **Event Type Verbosity**: The `EventType` enum is currently very verbose. While this provides excellent type safety and clarity, consider refactoring into a more modular structure or using macros/codegen as the system grows.
+- **Session ID Migration**: Some places still use `session_number` (u32). This should be migrated to `session_id` (UUIDv7) strictly to prevent session enumeration.

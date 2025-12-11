@@ -121,8 +121,8 @@ async fn execute_filtered_query(db: &DbHandle, filter: &EventFilter) -> DbResult
         builder.push(" AND (session_id IS NULL OR session_id = '')");
     }
 
-    if let Some(ref session_ids) = filter.session_ids {
-        if !session_ids.is_empty() {
+    if let Some(ref session_ids) = filter.session_ids
+        && !session_ids.is_empty() {
             builder.push(" AND session_id IN (");
             for (i, sid) in session_ids.iter().enumerate() {
                 if i > 0 {
@@ -132,14 +132,13 @@ async fn execute_filtered_query(db: &DbHandle, filter: &EventFilter) -> DbResult
             }
             builder.push(")");
         }
-    }
 
     if let Some(ref parent_session_id) = filter.parent_session_id {
         builder.push(" AND parent_session_id = ").push_bind(parent_session_id);
     }
 
-    if let Some(ref action_types) = filter.action_types {
-        if !action_types.is_empty() {
+    if let Some(ref action_types) = filter.action_types
+        && !action_types.is_empty() {
             builder.push(" AND action_type IN (");
             for (i, at) in action_types.iter().enumerate() {
                 if i > 0 {
@@ -149,7 +148,6 @@ async fn execute_filtered_query(db: &DbHandle, filter: &EventFilter) -> DbResult
             }
             builder.push(")");
         }
-    }
 
     builder.push(" ORDER BY timestamp DESC");
 
@@ -188,8 +186,8 @@ pub async fn count_audit_events(db: &DbHandle, filter: &EventFilter) -> DbResult
         builder.push(" AND session_id = ").push_bind(session_id);
     }
 
-    if let Some(ref session_ids) = filter.session_ids {
-        if !session_ids.is_empty() {
+    if let Some(ref session_ids) = filter.session_ids
+        && !session_ids.is_empty() {
             builder.push(" AND session_id IN (");
             for (i, sid) in session_ids.iter().enumerate() {
                 if i > 0 {
@@ -199,13 +197,12 @@ pub async fn count_audit_events(db: &DbHandle, filter: &EventFilter) -> DbResult
             }
             builder.push(")");
         }
-    }
     if let Some(ref parent_session_id) = filter.parent_session_id {
         builder.push(" AND parent_session_id = ").push_bind(parent_session_id);
     }
 
-    if let Some(ref action_types) = filter.action_types {
-        if !action_types.is_empty() {
+    if let Some(ref action_types) = filter.action_types
+        && !action_types.is_empty() {
             builder.push(" AND action_type IN (");
             for (i, at) in action_types.iter().enumerate() {
                 if i > 0 {
@@ -215,7 +212,6 @@ pub async fn count_audit_events(db: &DbHandle, filter: &EventFilter) -> DbResult
             }
             builder.push(")");
         }
-    }
 
     let query = builder.build();
     let row = query.fetch_one(&db.pool).await?;
@@ -275,8 +271,8 @@ pub async fn count_events_by_group(db: &DbHandle, group_by: &str, filter: &Event
         builder.push(" AND (session_id IS NULL OR session_id = '')");
     }
 
-    if let Some(ref session_ids) = filter.session_ids {
-        if !session_ids.is_empty() {
+    if let Some(ref session_ids) = filter.session_ids
+        && !session_ids.is_empty() {
             builder.push(" AND session_id IN (");
             for (i, sid) in session_ids.iter().enumerate() {
                 if i > 0 {
@@ -286,14 +282,13 @@ pub async fn count_events_by_group(db: &DbHandle, group_by: &str, filter: &Event
             }
             builder.push(")");
         }
-    }
 
     if let Some(ref parent_session_id) = filter.parent_session_id {
         builder.push(" AND parent_session_id = ").push_bind(parent_session_id);
     }
 
-    if let Some(ref action_types) = filter.action_types {
-        if !action_types.is_empty() {
+    if let Some(ref action_types) = filter.action_types
+        && !action_types.is_empty() {
             builder.push(" AND action_type IN (");
             for (i, at) in action_types.iter().enumerate() {
                 if i > 0 {
@@ -303,7 +298,6 @@ pub async fn count_events_by_group(db: &DbHandle, group_by: &str, filter: &Event
             }
             builder.push(")");
         }
-    }
 
     builder.push(format!(" GROUP BY {} ORDER BY count DESC", group_column));
 

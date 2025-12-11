@@ -17,6 +17,7 @@ use crate::DbResult;
 
 pub mod connections;
 pub mod events;
+pub mod retention;
 
 #[cfg(test)]
 mod tests;
@@ -204,4 +205,9 @@ fn ensure_secure_permissions(path: &Path) -> DbResult<bool> {
 
 fn default_audit_path() -> PathBuf {
     crate::db::server_db_dir().join("audit.db")
+}
+
+/// Return the full path to the audit database file
+pub fn audit_db_path() -> PathBuf {
+    default_audit_path()
 }
