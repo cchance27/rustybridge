@@ -6,6 +6,8 @@
 - Web, SSH/TUI, and CLI now emit strongly-typed events for user/group/relay/credential/ACL/session activity.
 - **Audit Web UI**: Admin console for browsing/filtering events and a visual "Relay Session Timeline" for inspecting session lifecycle and connections.
 - All state-changing operations in the management surfaces are moving to a **context-first** API that enforces attribution.
+- **Hardening Complete**: The `server-core` crate uses a unified `audit!` macro for consistent logging. Write paths have been audited to ensure no sensitive operations bypass audit logging.
+- **Retention & Cleanup**: Configurable cascading retention policies with background cleanup task and admin UI for managing session data and orphan events.
 
 ---
 
@@ -20,7 +22,7 @@ Web / CLI / SSH/TUI
   ▼
 server-core business logic
   • functions take `&AuditContext`
-  • log via `server_core::audit::*`
+  • log via `audit!(ctx, Event { ... })`
   ▼
 state-store audit layer
   • `insert_audit_event` / `query_audit_events`
@@ -47,6 +49,8 @@ SQLite `audit.db`
 - `crates/server-core/src/audit/`
   - `logger.rs` – `log_event`, `log_event_simple_*`, `log_event_with_context_*`, `log_event_from_context_*`.
   - `query.rs` – helpers to query/filter events from server-core.
+- `crates/server-core/src/macros.rs`:
+    - `audit!` – Primary macro for logging events with context.
 
 ---
 
@@ -75,7 +79,7 @@ Every business function that changes state now prefers a signature like:
 pub async fn add_user(ctx: &AuditContext, username: &str, password: &str) -> ServerResult<()>;
 ```
 
-and uses `log_event_from_context_best_effort` to record the corresponding `EventType`.
+and uses the `audit!` macro to record the corresponding `EventType`.
 
 ---
 
@@ -90,7 +94,7 @@ Emitted from `server-core/src/handler/auth.rs`:
 
 ### User Management
 
-Emitted from `server-core/src/user/mod.rs`:
+Emitted from `server-core/src/user/mod.rs` and `server-core/src/api.rs`:
 
 - `UserCreated { username }`
 - `UserDeleted { username, user_id }`
@@ -99,6 +103,8 @@ Emitted from `server-core/src/user/mod.rs`:
 - `UserSshKeyRemoved { username, user_id, key_id }`
 - `UserClaimAdded { username, user_id, claim }`
 - `UserClaimRemoved { username, user_id, claim }`
+- `OidcLinked { username, user_id, provider, subject }`
+- `OidcUnlinked { username, user_id, provider }`
 
 ### Group Management
 
@@ -113,7 +119,16 @@ Emitted from `server-core/src/group/mod.rs`:
 
 ### Role Management (RBAC)
 
-Types exist in `EventType`; wiring from role APIs is not fully implemented yet.
+Emitted from `server-core/src/api.rs`:
+
+- `RoleCreated { name, description }`
+- `RoleDeleted { name, role_id }`
+- `RoleAssignedToUser { role_name, role_id, username, user_id }`
+- `RoleRevokedFromUser { role_name, role_id, username, user_id }`
+- `RoleAssignedToGroup { role_name, role_id, group_name, group_id }`
+- `RoleRevokedFromGroup { role_name, role_id, group_name, group_id }`
+- `RoleClaimAdded { role_name, role_id, claim }`
+- `RoleClaimRemoved { role_name, role_id, claim }`
 
 ### Relay Hosts
 
@@ -239,33 +254,72 @@ Some are wired (e.g., migrations); others can be hooked into startup/shutdown fl
 
 ---
 
-## Remaining Work / TODOs
+## Retention & Cleanup
 
-### 1. Wire Remaining Event Types
+The audit system includes configurable retention policies with **cascading cleanup** to maintain referential integrity across tables.
 
-- Role management events:
-  - `RoleCreated`, `RoleDeleted`, `RoleAssignedToUser/Group`, `RoleRevokedFromUser/Group`, `RoleClaimAdded/Removed` – ensure all role APIs call `log_event_from_context_best_effort`.
+### Retention Policies
 
-- Investigate that all remaining actions that users and admins can take are audit-enforced. 
-  - We should make sure that any mutations in server-core are audit-enforced with proper context.
-  - We should confirm all rb-web and tui, and rb-server-cli functions are properly integrating and using audits.
+Two policy groups are configurable via the Server Settings admin UI:
 
-- Configuration/system events:
-  - Emit `ServerStarted` / `ServerStopped` from rb-server startup/shutdown.
-  - Emit `OidcConfigured` from OIDC config flows.
+1. **Session Data Policy** - Controls all session-related data:
+   - `relay_sessions` (session metadata)
+   - `session_chunks` (terminal recordings)
+   - `relay_session_participants` (viewer tracking)
+   - `client_sessions` (SSH/Web connections)
+   - `system_events` linked to sessions
 
-### 2. Hardening & DX
+2. **Orphan Events Policy** - Controls system events not tied to any session:
+   - Server startup/shutdown
+   - User/group/role management events
+   - Configuration changes
 
-- Add lightweight wrappers/macros to reduce boilerplate when logging common patterns.
-- Consider feature flags to disable high-volume categories (e.g., resize events) in low-compliance deployments.
-- Review all remaining write paths for any direct `state_store` usage that bypasses server-core + audit.
+Each policy supports:
+- **Max Age (days)**: Delete data older than N days
+- **Max Size (KB)**: Iteratively delete oldest data until under size limit
+- **Enabled toggle**: Enable/disable automatic cleanup
 
-### 3. Retention & Export
+### Cascading Cleanup Logic
 
-- Design retention policies for `system_events` (similar to session recording):
-  - Configurable max age / max rows.
-  - Background cleanup task in server-core.
-- Optional export path (JSON/CSV) for external SIEM ingestion.
+When a `relay_session` is deleted, all related data is cleaned up in the correct order to maintain referential integrity:
+
+1. **Find related client_sessions** (initiator + all participants)
+2. **Delete system_events** tied to those client sessions or the relay session
+3. **Delete relay_session** (chunks and participants cascade via FK)
+4. **Delete orphaned client_sessions** (only if not referenced by other relay_sessions)
+
+This ensures no foreign key violations and no orphaned records.
+
+### Size-Based Cleanup
+
+When `max_size_kb` is exceeded:
+1. Get total size of session data (or orphan events)
+2. If over limit, delete the **oldest** relay_session (cascading)
+3. Re-check size, repeat until under limit
+4. Uses `tokio::task::yield_now()` to prevent blocking
+
+### Background Cleanup Task
+
+A periodic background task runs retention cleanup automatically:
+- Interval configurable via `cleanup_interval_secs` (default: 1 hour)
+- Runs at server startup for immediate cleanup
+- Logs `AuditRetentionRun` events with detailed stats
+
+### Admin UI (Server Settings)
+
+The `/admin/settings` page provides:
+- **Policy Configuration**: Enable/disable, max age, max size for each policy group
+- **Database Stats**: Size breakdown per table with row counts
+  - Recordings (chunks), Sessions, Connections, Participants, Session Events, Orphan Events
+- **Manual Cleanup**: "Run Cleanup Now" button with toast notification showing detailed results
+- **Real-time feedback**: Save button appears immediately as values change
+
+### Audit Events
+
+- `AuditRetentionRun` - Logged after each cleanup with:
+  - `sessions_deleted`, `client_sessions_deleted`, `session_events_deleted`, `orphan_events_deleted`
+  - `duration_ms`, `is_automated` (background vs manual)
+
 
 ---
 
@@ -273,13 +327,20 @@ Some are wired (e.g., migrations); others can be hooked into startup/shutdown fl
 
 1. Add a new variant to `EventType` in `rb-types/src/audit/event.rs`.
 2. Map it to an `EventCategory` and an `action_type()` string.
-3. Log it from server-core using `log_event_from_context_best_effort(&ctx, EventType::YourNewEvent { ... })`.
+3. Log it from server-core using `crate::audit!(ctx, UserCreated { username });`.
 4. (Optional) Add filtering support in any UIs that should expose it.
 
 This keeps all audit logic centralized, type-safe, and easy to evolve as the platform grows.
 
 
-### 4. Future Refactoring & Improvements
+## Future Improvements
 
-- [ ] **Event Type Verbosity**: The `EventType` enum is currently very verbose. While this provides excellent type safety and clarity, it may become unwieldy as the system grows. Consider refactoring into a more modular structure or using macros/codegen in the future.
-- [ ] **Session ID Migration**: Currently `session_number` (u32) is used in many places. This should be migrated to `session_id` (UUIDv7) strictly to prevent session enumeration attacks. This is a known technical debt item.
+### Export Feature (TODO)
+- Optional export path (JSON/CSV) for external SIEM ingestion
+- Reusable across all audit tables
+- Export based on current filters/grouping from history view
+- Non-blocking implementation to avoid performance impact
+
+### Refactoring Considerations
+- **Event Type Verbosity**: The `EventType` enum is currently very verbose. While this provides excellent type safety and clarity, consider refactoring into a more modular structure or using macros/codegen as the system grows.
+- **Session ID Migration**: Some places still use `session_number` (u32). This should be migrated to `session_id` (UUIDv7) strictly to prevent session enumeration.

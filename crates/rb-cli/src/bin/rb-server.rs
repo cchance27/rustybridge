@@ -49,12 +49,24 @@ async fn main() -> Result<()> {
 
     match args.cmd {
         None => {
+            // Emit ServerStarted audit event only when actually starting servers
+            {
+                let startup_ctx = AuditContext::system("startup");
+                server_core::audit::log_event_from_context_best_effort(
+                    &startup_ctx,
+                    rb_types::audit::EventType::ServerStarted {
+                        version: env!("CARGO_PKG_VERSION").to_string(),
+                    },
+                )
+                .await;
+            }
+
             if let Some(web_cfg) = web_config {
                 let server_cfg = args.to_run_config();
                 let audit_db = audit_db_handle().await?;
 
                 // Clean up any stale sessions from previous server runs
-                server_core::startup_cleanup::cleanup_stale_sessions().await?;
+                server_core::startup_cleanup::run_startup_cleanup().await?;
 
                 let registry = std::sync::Arc::new(server_core::sessions::SessionRegistry::new(audit_db));
 
@@ -64,28 +76,57 @@ async fn main() -> Result<()> {
                 let mut server_task = tokio::spawn(async move { run_ssh_server(server_cfg, registry_for_ssh).await });
                 let mut web_task = tokio::spawn(async move { run_web_server(web_cfg, rb_web::app_root::app_root, registry_for_web).await });
 
-                tokio::select! {
+                // Graceful shutdown signal handling
+                let shutdown_result: anyhow::Result<()> = tokio::select! {
                     res = &mut server_task => {
                         web_task.abort();
-                        res??;
+                        res?.map_err(|e| anyhow::anyhow!(e))
                     }
                     res = &mut web_task => {
                         // If the web server exits (error or shutdown) bring down SSH too
                         server_task.abort();
-                        res??;
+                        res?
                     }
-                }
+                    _ = tokio::signal::ctrl_c() => {
+                        // Graceful shutdown requested
+                        let shutdown_ctx = AuditContext::system("shutdown");
+                        server_core::audit::log_event_from_context_best_effort(
+                            &shutdown_ctx,
+                            rb_types::audit::EventType::ServerStopped,
+                        )
+                        .await;
+                        server_task.abort();
+                        web_task.abort();
+                        Ok(())
+                    }
+                };
+                shutdown_result?;
             } else {
                 let audit_db = audit_db_handle().await?;
 
                 // Clean up any stale sessions from previous server runs
-                server_core::startup_cleanup::cleanup_stale_sessions().await?;
+                server_core::startup_cleanup::run_startup_cleanup().await?;
 
-                run_ssh_server(
+                // Graceful shutdown with signal handling
+                let ssh_task = run_ssh_server(
                     args.to_run_config(),
                     std::sync::Arc::new(server_core::sessions::SessionRegistry::new(audit_db)),
-                )
-                .await?;
+                );
+
+                tokio::select! {
+                    res = ssh_task => {
+                        res?;
+                    }
+                    _ = tokio::signal::ctrl_c() => {
+                        // Graceful shutdown requested
+                        let shutdown_ctx = AuditContext::system("shutdown");
+                        server_core::audit::log_event_from_context_best_effort(
+                            &shutdown_ctx,
+                            rb_types::audit::EventType::ServerStopped,
+                        )
+                        .await;
+                    }
+                }
             }
         }
         Some(ServerSubcommand::Hosts { cmd }) => match cmd {
@@ -421,7 +462,7 @@ async fn main() -> Result<()> {
                 let role_id = get_role_id_by_name(&name)
                     .await?
                     .ok_or_else(|| anyhow!("Role '{}' not found", name))?;
-                delete_role(&ctx, role_id, &name).await?;
+                delete_role(&ctx, role_id).await?;
             }
             RolesCmd::List => {
                 for r in list_roles().await? {
@@ -455,6 +496,16 @@ async fn main() -> Result<()> {
                 };
 
                 server_core::set_server_option(stored_key, &value).await?;
+
+                // Emit OidcConfigured audit event when setting the issuer URL
+                if matches!(key, WebOptionKey::OidcIssuerUrl) {
+                    server_core::audit::log_event_from_context_best_effort(
+                        &ctx,
+                        rb_types::audit::EventType::OidcConfigured { issuer: value.clone() },
+                    )
+                    .await;
+                }
+
                 if is_secret {
                     println!("set {}=<redacted>", label);
                 } else {

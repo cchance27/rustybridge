@@ -19,16 +19,13 @@ pub enum AuthMethod {
 /// Client type for session events (SSH client vs Web browser).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ClientType {
+    #[default]
     Ssh,
     Web,
 }
 
-impl Default for ClientType {
-    fn default() -> Self {
-        Self::Ssh
-    }
-}
 
 /// Specific audit event types with associated structured data.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, strum::IntoStaticStr)]
@@ -365,6 +362,52 @@ pub enum EventType {
     ServerStopped,
     /// Database migration applied
     DatabaseMigrated { database: String, version: String },
+    /// Server settings updated (e.g., retention config)
+    ServerSettingsUpdated { setting_name: String },
+    /// Audit data cleaned per-table (retention policy applied)
+    /// Logged for each table that had data deleted
+    AuditTableCleaned {
+        table_name: String,
+        rows_deleted: u64,
+        /// true = automated by background timer, false = admin-triggered
+        is_automated: bool,
+    },
+    /// Audit table completely purged (manual admin action)
+    AuditTablePurged { table_name: String, rows_deleted: u64 },
+    /// Full retention cleanup run completed (summary event)
+    AuditRetentionRun {
+        #[serde(default)]
+        total_deleted: u64,
+        #[serde(default)]
+        sessions_deleted: u64,
+        #[serde(default)]
+        client_sessions_deleted: u64,
+        #[serde(default)]
+        session_events_deleted: u64,
+        #[serde(default)]
+        orphan_events_deleted: u64,
+        /// true = automated by background timer, false = admin-triggered
+        #[serde(default)]
+        is_automated: bool,
+    },
+    /// Database vacuumed to reclaim disk space
+    DatabaseVacuumed {
+        /// Which database: "audit" or "server"
+        #[serde(default)]
+        database: String,
+        /// dbstat internal size before vacuum (KB)
+        #[serde(default)]
+        size_before_kb: u64,
+        /// dbstat internal size after vacuum (KB)
+        #[serde(default)]
+        size_after_kb: u64,
+        /// Actual on-disk file size before vacuum (KB)
+        #[serde(default)]
+        file_size_before_kb: u64,
+        /// Actual on-disk file size after vacuum (KB)
+        #[serde(default)]
+        file_size_after_kb: u64,
+    },
 }
 
 impl EventType {
@@ -423,7 +466,14 @@ impl EventType {
             | EventType::SessionForceClosed { .. }
             | EventType::SessionTransferToRelay { .. } => EventCategory::Session,
             EventType::ServerHostKeyGenerated | EventType::OidcConfigured { .. } => EventCategory::Configuration,
-            EventType::ServerStarted { .. } | EventType::ServerStopped | EventType::DatabaseMigrated { .. } => EventCategory::System,
+            EventType::ServerStarted { .. }
+            | EventType::ServerStopped
+            | EventType::DatabaseMigrated { .. }
+            | EventType::ServerSettingsUpdated { .. }
+            | EventType::AuditTableCleaned { .. }
+            | EventType::AuditTablePurged { .. }
+            | EventType::AuditRetentionRun { .. }
+            | EventType::DatabaseVacuumed { .. } => EventCategory::System,
         }
     }
 

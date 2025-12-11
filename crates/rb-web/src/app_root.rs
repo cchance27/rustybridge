@@ -4,7 +4,7 @@ use crate::{
     app::{
         auth::context::use_auth_provider, session::{components::global_chrome::SessionGlobalChrome, provider::use_session_provider}
     }, components::SessionPlayer, pages::{
-        AccessPage, CredentialsPage, DashboardPage, LoginPage, LogoutPage, NotFoundPage, OidcErrorPage, ProfilePage, RelaysPage, ServerPage, SshSuccessPage, admin::{AuditEvents, RelaySessionTimelinePage, SessionHistory}
+        AccessPage, CredentialsPage, DashboardPage, LoginPage, LogoutPage, NotFoundPage, OidcErrorPage, ProfilePage, RelaysPage, ServerPage, SshSuccessPage, admin::{AuditEvents, RelaySessionTimelinePage, ServerSettings, SessionHistory}
     }
 };
 
@@ -79,6 +79,8 @@ pub enum Routes {
     SessionHistory {},
     #[route("/admin/events")]
     AuditEvents {},
+    #[route("/admin/settings")]
+    ServerSettings {},
     #[route("/admin/sessions/:session_id/replay")]
     SessionPlayer { session_id: String },
     #[route("/admin/sessions/:session_id/timeline")]

@@ -54,6 +54,12 @@ pub fn server_db_dir() -> PathBuf {
     default_server_path().parent().unwrap_or(Path::new(".")).to_path_buf()
 }
 
+/// Return the full path to the server database file
+#[cfg(feature = "server")]
+pub fn server_db_path() -> PathBuf {
+    default_server_path()
+}
+
 /// Establish a pooled SQLite connection for client-side state (host keys, etc.).
 #[cfg(feature = "client")]
 pub async fn client_db() -> DbResult<rb_types::state::DbHandle> {

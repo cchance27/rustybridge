@@ -63,18 +63,17 @@ impl ServerHandler {
             let relay_name = self.relay_target.clone().unwrap_or_else(|| "tui".to_string());
             let relay_id = self.active_relay_id.unwrap_or(0);
             tokio::spawn(async move {
-                crate::audit::log_event_from_context_best_effort(
+                crate::audit!(
                     &ctx,
-                    rb_types::audit::EventType::SessionEnded {
+                    SessionEnded {
                         session_id,
                         relay_name,
                         relay_id,
                         username,
                         duration_ms,
                         client_type: rb_types::audit::ClientType::Ssh,
-                    },
-                )
-                .await;
+                    }
+                );
             });
         }
 
@@ -172,17 +171,16 @@ impl ServerHandler {
                 .or_else(|| self.session_number.map(|n| format!("ssh_session_{}", n)))
                 .unwrap_or_else(|| "ssh_session_unknown".to_string());
             let ctx = self.ssh_audit_context();
-            crate::audit::log_event_from_context_best_effort(
+            crate::audit!(
                 &ctx,
-                rb_types::audit::EventType::SessionStarted {
+                SessionStarted {
                     session_id,
                     relay_name: self.relay_target.clone().unwrap_or_else(|| "tui".to_string()),
                     relay_id: self.active_relay_id.unwrap_or(0),
                     username,
                     client_type: rb_types::audit::ClientType::Ssh,
-                },
-            )
-            .await;
+                }
+            );
         }
         Ok(())
     }

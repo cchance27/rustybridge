@@ -29,7 +29,8 @@ pub async fn create_role(executor: impl SqliteExecutor<'_>, name: &str, descript
 ///
 /// # Super Admin Protection
 /// Cannot delete role ID 1 (Super Admin role).
-pub async fn delete_role_by_id(executor: impl SqliteExecutor<'_>, id: i64) -> DbResult<()> {
+/// Returns the number of rows affected (0 or 1).
+pub async fn delete_role_by_id(executor: impl SqliteExecutor<'_>, id: i64) -> DbResult<u64> {
     if id == crate::SUPER_ADMIN_ROLE_ID {
         return Err(crate::DbError::InvalidOperation {
             operation: "delete_role".to_string(),
@@ -37,8 +38,8 @@ pub async fn delete_role_by_id(executor: impl SqliteExecutor<'_>, id: i64) -> Db
         });
     }
 
-    sqlx::query("DELETE FROM roles WHERE id = ?").bind(id).execute(executor).await?;
-    Ok(())
+    let result = sqlx::query("DELETE FROM roles WHERE id = ?").bind(id).execute(executor).await?;
+    Ok(result.rows_affected())
 }
 
 pub async fn list_roles(executor: impl SqliteExecutor<'_>) -> DbResult<Vec<Role>> {
@@ -308,4 +309,13 @@ pub async fn fetch_role_id_by_name(executor: impl SqliteExecutor<'_>, name: &str
         .fetch_optional(executor)
         .await?;
     Ok(row.map(|r| r.get::<i64, _>("id")))
+}
+
+/// Fetch role name by ID for audit logging.
+pub async fn fetch_role_name_by_id(executor: impl SqliteExecutor<'_>, id: i64) -> DbResult<Option<String>> {
+    sqlx::query_scalar("SELECT name FROM roles WHERE id = ?")
+        .bind(id)
+        .fetch_optional(executor)
+        .await
+        .map_err(crate::DbError::from)
 }

@@ -1,23 +1,37 @@
-//! Startup cleanup for stale sessions and connections.
+//! Startup cleanup for stale sessions, connections, and retention policies.
 //!
 //! This module handles cleaning up any sessions or connections that were left
-//! in an unclosed state due to server restart or crash.
+//! in an unclosed state due to server restart or crash, and applies retention
+//! policies to the audit database.
 
 use chrono::Utc;
 use tracing::{info, warn};
 
 use crate::error::ServerResult;
 
-/// Clean up stale sessions from the audit database that were left unclosed.
+/// Run all startup cleanup tasks.
 ///
 /// This should be called on server startup, after database migrations but before
 /// accepting any client connections.
 ///
-/// For each unclosed session:
-/// - Sets end_time to current time
-/// - Logs a SessionForceClosed audit event with "server restart" reason
-/// - Cleans up active participants and client sessions
-pub async fn cleanup_stale_sessions() -> ServerResult<()> {
+/// Tasks performed:
+/// - Mark stale sessions as closed
+/// - Log SessionForceClosed audit events for orphaned sessions
+/// - Clean up stale participants and client sessions
+/// - Apply retention policies to audit database
+pub async fn run_startup_cleanup() -> ServerResult<()> {
+    cleanup_stale_sessions_internal().await?;
+
+    // Run retention cleanup on startup
+    if let Err(e) = crate::retention::run_retention_cleanup().await {
+        warn!(error = ?e, "Startup retention cleanup failed (non-fatal)");
+    }
+
+    Ok(())
+}
+
+/// Clean up stale sessions from the audit database that were left unclosed.
+async fn cleanup_stale_sessions_internal() -> ServerResult<()> {
     let audit_db = state_store::audit::audit_db()
         .await
         .map_err(crate::error::ServerError::StateStore)?;
@@ -70,18 +84,17 @@ pub async fn cleanup_stale_sessions() -> ServerResult<()> {
             };
 
             // Log SessionForceClosed event
-            crate::audit::log_event_from_context_best_effort(
+            crate::audit!(
                 &ctx,
-                rb_types::audit::EventType::SessionForceClosed {
+                SessionForceClosed {
                     session_id: session_id.clone(),
                     session_number,
                     relay_id,
                     relay_name: relay_name.clone(),
                     target_username,
                     reason: "Server Restart".to_string(),
-                },
-            )
-            .await;
+                }
+            );
         }
     }
 

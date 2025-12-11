@@ -8,9 +8,11 @@ mod context;
 mod event;
 mod filter;
 mod recorded;
+mod retention;
 
 pub use category::*;
 pub use context::*;
 pub use event::*;
 pub use filter::*;
 pub use recorded::*;
+pub use retention::*;

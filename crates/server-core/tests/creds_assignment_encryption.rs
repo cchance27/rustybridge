@@ -2,12 +2,12 @@ use anyhow::Result;
 use serial_test::serial;
 use sqlx::{Row, SqlitePool};
 
+mod common;
+
 #[tokio::test]
 #[serial]
 async fn assign_writes_encrypted_values_and_unassign_removes() -> Result<()> {
-    unsafe {
-        std::env::set_var("RB_SERVER_DB_URL", "sqlite:file:assign_test?mode=memory&cache=shared");
-    }
+    common::set_test_db_env("assign_test");
     unsafe {
         std::env::set_var("RB_SERVER_SECRETS_PASSPHRASE", "assign-pass");
     }

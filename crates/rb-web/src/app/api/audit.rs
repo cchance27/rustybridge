@@ -370,10 +370,20 @@ pub async fn stream_audit_events(query: StreamEventsQuery) -> Result<StreamEvent
         filter.end_time = Some(end);
     }
 
+    tracing::debug!(
+        "stream_audit_events: category={:?}, group_by={:?}, filter={:?}",
+        query.category,
+        query.group_by,
+        filter
+    );
+
     // Query events (ordered by timestamp DESC by default)
-    let mut events = server_core::audit::query_events(filter.clone())
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let mut events = server_core::audit::query_events(filter.clone()).await.map_err(|e| {
+        tracing::error!("stream_audit_events query error: {}", e);
+        ServerFnError::new(e.to_string())
+    })?;
+
+    tracing::debug!("stream_audit_events: got {} events", events.len());
 
     // When grouping, sort events by group key first, then by timestamp DESC
     // This ensures each group appears contiguously in the list

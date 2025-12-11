@@ -54,6 +54,10 @@ pub fn NavBar() -> Element {
                             any_claims: vec![ClaimType::Server(ClaimLevel::View)],
                             li { Link { to: crate::Routes::AuditEvents {}, "Events" } }
                         }
+                        Protected {
+                            any_claims: vec![ClaimType::Server(ClaimLevel::View)],
+                            li { Link { to: crate::Routes::ServerSettings {}, "Settings" } }
+                        }
                     }
                 }
             }

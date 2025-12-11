@@ -233,18 +233,17 @@ impl ServerHandler {
                     Some(parent_session_id.clone()),
                 );
 
-                crate::audit::log_event_from_context_best_effort(
+                crate::audit!(
                     &ctx,
-                    rb_types::audit::EventType::SessionEnded {
+                    SessionEnded {
                         session_id: parent_session_id,
                         relay_name,
                         relay_id,
                         username,
                         duration_ms: duration,
                         client_type: rb_types::audit::ClientType::Ssh,
-                    },
-                )
-                .await;
+                    }
+                );
             });
         }
     }

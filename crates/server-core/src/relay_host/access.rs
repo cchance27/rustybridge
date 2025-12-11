@@ -39,17 +39,16 @@ pub async fn grant_relay_access_by_id(
 
     // Log audit event with full context
     if let (Some(relay), Some(principal_name)) = (relay_info, principal_name) {
-        crate::audit::log_event_from_context_best_effort(
+        crate::audit!(
             ctx,
-            rb_types::audit::EventType::AccessGranted {
+            AccessGranted {
                 relay_name: relay.name,
                 relay_id: host_id,
                 principal_kind: principal_kind.as_str().to_string(),
                 principal_name,
                 principal_id,
-            },
-        )
-        .await;
+            }
+        );
     }
 
     Ok(())
@@ -91,17 +90,16 @@ pub async fn revoke_relay_access_by_id(
 
     // Log audit event with full context
     if let (Some(relay), Some(principal_name)) = (relay_info, principal_name) {
-        crate::audit::log_event_from_context_best_effort(
+        crate::audit!(
             ctx,
-            rb_types::audit::EventType::AccessRevoked {
+            AccessRevoked {
                 relay_name: relay.name,
                 relay_id: host_id,
                 principal_kind: principal_kind.as_str().to_string(),
                 principal_name,
                 principal_id,
-            },
-        )
-        .await;
+            }
+        );
     }
 
     Ok(())

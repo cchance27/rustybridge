@@ -112,20 +112,25 @@ pub async fn store_relay_hostkey_by_id(ctx: &rb_types::audit::AuditContext, host
         let fp = pk.fingerprint(russh::keys::HashAlg::Sha256).to_string();
         let key_type = key_pem.split_whitespace().next().unwrap_or("").to_string();
         if let Some(host) = state_store::fetch_relay_host_by_id(&pool, host_id).await? {
-            let event = if had_existing {
-                rb_types::audit::EventType::RelayHostKeyRefreshed {
-                    name: host.name,
-                    relay_id: host_id,
-                }
+            if had_existing {
+                crate::audit!(
+                    ctx,
+                    RelayHostKeyRefreshed {
+                        name: host.name,
+                        relay_id: host_id,
+                    }
+                );
             } else {
-                rb_types::audit::EventType::RelayHostKeyCaptured {
-                    name: host.name,
-                    relay_id: host_id,
-                    key_type,
-                    fingerprint: fp,
-                }
-            };
-            crate::audit::log_event_from_context_best_effort(ctx, event).await;
+                crate::audit!(
+                    ctx,
+                    RelayHostKeyCaptured {
+                        name: host.name,
+                        relay_id: host_id,
+                        key_type,
+                        fingerprint: fp,
+                    }
+                );
+            }
         }
     }
     Ok(())
@@ -144,14 +149,13 @@ pub async fn add_relay_host(ctx: &rb_types::audit::AuditContext, endpoint: &str,
 
     if result.is_ok() {
         // Log audit event with full context
-        crate::audit::log_event_from_context_best_effort(
+        crate::audit!(
             ctx,
-            rb_types::audit::EventType::RelayHostCreated {
+            RelayHostCreated {
                 name: name.to_string(),
                 endpoint: endpoint.to_string(),
-            },
-        )
-        .await;
+            }
+        );
     }
 
     result
@@ -165,14 +169,13 @@ pub async fn add_relay_host_without_hostkey(ctx: &rb_types::audit::AuditContext,
 
     if result.is_ok() {
         // Log audit event with full context
-        crate::audit::log_event_from_context_best_effort(
+        crate::audit!(
             ctx,
-            rb_types::audit::EventType::RelayHostCreated {
+            RelayHostCreated {
                 name: name.to_string(),
                 endpoint: endpoint.to_string(),
-            },
-        )
-        .await;
+            }
+        );
     }
 
     result

@@ -4,12 +4,12 @@ use secrecy::ExposeSecret;
 use serial_test::serial;
 use sqlx::{Row, SqlitePool};
 
+mod common;
+
 #[tokio::test]
 #[serial]
 async fn rotation_with_base64_master_keys() -> Result<()> {
-    unsafe {
-        std::env::set_var("RB_SERVER_DB_URL", "sqlite:file:rotation_b64?mode=memory&cache=shared");
-    }
+    common::set_test_db_env("rotation_b64");
     // Start with old KEY (base64)
     let old_key = [0x11u8; 32];
     let old_b64 = base64::engine::general_purpose::STANDARD.encode(old_key);

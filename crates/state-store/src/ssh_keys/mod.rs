@@ -32,6 +32,21 @@ pub async fn add_user_public_key_by_id(
     Ok(result.last_insert_rowid())
 }
 
+/// Fetch public key owner info by key ID for audit logging.
+/// Returns (user_id, username) if found.
+pub async fn fetch_public_key_by_id(executor: impl SqliteExecutor<'_>, key_id: i64) -> DbResult<Option<(i64, String)>> {
+    let row = sqlx::query_as::<_, (i64, String)>(
+        "SELECT upk.user_id, u.username 
+         FROM user_public_keys upk
+         JOIN users u ON u.id = upk.user_id
+         WHERE upk.id = ?",
+    )
+    .bind(key_id)
+    .fetch_optional(executor)
+    .await?;
+    Ok(row)
+}
+
 /// Delete a user's public key by ID
 pub async fn delete_user_public_key(executor: impl SqliteExecutor<'_>, key_id: i64) -> DbResult<()> {
     sqlx::query("DELETE FROM user_public_keys WHERE id = ?")

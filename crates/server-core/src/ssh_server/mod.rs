@@ -5,7 +5,7 @@
 use std::{sync::Arc, time::Duration};
 
 use base64::Engine;
-use rb_types::config::ServerConfig;
+use rb_types::{audit::AuditContext, config::ServerConfig};
 use russh::{
     MethodKind, MethodSet, keys::{
         Algorithm, PrivateKey, ssh_key::{LineEnding, rand_core::OsRng}
@@ -108,6 +108,90 @@ pub async fn run_ssh_server(config: ServerConfig, registry: Arc<crate::sessions:
                 interval.tick().await;
                 // Clean up web sessions not seen in 5 minutes (10x heartbeat interval)
                 registry_clone.cleanup_stale_web_sessions(300).await;
+            }
+        });
+    }
+
+    // Spawn background task for periodic retention cleanup
+    {
+        tokio::spawn(async move {
+            // Initial delay before first cleanup (let server fully start)
+            tokio::time::sleep(Duration::from_secs(60)).await;
+
+            loop {
+                // Get current cleanup interval from config (minimum 30s to prevent spinning)
+                let interval_secs = match crate::retention::get_retention_config().await {
+                    Ok(config) => config.cleanup_interval_secs.max(30),
+                    Err(_) => rb_types::audit::default_cleanup_interval(),
+                };
+
+                // Wait for the configured interval
+                tokio::time::sleep(Duration::from_secs(interval_secs)).await;
+
+                match crate::retention::run_retention_cleanup().await {
+                    Ok(result) if result.total_deleted() > 0 => {
+                        // Log automated audit event using system context
+                        let ctx = rb_types::audit::AuditContext::system("retention-cleanup");
+                        crate::audit::log_event_from_context_best_effort(
+                            &ctx,
+                            rb_types::audit::EventType::AuditRetentionRun {
+                                total_deleted: result.total_deleted(),
+                                sessions_deleted: result.sessions_deleted,
+                                client_sessions_deleted: result.client_sessions_deleted,
+                                session_events_deleted: result.session_events_deleted,
+                                orphan_events_deleted: result.orphan_events_deleted,
+                                is_automated: true, // System timer triggered
+                            },
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        warn!(error = ?e, "Periodic retention cleanup failed");
+                    }
+                    _ => {} // No data deleted, no event logged
+                }
+            }
+        });
+    }
+
+    // Spawn background task for periodic vacuum/checkpoint (runs less frequently)
+    {
+        tokio::spawn(async move {
+            // Longer initial delay for vacuum (5 minutes after start)
+            tokio::time::sleep(Duration::from_secs(300)).await;
+
+            loop {
+                // Get vacuum interval from config (minimum 5 minutes to prevent excessive load)
+                let interval_secs = match crate::retention::get_retention_config().await {
+                    Ok(config) => config.vacuum.interval_secs.max(300),
+                    Err(_) => rb_types::audit::default_vacuum_interval(),
+                };
+
+                // Wait for the configured interval
+                tokio::time::sleep(Duration::from_secs(interval_secs)).await;
+
+                // Vacuum all enabled databases
+                match crate::retention::vacuum_all_databases().await {
+                    Ok(results) => {
+                        for result in results {
+                            // Log automated vacuum event for each database
+                            let ctx = AuditContext::system("vacuum-task");
+                            crate::audit!(
+                                &ctx,
+                                DatabaseVacuumed {
+                                    database: result.database.clone(),
+                                    size_before_kb: result.size_before_kb,
+                                    size_after_kb: result.size_after_kb,
+                                    file_size_before_kb: result.file_size_before_kb,
+                                    file_size_after_kb: result.file_size_after_kb,
+                                }
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = ?e, "Periodic vacuum failed");
+                    }
+                }
             }
         });
     }

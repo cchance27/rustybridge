@@ -6,7 +6,6 @@
 use dioxus::prelude::ServerFnError;
 use dioxus::prelude::*;
 #[cfg(feature = "server")]
-#[cfg(feature = "server")]
 use rb_types::auth::{ClaimLevel, ClaimType};
 use serde::{Deserialize, Serialize};
 
@@ -86,11 +85,10 @@ pub async fn get_relay_session_timeline(session_id: String) -> Result<RelaySessi
     // 3. Query events for all connection IDs
     let mut all_events: Vec<rb_types::audit::AuditEvent> = Vec::new();
 
-    if !connection_ids.is_empty() {
-        if let Ok(events) = server_core::audit::query_events_by_session_ids(connection_ids, Some(1000)).await {
+    if !connection_ids.is_empty()
+        && let Ok(events) = server_core::audit::query_events_by_session_ids(connection_ids, Some(1000)).await {
             all_events.extend(events);
         }
-    }
 
     // 4. Also query for lifecycle events (SessionTimedOut, SessionForceClosed) that reference
     // this relay session by its ID in the event_type data. These are logged by the cleanup job

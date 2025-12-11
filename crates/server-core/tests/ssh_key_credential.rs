@@ -2,12 +2,12 @@ use anyhow::Result;
 use serial_test::serial;
 use sqlx::{Row, SqlitePool};
 
+mod common;
+
 #[tokio::test]
 #[serial]
 async fn ssh_key_credential_store_and_assign() -> Result<()> {
-    unsafe {
-        std::env::set_var("RB_SERVER_DB_URL", "sqlite:file:sshkey_test?mode=memory&cache=shared");
-    }
+    common::set_test_db_env("sshkey_test");
     unsafe {
         std::env::set_var("RB_SERVER_SECRETS_PASSPHRASE", "sshkey-pass");
     }

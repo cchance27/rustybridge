@@ -19,6 +19,7 @@ mod server_manager;
 pub mod credential;
 pub mod group;
 pub mod relay_host;
+pub mod retention;
 pub mod role;
 pub mod session_recorder;
 pub mod sessions;
