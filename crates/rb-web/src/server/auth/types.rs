@@ -1,7 +1,7 @@
 use axum_session_auth::Authentication;
 use rb_types::auth::AuthUserInfo;
 use server_core::api;
-use tracing::info;
+use tracing::debug;
 
 #[derive(Clone)]
 pub struct WebUser(pub AuthUserInfo<'static>);
@@ -35,7 +35,7 @@ impl Authentication<WebUser, i64, ()> for WebUser {
 
         let (name, picture) = oidc_profile.map(|profile| (profile.name, profile.picture)).unwrap_or((None, None));
 
-        info!(
+        debug!(
             username = user.username,
             id = user.id,
             name = name,
