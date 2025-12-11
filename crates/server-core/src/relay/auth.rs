@@ -7,7 +7,7 @@ use std::{collections::HashMap, sync::Arc};
 use russh::{CryptoVec, client, keys};
 use secrecy::ExposeSecret;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tracing::{info, trace, warn};
+use tracing::{trace, warn};
 
 use super::credential::ResolvedCredential;
 use crate::{
@@ -40,7 +40,7 @@ pub async fn prompt_for_input(
         .ok_or_else(|| ServerError::Other("interactive auth response channel unavailable".to_string()))?;
 
     // Fire the prompt to the UI; ignore send errors because the receiver might have gone away.
-    trace!("sending interactive prompt: '{}', echo={}", prompt, echo);
+    trace!(prompt = %prompt, echo, "sending interactive prompt");
     let prompt_str = if echo { prompt.to_string() } else { format!("\r\n{}", prompt) };
     let _ = tx.send(tui_core::AppAction::AuthPrompt { prompt: prompt_str, echo });
 
@@ -64,11 +64,11 @@ pub async fn prompt_for_input(
     }
 
     let trimmed = response.trim_end_matches(['\r', '\n']).to_string();
-    warn!(
-        "received interactive response (len={}, echo={} prompt='{}')",
-        trimmed.len(),
+    trace!(
+        len = trimmed.len(),
         echo,
-        prompt
+        prompt = %prompt,
+        "received interactive response"
     );
     Ok(trimmed)
 }
@@ -110,10 +110,10 @@ pub async fn authenticate_relay_session<H: client::Handler>(
             let username = match username_opt {
                 Some(u) => u,
                 None if interactive_available => {
-                    warn!(
-                        "relay auth prompting for username (base_user={}, cred_id={:?})",
-                        base_username,
-                        resolved_cred.map(|c| c.id)
+                    trace!(
+                        base_user = %base_username,
+                        cred_id = ?resolved_cred.map(|c| c.id),
+                        "relay auth prompting for username"
                     );
                     prompt_for_input("Username: ", true, action_tx, auth_rx, prompt_sink.clone()).await?
                 }
@@ -155,23 +155,23 @@ pub async fn authenticate_relay_session<H: client::Handler>(
                 }
             }
 
-            info!(
-                "relay auth password path pre-prompt (cred_id={:?}, inline_pw_present={}, password_required={}, interactive_available={})",
-                resolved_cred.map(|c| c.id),
-                password.is_some(),
+            trace!(
+                cred_id = ?resolved_cred.map(|c| c.id),
+                inline_pw_present = password.is_some(),
                 password_required,
-                interactive_available
+                interactive_available,
+                "relay auth password path pre-prompt"
             );
 
             let password = match password {
                 Some(pw) => pw,
                 None if interactive_available => {
-                    info!(
-                        "relay auth prompting for password (user={}, cred_id={:?}, password_required={}, username_mode={})",
-                        username,
-                        resolved_cred.map(|c| c.id),
+                    trace!(
+                        user = %username,
+                        cred_id = ?resolved_cred.map(|c| c.id),
                         password_required,
-                        username_mode
+                        username_mode = %username_mode,
+                        "relay auth prompting for password"
                     );
                     prompt_for_input("Password: ", false, action_tx, auth_rx, prompt_sink.clone()).await?
                 }
@@ -186,13 +186,13 @@ pub async fn authenticate_relay_session<H: client::Handler>(
                 }
             };
 
-            info!(
-                "relay auth attempting password method (user={}, cred_id={:?}, username_mode={}, password_required={}, interactive_available={})",
-                username,
-                resolved_cred.map(|c| c.id),
-                username_mode,
+            trace!(
+                user = %username,
+                cred_id = ?resolved_cred.map(|c| c.id),
+                username_mode = %username_mode,
                 password_required,
-                interactive_available
+                interactive_available,
+                "relay auth attempting password method"
             );
 
             let res = remote.authenticate_password(username, password).await?;

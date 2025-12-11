@@ -67,7 +67,7 @@ pub async fn unlink_oidc() -> Result<(), ServerFnError> {
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
 
     if result > 0 {
-        info!(user_id = %user.id, "OIDC account unlinked via server function");
+        info!(user_id = %user.id, "oidc account unlinked via server function");
         // Clear cached user data (including OIDC profile info)
         auth.cache_clear_user(user.id);
         Ok(())

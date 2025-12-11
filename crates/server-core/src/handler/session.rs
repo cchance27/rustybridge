@@ -458,7 +458,7 @@ impl ServerHandler {
                 let conn_id_clone = conn_id.clone();
                 tokio::spawn(async move {
                     if let Err(e) = crate::record_connection_disconnection(&registry, &conn_id_clone).await {
-                        warn!("Failed to record SSH disconnection: {}", e);
+                        warn!(error = %e, "failed to record ssh disconnection");
                     }
                 });
             }

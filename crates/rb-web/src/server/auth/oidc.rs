@@ -264,14 +264,14 @@ pub async fn oidc_callback(
             return Redirect::to("/oidc/error?error=account_not_linked").into_response();
         }
         Err(e) => {
-            error!("Database error looking up OIDC link: {}", e);
+            error!(error = %e, "database error looking up oidc link");
             return Redirect::to("/oidc/error?error=database_error").into_response();
         }
     };
 
     // Update OIDC link with latest profile info
     if let Err(e) = sc_api::update_oidc_profile_by_subject(&config.issuer_url, &subject, &email, &name, &picture).await {
-        warn!("Failed to update OIDC link profile: {}", e);
+        warn!(error = %e, "failed to update oidc link profile");
     }
 
     // Invalidate cached user so updated profile loads

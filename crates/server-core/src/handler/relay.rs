@@ -57,7 +57,7 @@ impl ServerHandler {
                                                 match decrypt_string_if_encrypted(&v) {
                                                     Ok((val, is_legacy)) => {
                                                         if is_legacy {
-                                                            warn!("Upgrading legacy v1 secret for relay option '{}'", k);
+                                                            warn!(key = %k, "upgrading legacy v1 secret for relay option");
                                                             if let Ok(new_enc) = encrypt_string(SecretBoxedString::new(Box::new(
                                                                 val.expose_secret().to_string(),
                                                             ))) {

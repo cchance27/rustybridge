@@ -56,7 +56,7 @@ pub async fn log_event_with_context(
 /// the operation from succeeding. Failures are logged as warnings.
 pub async fn log_event_best_effort(event: AuditEvent) {
     if let Err(e) = log_event(event).await {
-        warn!("Failed to log audit event: {}", e);
+        warn!(error = %e, "failed to log audit event");
     }
 }
 

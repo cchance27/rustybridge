@@ -214,6 +214,6 @@ pub async fn verify_user_public_key(username: &str, public_key_bytes: &[u8]) -> 
         }
     }
 
-    info!(username, "Public key authentication failed: no matching key found");
+    info!(username, "public key authentication failed: no matching key found");
     Ok(false)
 }

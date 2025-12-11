@@ -5,7 +5,7 @@ use crate::{AppAction, TuiResult};
 
 impl super::ManagementApp {
     pub fn handle_input(&mut self, input: &[u8]) -> TuiResult<AppAction> {
-        tracing::trace!("ManagementApp input: {:?}", input);
+        tracing::trace!(?input, "management app input");
 
         // Handle popup input first
         let popup_result = self.handle_popup_input(input)?;

@@ -51,14 +51,14 @@ struct SshStatusResponse {
 #[cfg(feature = "server")]
 async fn ensure_relay_websocket_permissions(relay_name: &str, auth: &WebAuthSession) -> Result<(String, i64, i64), SshAccessError> {
     let user = ensure_authenticated(auth).map_err(|err| {
-        warn!(relay = %relay_name, "unauthenticated ssh websocket attempt: {err}");
+        warn!(relay = %relay_name, error = %err, "unauthenticated ssh websocket attempt");
         SshAccessError::Unauthorized
     })?;
 
     let relay = server_core::api::fetch_relay_by_name(relay_name)
         .await
         .map_err(|err| {
-            error!(relay = %relay_name, "failed to fetch relay host: {err}");
+            error!(relay = %relay_name, error = %err, "failed to fetch relay host");
             SshAccessError::Internal
         })?
         .ok_or_else(|| {
@@ -67,7 +67,7 @@ async fn ensure_relay_websocket_permissions(relay_name: &str, auth: &WebAuthSess
         })?;
 
     let has_access = server_core::api::user_has_relay_access(user.id, relay.id).await.map_err(|err| {
-        error!(user = %user.username, relay = %relay_name, "failed to check relay acl: {err}");
+        error!(user = %user.username, relay = %relay_name, error = %err, "failed to check relay acl");
         SshAccessError::Internal
     })?;
 
@@ -233,7 +233,7 @@ pub async fn ssh_terminal_ws(
     // IP and UA already extracted above
 
     Ok(options.on_upgrade(move |socket| async move {
-        info!(relay = %relay_for_upgrade, user = %username, "WebSocket upgrade callback started (new session)");
+        info!(relay = %relay_for_upgrade, user = %username, "websocket upgrade callback started (new session)");
         if let Ok((socket, is_minimized, term_dims)) = wait_for_client_ready(socket).await {
             let registry_for_new = registry_inner.clone();
             handle_new_session(
@@ -254,7 +254,7 @@ pub async fn ssh_terminal_ws(
             info!(
                 relay = %relay_for_upgrade,
                 user = %username,
-                "Client disconnected before Ready signal (new session)"
+                "client disconnected before ready signal (new session)"
             );
         }
     }))
@@ -314,7 +314,7 @@ async fn handle_reattach(
     if let Err(e) =
         server_core::record_web_connection_with_context(&registry, &audit_ctx_clone, user_agent.clone(), axum_session_id.clone()).await
     {
-        warn!(connection_id = %connection_id_for_record, "Failed to record web connection: {}", e);
+        warn!(connection_id = %connection_id_for_record, error = %e, "failed to record web connection");
     }
 
     // Record this connection as a participant for timeline tracking
@@ -365,7 +365,7 @@ async fn handle_reattach(
     if !history_already_covered {
         let history = session.get_history().await;
         if !history.is_empty() {
-            info!("Replaying scrollback history for session {}", session.session_number);
+            info!(session_number = session.session_number, "replaying scrollback history for session");
             let _ = socket
                 .send(SshServerMsg {
                     data: history,
@@ -631,12 +631,12 @@ async fn handle_reattach(
             // No more clients - detach with timeout for reattachment
             info!(
                 session_number = session.session_number,
-                "All clients disconnected unexpectedly, detaching with timeout"
+                "all clients disconnected unexpectedly, detaching with timeout"
             );
             session.detach(std::time::Duration::from_secs(120)).await;
         } else {
             // Other clients still attached
-            info!(session_number = session.session_number, "Client disconnected but others remain");
+            info!(session_number = session.session_number, "client disconnected but others remain");
         }
     }
     // Record disconnection
@@ -644,7 +644,7 @@ async fn handle_reattach(
     let connection_id_clone = connection_id.clone();
     tokio::spawn(async move {
         if let Err(e) = server_core::record_connection_disconnection(&registry_for_audit, &connection_id_clone).await {
-            warn!("Failed to record web disconnection: {}", e);
+            warn!(error = %e, "failed to record web disconnection");
         }
     });
 }
@@ -711,11 +711,11 @@ async fn handle_new_session(
             res = &mut connect_fut => {
                 match res {
                     Ok(backend) => {
-                        info!("Successfully connected to relay: {}", relay_name);
+                        info!(relay = %relay_name, "successfully connected to relay");
                         break backend;
                     }
                     Err(e) => {
-                        error!("Failed to connect to relay {}: {}", relay_name, e);
+                        error!(relay = %relay_name, error = %e, "failed to connect to relay");
                         let msg = SshServerMsg {
                             data: format!("Authentication failed: {}", e).into_bytes(),
                             eof: true,
@@ -801,7 +801,7 @@ async fn handle_new_session(
     if let Err(e) =
         server_core::record_web_connection_with_context(&registry_for_audit, &audit_ctx, ua_for_audit, axum_session_id.clone()).await
     {
-        warn!("Failed to record web connection (initial): {}", e);
+        warn!(error = %e, "failed to record web connection (initial)");
     }
 
     // Register session and get session number
@@ -820,7 +820,7 @@ async fn handle_new_session(
         )
         .await;
 
-    info!(session_number = session_number, relay = %relay_name, "Created new session with RelayBackend");
+    info!(session_number = session_number, relay = %relay_name, "created new session with relay backend");
     // Audit: session started
     // We let handle_reattach log SessionRelayConnected with the same connection_id
     log_event_from_context_best_effort(
@@ -861,7 +861,7 @@ async fn handle_new_session(
                         Ok(data) => {
                             if data.is_empty() {
                                 // EOF marker
-                                info!("SSH connection closed");
+                                info!("ssh connection closed");
                                 session_for_history.close().await;
                                 break;
                             }
@@ -871,14 +871,14 @@ async fn handle_new_session(
                         }
                         Err(_) => {
                             // Channel closed
-                            info!("Backend output channel closed");
+                            info!("backend output channel closed");
                             session_for_history.close().await;
                             break;
                         }
                     }
                 }
                 _ = close_rx.recv() => {
-                    info!("Session force closed signal received");
+                    info!("session force closed signal received");
                     break;
                 }
             }

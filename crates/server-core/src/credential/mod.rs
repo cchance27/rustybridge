@@ -334,7 +334,7 @@ pub async fn delete_credential_by_id(ctx: &rb_types::audit::AuditContext, id: i6
         };
 
         if is_legacy {
-            warn!("Upgrading legacy v1 secret for relay option 'auth.id' (credential check)");
+            warn!("upgrading legacy v1 secret for relay option 'auth.id' (credential check)");
             let s: String = resolved.expose_secret().to_string();
             let b: Box<String> = Box::new(s);
             let ss: SecretBoxedString = SecretBoxedString::new(b);
@@ -416,7 +416,7 @@ pub async fn list_credentials_with_assignments() -> ServerResult<Vec<(i64, Strin
         };
 
         if is_legacy {
-            warn!("Upgrading legacy v1 secret for relay option 'auth.id' (list assignments)");
+            warn!("upgrading legacy v1 secret for relay option 'auth.id' (list assignments)");
             if let Ok(new_enc) =
                 crate::secrets::encrypt_string(secrecy::SecretBox::<String>::new(Box::new(resolved.expose_secret().to_string())))
             {

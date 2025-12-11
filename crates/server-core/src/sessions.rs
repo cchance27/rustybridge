@@ -641,7 +641,7 @@ impl SessionRegistry {
 
         let ip_address = ip_address.map(|s| {
             if s.len() > MAX_IP_LEN {
-                warn!(original_len = s.len(), "IP address exceeds max length, truncating");
+                warn!(original_len = s.len(), "ip address exceeds max length, truncating");
                 s.chars().take(MAX_IP_LEN).collect()
             } else {
                 s
@@ -650,7 +650,7 @@ impl SessionRegistry {
 
         let user_agent = user_agent.map(|s| {
             if s.len() > MAX_USER_AGENT_LEN {
-                warn!(original_len = s.len(), "User agent exceeds max length, truncating");
+                warn!(original_len = s.len(), "user agent exceeds max length, truncating");
                 s.chars().take(MAX_USER_AGENT_LEN).collect()
             } else {
                 s
@@ -658,14 +658,14 @@ impl SessionRegistry {
         });
 
         let username = if username.len() > MAX_USERNAME_LEN {
-            warn!(original_len = username.len(), "Username exceeds max length, truncating");
+            warn!(original_len = username.len(), "username exceeds max length, truncating");
             username.chars().take(MAX_USERNAME_LEN).collect()
         } else {
             username
         };
 
         let relay_name = if relay_name.len() > MAX_RELAY_NAME_LEN {
-            warn!(original_len = relay_name.len(), "Relay name exceeds max length, truncating");
+            warn!(original_len = relay_name.len(), "relay name exceeds max length, truncating");
             relay_name.chars().take(MAX_RELAY_NAME_LEN).collect()
         } else {
             relay_name

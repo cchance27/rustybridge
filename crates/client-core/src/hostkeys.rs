@@ -45,7 +45,7 @@ impl HostKeyVerifier {
             .bind(&self.authority)
             .execute(&self.pool)
             .await?;
-        info!("cleared cached host key for {}", self.authority);
+        info!(authority = %self.authority, "cleared cached host key");
         Ok(())
     }
 
@@ -61,7 +61,7 @@ impl HostKeyVerifier {
         {
             let key: String = row.try_get("key")?;
             if key == presented {
-                info!("host key for {} verified against stored fingerprint", self.authority);
+                info!(authority = %self.authority, "host key verified against stored fingerprint");
                 return Ok(true);
             }
             let cached_fp = fingerprint_for_string(&key).unwrap_or_else(|| "<invalid cache>".into());
@@ -78,7 +78,7 @@ impl HostKeyVerifier {
                 let fingerprint = server_key.fingerprint(HashAlg::Sha256).to_string();
                 match prompt_for_hostkey(&self.authority, &algo, &fingerprint).await? {
                     PromptDecision::AcceptSession => {
-                        info!("user accepted host key for {} (session only)", self.authority);
+                        info!(authority = %self.authority, "user accepted host key (session only)");
                         Ok(true)
                     }
                     PromptDecision::AcceptAndStore => {
@@ -87,14 +87,14 @@ impl HostKeyVerifier {
                             .bind(&presented)
                             .execute(&self.pool)
                             .await?;
-                        info!("stored host key for {} after user confirmation", self.authority);
+                        info!(authority = %self.authority, "stored host key after user confirmation");
                         Ok(true)
                     }
                     PromptDecision::Reject => Err(crate::ClientError::HostKeyFailed("host key rejected by user".to_string())),
                 }
             }
             HostKeyPolicy::AcceptOnce => {
-                info!("accepting host key for {} (session only)", self.authority);
+                info!(authority = %self.authority, "accepting host key (session only)");
                 Ok(true)
             }
             HostKeyPolicy::AcceptAndStore => {
@@ -105,7 +105,7 @@ impl HostKeyVerifier {
                 .bind(&presented)
                 .execute(&self.pool)
                 .await?;
-                info!("stored host key for {}", self.authority);
+                info!(authority = %self.authority, "stored host key");
                 Ok(true)
             }
         }

@@ -98,7 +98,7 @@ async fn build_location_from_path(path: PathBuf) -> DbResult<DbLocation> {
                 options.create_new(true).write(true).mode(0o600);
                 match options.open(&path_clone) {
                     Ok(_) => {
-                        warn!("Creating audit DB file with 600 permissions: {}", path_clone.display());
+                        warn!(path = %path_clone.display(), "creating audit db file with 600 permissions");
                         Ok(())
                     }
                     Err(err) if err.kind() == ErrorKind::AlreadyExists => Ok(()),
@@ -115,7 +115,7 @@ async fn build_location_from_path(path: PathBuf) -> DbResult<DbLocation> {
                 options.create_new(true).write(true);
                 match options.open(&path_clone) {
                     Ok(_) => {
-                        warn!("Creating audit DB file with 600 permissions: {}", path_clone.display());
+                        warn!(path = %path_clone.display(), "creating audit db file with 600 permissions");
                         Ok(())
                     }
                     Err(err) if err.kind() == ErrorKind::AlreadyExists => Ok(()),
@@ -167,7 +167,7 @@ async fn init_pool(location: DbLocation) -> DbResult<rb_types::state::DbHandle> 
     {
         warn!(
             db = %path.display(),
-            "Fixed insecure audit database file permissions to 0600"
+            "fixed insecure audit database file permissions to 0600"
         );
     }
 

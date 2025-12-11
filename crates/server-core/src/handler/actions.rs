@@ -97,7 +97,7 @@ impl ServerHandler {
                         }
                     }
                     Err(e) => {
-                        warn!("failed to apply management action: {}", e);
+                        warn!(error = %e, "failed to apply management action");
                         // Reload Management app anyway so the status message surfaces on the new instance.
                         self.reload_management_app(session, channel, tab, None).await?;
                         if let Some(app_session) = self.app_session.as_mut() {

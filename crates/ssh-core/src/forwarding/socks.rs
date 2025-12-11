@@ -40,7 +40,7 @@ where
                 let session = session.clone();
                 tokio::spawn(async move {
                     if let Err(err) = handle_socks_client(stream, session).await {
-                        warn!(?err, "SOCKS client failed");
+                        warn!(?err, "socks client failed");
                     }
                 });
             }
@@ -111,7 +111,7 @@ where
     {
         Ok(stream) => stream,
         Err(err) => {
-            warn!(?err, target = %format!("{target_host}:{target_port}"), "failed to open SOCKS target");
+            warn!(?err, target = %format!("{target_host}:{target_port}"), "failed to open socks target");
             send_socks_reply(&mut stream, 0x05).await?;
             return Ok(());
         }

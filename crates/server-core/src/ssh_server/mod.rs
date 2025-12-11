@@ -146,7 +146,7 @@ pub async fn run_ssh_server(config: ServerConfig, registry: Arc<crate::sessions:
                         .await;
                     }
                     Err(e) => {
-                        warn!(error = ?e, "Periodic retention cleanup failed");
+                        warn!(error = ?e, "periodic retention cleanup failed");
                     }
                     _ => {} // No data deleted, no event logged
                 }
@@ -189,7 +189,7 @@ pub async fn run_ssh_server(config: ServerConfig, registry: Arc<crate::sessions:
                         }
                     }
                     Err(e) => {
-                        warn!(error = ?e, "Periodic vacuum failed");
+                        warn!(error = ?e, "periodic vacuum failed");
                     }
                 }
             }

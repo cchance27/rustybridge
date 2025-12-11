@@ -13,7 +13,7 @@ use rb_types::{
 use secrecy::ExposeSecret;
 use sqlx::{Row, SqlitePool};
 use state_store::ClaimType;
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::{
     error::{ServerError, ServerResult}, secrets, sessions::SessionRegistry
@@ -998,7 +998,7 @@ pub async fn fetch_session_chunks(session_id: &str) -> ServerResult<Vec<SessionC
     for row in rows {
         let encrypted: Vec<u8> = row.get("data");
         let plaintext = decrypt_chunk(&encrypted).map_err(|e| {
-            warn!("chunk decrypt failed: {}", e);
+            error!(error = %e, "chunk decrypt failed");
             e
         })?;
 
