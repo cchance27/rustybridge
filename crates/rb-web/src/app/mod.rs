@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod components;
+pub mod logging;
 pub mod pages;
 pub mod session;
 pub mod storage;

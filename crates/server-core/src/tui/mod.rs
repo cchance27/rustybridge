@@ -4,7 +4,7 @@
 
 use rb_types::relay::HostkeyReview;
 use secrecy::ExposeSecret;
-use tracing::info;
+use tracing::{info, warn};
 use tui_core::{
     AppAction, apps::{
         ManagementApp, RelayItem, RelaySelectorApp, management::{CredentialItem, CredentialSpec}, relay_selector
@@ -178,7 +178,7 @@ pub async fn handle_management_action(
                 .await?
                 .ok_or_else(|| ServerError::not_found("relay host", id.to_string()))?;
             if host.name != name {
-                tracing::warn!(
+                warn!(
                     requested_name = %name,
                     actual_name = %host.name,
                     relay_id = id,

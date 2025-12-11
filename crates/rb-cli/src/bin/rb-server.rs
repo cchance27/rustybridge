@@ -14,6 +14,7 @@ use rb_web::run_web_server;
 use server_core::{
     add_claim_to_role, add_group, add_relay_host, add_user, add_user_public_key, add_user_to_group_by_ids, assign_credential_by_ids, assign_role_to_user, audit_db_handle, create_agent_credential, create_password_credential, create_role, delete_credential_by_id, delete_relay_host_by_id, delete_role, delete_user_public_key, display_server_db_path, fetch_relay_by_name, get_group_id_by_name, get_relay_credential_by_name, get_role_id_by_name, get_user_id_by_name, grant_relay_access_by_id, list_access_by_id, list_credentials, list_group_members_server, list_groups, list_hosts, list_options_by_id, list_roles, list_user_groups_server, list_user_public_keys, list_usernames, migrate_server_db, refresh_target_hostkey, remove_claim_from_role, remove_group_by_id, remove_user_by_id, remove_user_from_group_by_ids, revoke_relay_access_by_id, revoke_role_from_user, rotate_secrets_key, run_ssh_server, set_relay_option_by_id, unassign_credential_by_id, unset_relay_option_by_id
 };
+use tracing::warn;
 use tui_core::{AppAction, AppSession};
 
 #[tokio::main]
@@ -22,6 +23,19 @@ async fn main() -> Result<()> {
 
     // Migrate server DB on Startup
     migrate_server_db().await?;
+
+    // Apply persisted log level
+    if let Ok(level) = server_core::logging::get_server_log_level().await {
+        let parsed = match level.as_str() {
+            "error" => tracing::level_filters::LevelFilter::ERROR,
+            "warn" => tracing::level_filters::LevelFilter::WARN,
+            "info" => tracing::level_filters::LevelFilter::INFO,
+            "debug" => tracing::level_filters::LevelFilter::DEBUG,
+            "trace" => tracing::level_filters::LevelFilter::TRACE,
+            _ => tracing::level_filters::LevelFilter::INFO,
+        };
+        ssh_core::logging::set_level(parsed);
+    }
 
     // Build command to intercept --help and append DB path dynamically
     let cmd = ServerArgs::command();
@@ -622,7 +636,7 @@ async fn handle_local_action(
                     session.set_app(app2).map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
                 }
                 Err(e) => {
-                    tracing::warn!("hostkey fetch failed: {}", e);
+                    warn!(error = %e, "hostkey fetch failed");
                     session.set_status(Some(tui_core::app::StatusLine {
                         text: format!("Hostkey fetch failed: {}", e),
                         kind: tui_core::app::StatusKind::Error,
@@ -658,7 +672,7 @@ async fn handle_local_action(
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("failed to apply management action: {}", e);
+                    warn!(error = %e, "failed to apply management action");
                     let msg = server_core::format_action_error(&add, &e);
                     session.set_status(Some(tui_core::app::StatusLine {
                         text: msg,

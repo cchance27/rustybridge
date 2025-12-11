@@ -39,6 +39,14 @@ fn adjust_by(delta: i32) -> Option<LevelFilter> {
     Some(level)
 }
 
+pub fn set_level(level: LevelFilter) {
+    if let Some(handle) = RELOAD.get() {
+        let _ = handle.reload(EnvFilter::new(level_to_str(level)));
+        let idx = level_to_idx(level);
+        CURRENT_IDX.store(idx, Ordering::Relaxed);
+    }
+}
+
 fn level_to_idx(level: LevelFilter) -> i32 {
     match level {
         LevelFilter::ERROR => 0,

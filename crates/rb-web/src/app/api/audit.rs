@@ -12,6 +12,8 @@ use rb_types::audit::{EventCategory, EventFilter};
 use rb_types::auth::{ClaimLevel, ClaimType};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "server")]
+use tracing::{debug, error, info};
+#[cfg(feature = "server")]
 use vt100;
 
 #[cfg(feature = "server")]
@@ -370,20 +372,18 @@ pub async fn stream_audit_events(query: StreamEventsQuery) -> Result<StreamEvent
         filter.end_time = Some(end);
     }
 
-    tracing::debug!(
+    debug!(
         "stream_audit_events: category={:?}, group_by={:?}, filter={:?}",
-        query.category,
-        query.group_by,
-        filter
+        query.category, query.group_by, filter
     );
 
     // Query events (ordered by timestamp DESC by default)
     let mut events = server_core::audit::query_events(filter.clone()).await.map_err(|e| {
-        tracing::error!("stream_audit_events query error: {}", e);
+        error!(error = %e, "stream_audit_events query error");
         ServerFnError::new(e.to_string())
     })?;
 
-    tracing::debug!("stream_audit_events: got {} events", events.len());
+    debug!(count = events.len(), "stream_audit_events: got events");
 
     // When grouping, sort events by group key first, then by timestamp DESC
     // This ensures each group appears contiguously in the list
@@ -776,12 +776,12 @@ pub async fn export_session(
     };
     use base64::Engine;
 
-    tracing::info!("Export session request: {} format: {}", id, export_type);
+    info!(id, export_type, "export session request");
 
     let response = match replay_session_internal(id.clone(), auth).await {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("Export session failed: {}", e);
+            error!(error = %e, "export session failed");
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("Error exporting session: {}", e)).into_response();
         }
     };

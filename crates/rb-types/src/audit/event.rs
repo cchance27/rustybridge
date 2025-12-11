@@ -26,7 +26,6 @@ pub enum ClientType {
     Web,
 }
 
-
 /// Specific audit event types with associated structured data.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, strum::IntoStaticStr)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -481,6 +480,102 @@ impl EventType {
     /// This is the discriminant name (e.g., "user_created").
     pub fn action_type(&self) -> &'static str {
         self.into()
+    }
+
+    /// Returns a log hint for automatic tracing emission.
+    ///
+    /// If `Some`, the `audit!()` macro will emit a tracing event at the
+    /// specified level with the message. If `None`, no tracing event is emitted.
+    pub fn log_hint(&self) -> Option<super::AuditLogHint> {
+        use super::AuditLogHint;
+
+        match self {
+            // Authentication - always log
+            Self::LoginSuccess { .. } => Some(AuditLogHint::info("user login successful")),
+            Self::LoginFailure { .. } => Some(AuditLogHint::warn("login attempt failed")),
+            Self::Logout { .. } => Some(AuditLogHint::info("user logged out")),
+
+            // User Management
+            Self::UserCreated { .. } => Some(AuditLogHint::info("user created")),
+            Self::UserDeleted { .. } => Some(AuditLogHint::warn("user deleted")),
+            Self::UserPasswordChanged { .. } => Some(AuditLogHint::info("password changed")),
+            Self::UserSshKeyAdded { .. } => Some(AuditLogHint::info("ssh key added")),
+            Self::UserSshKeyRemoved { .. } => Some(AuditLogHint::info("ssh key removed")),
+            Self::UserClaimAdded { .. } => Some(AuditLogHint::info("user claim added")),
+            Self::UserClaimRemoved { .. } => Some(AuditLogHint::info("user claim removed")),
+            Self::OidcLinked { .. } => Some(AuditLogHint::info("oidc account linked")),
+            Self::OidcUnlinked { .. } => Some(AuditLogHint::info("oidc account unlinked")),
+
+            // Group Management
+            Self::GroupCreated { .. } => Some(AuditLogHint::info("group created")),
+            Self::GroupUpdated { .. } => Some(AuditLogHint::info("group updated")),
+            Self::GroupDeleted { .. } => Some(AuditLogHint::warn("group deleted")),
+            Self::UserAddedToGroup { .. } => Some(AuditLogHint::info("user added to group")),
+            Self::UserRemovedFromGroup { .. } => Some(AuditLogHint::info("user removed from group")),
+            Self::GroupClaimAdded { .. } => Some(AuditLogHint::info("group claim added")),
+            Self::GroupClaimRemoved { .. } => Some(AuditLogHint::info("group claim removed")),
+
+            // Role Management
+            Self::RoleCreated { .. } => Some(AuditLogHint::info("role created")),
+            Self::RoleDeleted { .. } => Some(AuditLogHint::warn("role deleted")),
+            Self::RoleAssignedToUser { .. } => Some(AuditLogHint::info("role assigned to user")),
+            Self::RoleRevokedFromUser { .. } => Some(AuditLogHint::info("role revoked from user")),
+            Self::RoleAssignedToGroup { .. } => Some(AuditLogHint::info("role assigned to group")),
+            Self::RoleRevokedFromGroup { .. } => Some(AuditLogHint::info("role revoked from group")),
+            Self::RoleClaimAdded { .. } => Some(AuditLogHint::info("role claim added")),
+            Self::RoleClaimRemoved { .. } => Some(AuditLogHint::info("role claim removed")),
+
+            // Relay Management
+            Self::RelayHostCreated { .. } => Some(AuditLogHint::info("relay host created")),
+            Self::RelayHostDeleted { .. } => Some(AuditLogHint::warn("relay host deleted")),
+            Self::RelayHostUpdated { .. } => Some(AuditLogHint::info("relay host updated")),
+            Self::RelayHostKeyCaptured { .. } => Some(AuditLogHint::info("relay host key captured")),
+            Self::RelayHostKeyRefreshed { .. } => Some(AuditLogHint::info("relay host key refreshed")),
+
+            // Credentials
+            Self::CredentialCreated { .. } => Some(AuditLogHint::info("credential created")),
+            Self::CredentialUpdated { .. } => Some(AuditLogHint::info("credential updated")),
+            Self::CredentialDeleted { .. } => Some(AuditLogHint::warn("credential deleted")),
+            Self::CredentialAssigned { .. } => Some(AuditLogHint::info("credential assigned")),
+            Self::CredentialUnassigned { .. } => Some(AuditLogHint::info("credential unassigned")),
+            Self::SecretRotated { .. } => Some(AuditLogHint::info("secret rotated")),
+
+            // Access Control
+            Self::AccessGranted { .. } => Some(AuditLogHint::info("access granted")),
+            Self::AccessRevoked { .. } => Some(AuditLogHint::info("access revoked")),
+
+            // Sessions - high-level lifecycle only
+            Self::SessionStarted { .. } => Some(AuditLogHint::info("session started")),
+            Self::SessionEnded { .. } => Some(AuditLogHint::info("session ended")),
+            Self::SessionTimedOut { .. } => Some(AuditLogHint::warn("session timed out")),
+            Self::SessionForceClosed { .. } => Some(AuditLogHint::warn("session force closed")),
+            Self::SessionTransferToRelay { .. } => Some(AuditLogHint::info("session transferred to relay")),
+
+            // Configuration
+            Self::ServerHostKeyGenerated => Some(AuditLogHint::info("server host key generated")),
+            Self::OidcConfigured { .. } => Some(AuditLogHint::info("oidc configured")),
+
+            // System
+            Self::ServerStarted { .. } => Some(AuditLogHint::info("server started")),
+            Self::ServerStopped => Some(AuditLogHint::info("server stopped")),
+            Self::DatabaseMigrated { .. } => Some(AuditLogHint::info("database migrated")),
+            Self::ServerSettingsUpdated { .. } => Some(AuditLogHint::info("server settings updated")),
+
+            // Events that should NOT auto-log (too noisy or already logged elsewhere)
+            Self::SessionResized { .. } => None, // Too frequent
+            Self::SessionRelayConnected { .. } => None,
+            Self::SessionRelayDisconnected { .. } => None,
+            Self::SessionViewerJoined { .. } => None,
+            Self::SessionViewerLeft { .. } => None,
+            Self::AdminViewerAdded { .. } => None,
+            Self::AdminViewerRemoved { .. } => None,
+            Self::RelayOptionSet { .. } => None, // Batch operations
+            Self::RelayOptionCleared { .. } => None,
+            Self::AuditTableCleaned { .. } => None, // Retention logs elsewhere
+            Self::AuditTablePurged { .. } => None,
+            Self::AuditRetentionRun { .. } => None,
+            Self::DatabaseVacuumed { .. } => None,
+        }
     }
 }
 

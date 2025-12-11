@@ -6,7 +6,7 @@ use rb_types::{
     audit::{AuthMethod, EventType}, auth::{AuthDecision, LoginTarget}
 };
 use russh::server::Auth;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use super::{ServerHandler, display_addr};
 use crate::auth::{
@@ -365,11 +365,11 @@ impl ServerHandler {
             // Generate connection ID and record metadata
             match crate::record_ssh_connection(&registry, user_id, ip_address, None, self.connection_session_id.clone()).await {
                 Ok(conn_id) => {
-                    tracing::info!("Recorded SSH connection: {}", conn_id);
+                    info!("Recorded SSH connection: {}", conn_id);
                     self.connection_session_id = Some(conn_id);
                 }
                 Err(e) => {
-                    tracing::error!("Failed to record SSH connection: {:?}", e);
+                    error!("Failed to record SSH connection: {:?}", e);
                 }
             }
         }

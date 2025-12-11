@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use tracing::debug;
 
 use crate::app::session::provider::use_session;
 
@@ -44,8 +45,7 @@ pub fn SessionDock() -> Element {
                                     disabled: !attachable,
                                     onclick: move |_| {
                                         if !attachable {
-                                            #[cfg(feature = "web")]
-                                            web_sys::console::log_1(&"SessionDock: SSH-origin session is view-only in web".into());
+                                            debug!("session dock: SSH-origin session is view-only in web");
                                             return;
                                         }
                                         if minimized {

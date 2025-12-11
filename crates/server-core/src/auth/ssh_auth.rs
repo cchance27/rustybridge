@@ -1,5 +1,6 @@
 use rand::{Rng, distributions::Alphanumeric};
 use rb_types::auth::ssh::{SshAuthSession, SshAuthStatus};
+use tracing::{info, warn};
 
 use crate::error::{ServerError, ServerResult};
 
@@ -46,7 +47,7 @@ pub async fn create_ssh_auth_session(username: &str) -> ServerResult<SshAuthSess
 
     let auth_url = format!("{}/api/auth/oidc/login?ssh_code={}", base_url, code);
 
-    tracing::info!(
+    info!(
         username,
         code = %code,
         expires_in_secs = SESSION_EXPIRY_SECONDS,
@@ -78,7 +79,7 @@ pub async fn check_ssh_auth_session(code: &str) -> ServerResult<Option<CheckedSs
             let requested_user_id = match requested_user_id {
                 Some(id) => id,
                 None => {
-                    tracing::warn!(
+                    warn!(
                         code = %code,
                         "SSH auth session missing requested_user_id; rejecting for safety"
                     );
@@ -116,7 +117,7 @@ pub async fn complete_ssh_auth_session(code: &str, user_id: i64) -> ServerResult
     // Reject if the authenticated user does not match the requested user
     if let Some(requested) = requested_user_id {
         if requested != user_id {
-            tracing::warn!(
+            warn!(
                 code = %code,
                 requested_user_id = %requested,
                 authenticated_user_id = %user_id,
@@ -128,7 +129,7 @@ pub async fn complete_ssh_auth_session(code: &str, user_id: i64) -> ServerResult
             ));
         }
     } else {
-        tracing::warn!(
+        warn!(
             code = %code,
             authenticated_user_id = %user_id,
             "SSH auth session missing requested_user_id; rejecting"
@@ -140,7 +141,7 @@ pub async fn complete_ssh_auth_session(code: &str, user_id: i64) -> ServerResult
     // Mark as authenticated
     state_store::update_ssh_auth_session(&pool, code, "authenticated", Some(user_id)).await?;
 
-    tracing::info!(
+    info!(
         code = %code,
         user_id,
         "SSH auth session marked as authenticated"
@@ -194,7 +195,7 @@ pub async fn verify_user_public_key(username: &str, public_key_bytes: &[u8]) -> 
             Ok(stored_key) => {
                 // Compare key data (algorithm and key material)
                 if provided_key.algorithm() == stored_key.algorithm() && provided_key.key_data() == stored_key.key_data() {
-                    tracing::info!(
+                    info!(
                         username,
                         algorithm = %provided_key.algorithm(),
                         "Public key authentication successful"
@@ -203,7 +204,7 @@ pub async fn verify_user_public_key(username: &str, public_key_bytes: &[u8]) -> 
                 }
             }
             Err(e) => {
-                tracing::warn!(
+                warn!(
                     username,
                     error = %e,
                     "Failed to parse stored public key, skipping"
@@ -213,6 +214,6 @@ pub async fn verify_user_public_key(username: &str, public_key_bytes: &[u8]) -> 
         }
     }
 
-    tracing::info!(username, "Public key authentication failed: no matching key found");
+    info!(username, "Public key authentication failed: no matching key found");
     Ok(false)
 }

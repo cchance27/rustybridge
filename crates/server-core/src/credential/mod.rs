@@ -37,8 +37,6 @@ pub async fn create_password_credential(
         password_required,
     )
     .await?;
-    info!(credential = name, kind = "password", context = %ctx, "credential created/updated");
-
     // Log audit event
     crate::audit!(
         ctx,
@@ -87,8 +85,6 @@ pub async fn create_ssh_key_credential(
         true, // password_required not applicable for ssh_key
     )
     .await?;
-    info!(credential = name, kind = "ssh_key", context = %ctx, "credential created/updated");
-
     // Log audit event
     crate::audit!(
         ctx,
@@ -133,8 +129,6 @@ pub async fn create_agent_credential(
         true, // password_required not applicable for agent
     )
     .await?;
-    info!(credential = name, kind = "agent", context = %ctx, "credential created/updated");
-
     // Log audit event
     crate::audit!(
         ctx,
@@ -183,8 +177,6 @@ pub async fn update_password_credential(
         password_required,
     )
     .await?;
-    info!(credential = name, kind = "password", context = %ctx, "credential updated");
-
     // Log audit event
     crate::audit!(
         ctx,
@@ -245,8 +237,6 @@ pub async fn update_ssh_key_credential(
         true, // password_required not applicable for ssh_key
     )
     .await?;
-    info!(credential = name, kind = "ssh_key", context = %ctx, "credential updated");
-
     // Log audit event
     crate::audit!(
         ctx,
@@ -299,8 +289,6 @@ pub async fn update_agent_credential(
         true, // password_required not applicable for agent
     )
     .await?;
-    info!(credential = name, kind = "agent", context = %ctx, "credential updated");
-
     // Log audit event
     crate::audit!(
         ctx,
@@ -375,8 +363,6 @@ pub async fn delete_credential_by_id(ctx: &rb_types::audit::AuditContext, id: i6
     state_store::delete_relay_credential_by_id(&mut *tx, id).await?;
 
     tx.commit().await.map_err(ServerError::Database)?;
-
-    info!(id, context = %ctx, "credential deleted");
 
     // Log audit event with full context
     if let Some(cred) = cred_info {

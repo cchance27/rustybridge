@@ -142,3 +142,42 @@ pub async fn vacuum_all_databases() -> Result<Vec<VacuumResult>, ServerFnError> 
     }
     Ok(result)
 }
+
+// --------------------------------
+// Log Level Configuration
+// --------------------------------
+
+/// Get current server log level
+#[get(
+    "/api/admin/settings/log_level",
+    auth: WebAuthSession
+)]
+pub async fn get_server_log_level() -> Result<String, ServerFnError> {
+    ensure_server_claim(&auth, ClaimLevel::View)?;
+    server_core::logging::get_server_log_level()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Update server log level
+#[post(
+    "/api/admin/settings/log_level",
+    auth: WebAuthSession,
+    audit: WebAuditContext
+)]
+pub async fn update_server_log_level(level: String) -> Result<(), ServerFnError> {
+    ensure_server_claim(&auth, ClaimLevel::Edit)?;
+
+    // Log audit event
+    server_core::audit::log_event_from_context_best_effort(
+        &audit.0,
+        rb_types::audit::EventType::ServerSettingsUpdated {
+            setting_name: "log_level".to_string(),
+        },
+    )
+    .await;
+
+    server_core::logging::set_server_log_level(&level)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}

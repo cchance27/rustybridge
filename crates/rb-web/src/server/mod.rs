@@ -4,6 +4,7 @@ pub mod auth;
 #[cfg(feature = "server")]
 use axum::Router;
 use dioxus::prelude::*;
+use tracing::{info, warn};
 
 /// Start the Dioxus fullstack web server with Axum integration.
 #[cfg(feature = "server")]
@@ -18,7 +19,7 @@ pub async fn run_web_server(
     use crate::{app::api, server::auth::WebUser};
 
     if config.tls.is_some() {
-        tracing::warn!("native TLS requested but not yet implemented; serving HTTP");
+        warn!("native TLS requested but not yet implemented; serving HTTP");
     }
 
     let addr = format!("{}:{}", config.bind, config.port);
@@ -69,7 +70,7 @@ pub async fn run_web_server(
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    tracing::info!(%addr, "starting web server (HTTP) with Dioxus fullstack");
+    info!(%addr, "starting web server (HTTP) with Dioxus fullstack");
     axum::serve(listener, router).await?;
 
     Ok(())

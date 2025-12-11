@@ -86,9 +86,10 @@ pub async fn get_relay_session_timeline(session_id: String) -> Result<RelaySessi
     let mut all_events: Vec<rb_types::audit::AuditEvent> = Vec::new();
 
     if !connection_ids.is_empty()
-        && let Ok(events) = server_core::audit::query_events_by_session_ids(connection_ids, Some(1000)).await {
-            all_events.extend(events);
-        }
+        && let Ok(events) = server_core::audit::query_events_by_session_ids(connection_ids, Some(1000)).await
+    {
+        all_events.extend(events);
+    }
 
     // 4. Also query for lifecycle events (SessionTimedOut, SessionForceClosed) that reference
     // this relay session by its ID in the event_type data. These are logged by the cleanup job
@@ -171,7 +172,7 @@ fn categorize_event(event: &rb_types::audit::AuditEvent) -> (&'static str, Strin
 /// Match start/end events to create spans
 /// Uses session_id from event details to uniquely identify each connection
 #[cfg(feature = "server")]
-fn match_span_events(events: &mut Vec<TimelineEvent>) {
+fn match_span_events(events: &mut [TimelineEvent]) {
     use std::collections::HashMap;
 
     // Track open spans by session_id (connection_id) from event details

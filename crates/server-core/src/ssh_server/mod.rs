@@ -77,10 +77,10 @@ pub async fn run_ssh_server(config: ServerConfig, registry: Arc<crate::sessions:
             interval.tick().await;
             match state_store::cleanup_expired_ssh_auth_sessions(&cleanup_pool).await {
                 Ok(count) if count > 0 => {
-                    info!("Cleaned up {} expired/used SSH auth sessions", count);
+                    info!(count, "cleaned up expired/used ssh auth sessions");
                 }
                 Err(e) => {
-                    warn!("Failed to cleanup expired SSH auth sessions: {}", e);
+                    warn!(error = %e, "failed to cleanup expired ssh auth sessions");
                 }
                 _ => {}
             }
@@ -216,7 +216,7 @@ async fn load_or_create_host_key(pool: &sqlx::SqlitePool) -> ServerResult<Privat
         // Host key may be stored encrypted; decrypt if needed
         let (pem, is_legacy) = secrets::decrypt_string_if_encrypted(&raw)?;
         if is_legacy {
-            warn!("Upgrading legacy v1 server host key");
+            warn!("upgrading legacy v1 server host key");
             let s: String = pem.expose_secret().to_string();
             let b: Box<String> = Box::new(s);
             let ss: secrecy::SecretBox<String> = secrecy::SecretBox::new(b);
@@ -237,10 +237,10 @@ async fn load_or_create_host_key(pool: &sqlx::SqlitePool) -> ServerResult<Privat
                         .bind(enc)
                         .execute(pool)
                         .await;
-                    tracing::info!("secured server host key with encryption");
+                    info!("secured server host key with encryption");
                 }
             } else {
-                tracing::warn!(
+                warn!(
                     "server host key is stored unencrypted; set RB_SERVER_SECRETS_KEY or RB_SERVER_SECRETS_PASSPHRASE to enable encryption"
                 );
             }

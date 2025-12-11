@@ -104,7 +104,7 @@ pub async fn start_bridge_backend(
         relay_name: relay.name.clone(),
         warning_callback: Arc::new(|msg| {
             Box::pin(async move {
-                tracing::warn!("{}", msg);
+                warn!("{}", msg);
             })
         }),
         action_tx: action_tx.clone(),

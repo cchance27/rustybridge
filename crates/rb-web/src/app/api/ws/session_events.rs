@@ -9,6 +9,8 @@ use rb_types::ssh::SessionEvent;
 #[cfg(feature = "server")]
 use server_core::sessions::SessionRegistry;
 #[cfg(feature = "server")]
+use tracing::{debug, error, info, trace, warn};
+#[cfg(feature = "server")]
 type SharedRegistry = std::sync::Arc<SessionRegistry>;
 
 #[cfg(feature = "server")]
@@ -35,7 +37,7 @@ impl Drop for CleanupGuard {
 
             // Spawn cleanup task to handle async unregistration
             tokio::spawn(async move {
-                tracing::debug!(user_id, client_id, "Cleaning up web session registration");
+                debug!(user_id, client_id, "Cleaning up web session registration");
                 registry.unregister_web_session(user_id, &client_id).await;
             });
         }
@@ -89,7 +91,7 @@ pub async fn ssh_web_events(
         Ok(options.on_upgrade(move |mut socket| async move {
             use rb_types::ssh::WebSessionMeta;
 
-            tracing::info!(user = %user.username, client_id = %client_id, "Session events WebSocket connected");
+            info!(user = %user.username, client_id = %client_id, "Session events WebSocket connected");
 
             let is_status_monitor = client_id == "status-monitor";
 
@@ -119,7 +121,7 @@ pub async fn ssh_web_events(
                     summaries.push(session.to_summary().await);
                 }
                 if let Err(e) = socket.send(SessionEvent::List(summaries)).await {
-                    tracing::error!("Failed to send initial session list (admin scope): {}", e);
+                    error!("Failed to send initial session list (admin scope): {}", e);
                 }
             } else {
                 let sessions = registry_inner.list_sessions_for_user(user_id).await;
@@ -128,7 +130,7 @@ pub async fn ssh_web_events(
                     summaries.push(session.to_summary().await);
                 }
                 if let Err(e) = socket.send(SessionEvent::List(summaries)).await {
-                    tracing::error!("Failed to send initial session list: {}", e);
+                    error!("Failed to send initial session list: {}", e);
                     // Don't return, try to stay connected and send presence
                 }
             }
@@ -193,7 +195,7 @@ pub async fn ssh_web_events(
                                 SessionEvent::Presence(_, _) => "Presence",
                                 SessionEvent::List(_) => "List",
                             };
-                            tracing::trace!(
+                            trace!(
                                 user_id,
                                 client_id = %client_id,
                                 event_kind = kind,
@@ -201,7 +203,7 @@ pub async fn ssh_web_events(
                             );
 
                             if let Err(e) = socket.send(event).await {
-                                tracing::warn!(user_id, client_id = %client_id, "Failed to send event, connection likely closed: {}", e);
+                                warn!(user_id, client_id = %client_id, "Failed to send event, connection likely closed: {}", e);
                                 break;
                             }
                         }
@@ -210,10 +212,10 @@ pub async fn ssh_web_events(
                         match result {
                             Ok(msg) => {
                                 // Log but don't disconnect on unexpected messages (unless it's a close frame which Axum/Dioxus handles)
-                                tracing::debug!(user_id, client_id, ?msg, "Received unexpected message from client, ignoring");
+                                debug!(user_id, client_id, ?msg, "Received unexpected message from client, ignoring");
                             }
                             Err(e) => {
-                                tracing::info!(user_id, client_id, error = ?e, "WebSocket connection closed");
+                                info!(user_id, client_id, error = ?e, "WebSocket connection closed");
                                 break;
                             }
                         }
@@ -229,7 +231,7 @@ pub async fn ssh_web_events(
 
             // Cleanup happens via Drop impl of cleanup_guard
             drop(cleanup_guard);
-            tracing::info!(user_id, client_id, "Session events WebSocket disconnected and cleaned up");
+            info!(user_id, client_id, "Session events WebSocket disconnected and cleaned up");
         }))
     }
     #[cfg(not(feature = "server"))]

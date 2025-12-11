@@ -5,7 +5,7 @@ use std::sync::Arc;
 use rb_types::{relay::HostkeyReview, ssh::TUIApplication};
 use russh::{ChannelId, Pty, server::Session};
 use tokio::sync::{broadcast, mpsc};
-use tracing::info;
+use tracing::{info, warn};
 use tui_core::{AppSession, backend::RemoteBackend, utils::desired_rect};
 
 use super::ServerHandler;
@@ -458,7 +458,7 @@ impl ServerHandler {
                 let conn_id_clone = conn_id.clone();
                 tokio::spawn(async move {
                     if let Err(e) = crate::record_connection_disconnection(&registry, &conn_id_clone).await {
-                        tracing::warn!("Failed to record SSH disconnection: {}", e);
+                        warn!("Failed to record SSH disconnection: {}", e);
                     }
                 });
             }

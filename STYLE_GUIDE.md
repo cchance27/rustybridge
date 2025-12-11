@@ -70,9 +70,41 @@ This document outlines the required rules and conventions for the `rustybridge` 
 
 ## 15. Audit Logging
 *   **Requirement**: All server-side events, state changes, and sensitive actions must trigger audit events.
-*   **Implementation**: Use the project's Audit system (e.g., `rb-types::audit`, `server-core::audit`). Ensure every API endpoint that modifies state logs an event.
+*   **Implementation**: Use the project's Audit system (`rb-types::audit`, `server-core::audit`). Ensure every API endpoint that modifies state logs an event.
+*   **Macro Usage**: Use the `audit!()` macro for consistent audit logging:
+    ```rust
+    audit!(context, UserCreated { user_id: id, username: name });
+    ```
+*   **Tracing Integration**: The `audit!()` macro automatically emits a corresponding `tracing` event at the appropriate level (INFO for most actions, WARN/ERROR for failures). **Do not add redundant `tracing` calls immediately before or after `audit!()` calls.**
 
-## 16. Dioxus & Server Functions
+## 16. Tracing & Logging
+*   **Crate**: Use `tracing` for all logging. Do not use `log`, `println!`, or `web_sys::console` directly.
+*   **Message Style**:
+    *   **Lowercase**: All log messages should start with a lowercase letter.
+        *   *Bad:* `info!("User created");`
+        *   *Good:* `info!("user created");`
+    *   **Structured Fields**: Use structured fields instead of string concatenation:
+        *   *Bad:* `info!("user {} created", user_id);`
+        *   *Good:* `info!(user_id, "user created");`
+    *   **Field Prefixes**: Use appropriate display prefixes:
+        *   `%val` for `Display` formatting
+        *   `?val` for `Debug` formatting
+        *   Example: `info!(user_id = %id, details = ?metadata, "operation complete");`
+*   **Imports**: Prefer direct imports over fully-qualified paths:
+    *   *Bad:* `tracing::info!(...)`
+    *   *Good:* `use tracing::{info, warn, error}; ... info!(...)`
+*   **Feature Guards**: Logging is available on all platforms via `tracing-web` (WASM) and `tracing-subscriber` (server). **Do not add `#[cfg(feature = "web")]` guards around logging calls.**
+*   **Log Levels**:
+    *   `ERROR`: Unrecoverable errors, panics, critical failures
+    *   `WARN`: Recoverable issues, validation failures, deprecated usage
+    *   `INFO`: Significant state changes, user actions, lifecycle events
+    *   `DEBUG`: Detailed flow information for debugging
+    *   `TRACE`: Very verbose, step-by-step execution details
+*   **Dynamic Configuration**:
+    *   Server log level is stored in the database (`server_options.log_level`), configurable via Server Settings UI.
+    *   Client (WASM) log level is stored in `localStorage` (`rb_web_log_level`), configurable via Profile page.
+
+## 17. Dioxus & Server Functions
 *   **Macros**: Use Dioxus 0.7+ server macros: `#[get]`, `#[post]`, `#[put]`, `#[delete]`. Do not use `#[server]`.
 *   **DI Style Imports**: Use Dependency Injection style for extractors. Define them in the macro attributes and use them directly in the function body. Do not add them as function arguments.
     *   *Example:*
@@ -85,12 +117,12 @@ This document outlines the required rules and conventions for the `rustybridge` 
         }
         ```
 
-## 17. Error Handling (Recommended)
+## 18. Error Handling (Recommended)
 *   **Result Types**: Prefer returning `Result` types for any fallible operations.
 *   **Propagation**: Uses `?` operator for clean error propagation.
 *   **Context**: When wrapping errors, ensure sufficient context is preserved to debug the issue.
 
 ---
 
-## 18. AI Agent Notes
+## 19. AI Agent Notes
 *   **Compilation**: AI Agents should always use `cargo --message-format=short` when running checks or builds to limit token usage and reduce noise in output.

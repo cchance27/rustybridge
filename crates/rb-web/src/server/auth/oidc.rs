@@ -11,6 +11,7 @@ use serde::Deserialize;
 use server_core::{
     api as sc_api, auth::oidc::{create_client, generate_auth_url}
 };
+use tracing::{error, info, warn};
 
 use crate::server::auth::WebAuthSession;
 
@@ -30,7 +31,7 @@ pub async fn oidc_login(Query(query): Query<LoginQuery>, auth: WebAuthSession) -
     let config = match get_oidc_config().await {
         Some(c) => c,
         None => {
-            tracing::error!("OIDC configuration missing");
+            error!("oidc configuration missing");
             return Redirect::to("/oidc/error?error=oidc_not_configured").into_response();
         }
     };
@@ -53,17 +54,17 @@ pub async fn oidc_login(Query(query): Query<LoginQuery>, auth: WebAuthSession) -
             if let Some(code) = query.ssh_code {
                 // Store SSH code associated with this OIDC flow
                 auth.session.set("oidc_ssh_code", code.clone());
-                tracing::info!("Initiating OIDC for SSH session: {}", code);
+                info!(code = %code, "initiating oidc for ssh session");
             }
 
             // Hint to the session layer that the data changed so it persists immediately.
             auth.session.update();
 
-            tracing::info!("OIDC login state stored; redirecting to provider");
+            info!("oidc login state stored; redirecting to provider");
             Redirect::to(&auth_url).into_response()
         }
         Err(e) => {
-            tracing::error!("Failed to create OIDC client: {}", e);
+            error!(error = %e, "failed to create oidc client");
             Redirect::to("/oidc/error?error=oidc_setup_failed").into_response()
         }
     }
@@ -76,7 +77,7 @@ pub async fn oidc_callback(
     headers: HeaderMap,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
-    tracing::info!("OIDC callback received");
+    info!("oidc callback received");
 
     let ip_address = headers
         .get("x-forwarded-for")
@@ -96,7 +97,7 @@ pub async fn oidc_callback(
             auth.session.remove("oidc_csrf_token");
         }
         Some(_) => {
-            tracing::error!("CSRF token mismatch");
+            error!("csrf token mismatch");
             server_core::audit::log_oidc_failure(
                 Some(ip_address.clone()),
                 session_id,
@@ -108,11 +109,11 @@ pub async fn oidc_callback(
         }
         None if auth.is_authenticated() => {
             // User already has an authenticated session; this is likely a replayed or stale callback after a restart.
-            tracing::warn!("OIDC callback missing CSRF token but user is already authenticated; ignoring callback");
+            warn!("oidc callback missing csrf token but user is already authenticated; ignoring callback");
             return Redirect::to("/").into_response();
         }
         None => {
-            tracing::error!("No CSRF token in session");
+            error!("no csrf token in session");
             server_core::audit::log_oidc_failure(
                 Some(ip_address.clone()),
                 session_id,
@@ -132,7 +133,7 @@ pub async fn oidc_callback(
             openidconnect::Nonce::new(n)
         }
         None => {
-            tracing::error!("No nonce in session");
+            error!("no nonce in session");
             server_core::audit::log_oidc_failure(
                 Some(ip_address.clone()),
                 session_id,
@@ -149,11 +150,11 @@ pub async fn oidc_callback(
     let pkce_verifier = match stored_pkce {
         Some(v) => {
             auth.session.remove("oidc_pkce_verifier");
-            tracing::info!("Using PKCE for token exchange");
+            info!("using pkce for token exchange");
             Some(openidconnect::PkceCodeVerifier::new(v))
         }
         None => {
-            tracing::warn!("No PKCE verifier in session - provider may not require PKCE");
+            warn!("no pkce verifier in session - provider may not require pkce");
             None
         }
     };
@@ -161,7 +162,7 @@ pub async fn oidc_callback(
     let config = match get_oidc_config().await {
         Some(c) => c,
         None => {
-            tracing::error!("OIDC configuration missing");
+            error!("oidc configuration missing");
             return Redirect::to("/oidc/error?error=oidc_not_configured").into_response();
         }
     };
@@ -169,7 +170,7 @@ pub async fn oidc_callback(
     let client = match create_client(&config).await {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!("Failed to create OIDC client: {}", e);
+            error!(error = %e, "failed to create oidc client");
             return Redirect::to("/oidc/error?error=oidc_client_failed").into_response();
         }
     };
@@ -184,7 +185,7 @@ pub async fn oidc_callback(
     let token_response = match token_request.request_async(openidconnect::reqwest::async_http_client).await {
         Ok(res) => res,
         Err(e) => {
-            tracing::error!("Failed to exchange code: {}", e);
+            error!(error = %e, "failed to exchange code");
             server_core::audit::log_oidc_failure(
                 Some(ip_address.clone()),
                 session_id,
@@ -200,7 +201,7 @@ pub async fn oidc_callback(
     let id_token = match token_response.id_token() {
         Some(t) => t,
         None => {
-            tracing::error!("No ID token returned");
+            error!("no id token returned");
             server_core::audit::log_oidc_failure(
                 Some(ip_address.clone()),
                 session_id,
@@ -216,7 +217,7 @@ pub async fn oidc_callback(
     let claims = match id_token.claims(&client.id_token_verifier(), &nonce) {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!("Failed to validate ID token: {}", e);
+            error!(error = %e, "failed to validate id token");
             server_core::audit::log_oidc_failure(
                 Some(ip_address.clone()),
                 session_id,
@@ -236,19 +237,19 @@ pub async fn oidc_callback(
     let name = claims.name().and_then(|n| n.get(None)).map(|n| n.as_str().to_string());
     let picture = claims.picture().and_then(|p| p.get(None)).map(|p| p.as_str().to_string());
 
-    tracing::info!(
+    info!(
         subject = %subject,
         email = ?email,
         name = ?name,
         pkce_used = pkce_used,
-        "OIDC authentication successful"
+        "oidc authentication successful"
     );
 
     // Look up user by OIDC link
     let user_id = match sc_api::find_user_id_by_oidc_subject(&config.issuer_url, &subject).await {
         Ok(Some(id)) => id,
         Ok(None) => {
-            tracing::warn!(
+            warn!(
                 subject = %subject,
                 email = ?email,
                 "No user found for OIDC subject during login"
@@ -263,14 +264,14 @@ pub async fn oidc_callback(
             return Redirect::to("/oidc/error?error=account_not_linked").into_response();
         }
         Err(e) => {
-            tracing::error!("Database error looking up OIDC link: {}", e);
+            error!("Database error looking up OIDC link: {}", e);
             return Redirect::to("/oidc/error?error=database_error").into_response();
         }
     };
 
     // Update OIDC link with latest profile info
     if let Err(e) = sc_api::update_oidc_profile_by_subject(&config.issuer_url, &subject, &email, &name, &picture).await {
-        tracing::warn!("Failed to update OIDC link profile: {}", e);
+        warn!("Failed to update OIDC link profile: {}", e);
     }
 
     // Invalidate cached user so updated profile loads
@@ -298,7 +299,7 @@ pub async fn oidc_callback(
         .await;
     }
 
-    tracing::info!(
+    info!(
         user_id = %user_id,
         pkce_used = pkce_used,
         "User logged in via OIDC"
@@ -307,7 +308,7 @@ pub async fn oidc_callback(
     if let Some(ssh_code) = ssh_code_opt {
         match server_core::auth::ssh_auth::complete_ssh_auth_session(&ssh_code, user_id).await {
             Ok(()) => {
-                tracing::info!(
+                info!(
                         ssh_code = %ssh_code,
                         user_id = %user_id,
                     "SSH OIDC authentication completed successfully"
@@ -316,7 +317,7 @@ pub async fn oidc_callback(
                 return Redirect::to("/auth/ssh-success").into_response();
             }
             Err(e) => {
-                tracing::error!(
+                error!(
                     ssh_code = %ssh_code,
                     error = %e,
                     "Failed to complete SSH auth session"

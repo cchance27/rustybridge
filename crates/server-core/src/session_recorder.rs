@@ -7,7 +7,7 @@ use std::{
 use chrono::Utc;
 use rb_types::state::DbHandle;
 use tokio::sync::Mutex;
-use tracing::error;
+use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::secrets;
@@ -163,7 +163,7 @@ impl SessionRecorder {
                     if !recorder.recording_enabled.load(Ordering::Relaxed) {
                         // Clear buffers one last time before exiting
                         recorder.flush().await;
-                        tracing::debug!(session_id = %recorder.session_id, "Background flush task exiting (recording disabled)");
+                        debug!(session_id = %recorder.session_id, "Background flush task exiting (recording disabled)");
                         break;
                     }
                     recorder.flush().await;

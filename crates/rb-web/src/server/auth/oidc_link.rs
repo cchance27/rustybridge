@@ -6,6 +6,7 @@ use serde::Deserialize;
 use server_core::{
     api as sc_api, auth::oidc::{create_client, generate_auth_url}
 };
+use tracing::{error, info, warn};
 use url::Url;
 
 use crate::server::auth::WebAuthSession;
@@ -32,7 +33,7 @@ pub async fn oidc_link_start(Query(query): Query<LinkStartQuery>, auth: WebAuthS
     let config = match super::oidc::get_oidc_config().await {
         Some(c) => c,
         None => {
-            tracing::error!("OIDC configuration missing");
+            error!("oidc configuration missing");
             return Redirect::to("/oidc/error?error=oidc_not_configured").into_response();
         }
     };
@@ -57,7 +58,7 @@ pub async fn oidc_link_start(Query(query): Query<LinkStartQuery>, auth: WebAuthS
             Redirect::to(&auth_url).into_response()
         }
         Err(e) => {
-            tracing::error!("Failed to create OIDC client: {}", e);
+            error!(error = %e, "failed to create oidc client");
             Redirect::to("/oidc/error?error=oidc_setup_failed").into_response()
         }
     }
@@ -81,11 +82,11 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
             auth.session.remove("oidc_link_csrf_token");
         }
         Some(_) => {
-            tracing::error!("CSRF token mismatch in link flow");
+            error!("csrf token mismatch in link flow");
             return Redirect::to("/oidc/error?error=csrf_mismatch").into_response();
         }
         None => {
-            tracing::error!("No CSRF token in session for link flow");
+            error!("no csrf token in session for link flow");
             return Redirect::to("/oidc/error?error=no_csrf_token").into_response();
         }
     }
@@ -98,7 +99,7 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
             openidconnect::Nonce::new(n)
         }
         None => {
-            tracing::error!("No nonce in session for link flow");
+            error!("no nonce in session for link flow");
             return Redirect::to("/oidc/error?error=no_nonce").into_response();
         }
     };
@@ -108,11 +109,11 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
     let pkce_verifier = match stored_pkce {
         Some(v) => {
             auth.session.remove("oidc_link_pkce_verifier");
-            tracing::info!("Using PKCE for link token exchange");
+            info!("using pkce for link token exchange");
             Some(openidconnect::PkceCodeVerifier::new(v))
         }
         None => {
-            tracing::warn!("No PKCE verifier in session for link flow");
+            warn!("no pkce verifier in session for link flow");
             None
         }
     };
@@ -120,7 +121,7 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
     let config = match super::oidc::get_oidc_config().await {
         Some(c) => c,
         None => {
-            tracing::error!("OIDC configuration missing");
+            error!("oidc configuration missing");
             return Redirect::to("/oidc/error?error=oidc_not_configured").into_response();
         }
     };
@@ -131,7 +132,7 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
     let client = match create_client(&link_config).await {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!("Failed to create OIDC client: {}", e);
+            error!(error = %e, "failed to create oidc client");
             return Redirect::to("/oidc/error?error=oidc_client_failed").into_response();
         }
     };
@@ -146,7 +147,7 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
     let token_response = match token_request.request_async(openidconnect::reqwest::async_http_client).await {
         Ok(res) => res,
         Err(e) => {
-            tracing::error!("Failed to exchange code: {}", e);
+            error!(error = %e, "failed to exchange code");
             return Redirect::to("/oidc/error?error=token_exchange_failed").into_response();
         }
     };
@@ -155,7 +156,7 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
     let id_token = match token_response.id_token() {
         Some(t) => t,
         None => {
-            tracing::error!("No ID token returned");
+            error!("no id token returned");
             return Redirect::to("/oidc/error?error=no_id_token").into_response();
         }
     };
@@ -164,7 +165,7 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
     let claims = match id_token.claims(&client.id_token_verifier(), &nonce) {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!("Failed to validate ID token in link flow: {}", e);
+            error!(error = %e, "failed to validate id token in link flow");
             return Redirect::to("/oidc/error?error=invalid_token").into_response();
         }
     };
@@ -177,43 +178,43 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
     // Check if this OIDC account is already linked to another user
     match sc_api::find_user_id_by_oidc_subject(&config.issuer_url, &subject).await {
         Ok(Some(existing_user_id)) if existing_user_id != user_id => {
-            tracing::warn!(
+            warn!(
                 user_id = %user_id,
                 existing_user_id = %existing_user_id,
                 subject = %subject,
-                "OIDC account already linked to different user"
+                "oidc account already linked to different user"
             );
             return Redirect::to("/oidc/error?error=already_linked").into_response();
         }
         Ok(Some(_)) => {
             // Already linked to this user, just update profile
-            tracing::info!(user_id = %user_id, subject = %subject, "Updating existing OIDC link");
+            info!(user_id = %user_id, subject = %subject, "updating existing oidc link");
         }
         Ok(None) => {
             // Not linked yet, create new link
-            tracing::info!(user_id = %user_id, subject = %subject, "Creating new OIDC link");
+            info!(user_id = %user_id, subject = %subject, "creating new oidc link");
         }
         Err(e) => {
-            tracing::error!("Database error checking OIDC link: {}", e);
+            error!(error = %e, "database error checking oidc link");
             return Redirect::to("/oidc/error?error=database_error").into_response();
         }
     }
 
     // Insert or update the link
     if let Err(e) = sc_api::upsert_oidc_link(user_id, &config.issuer_url, &subject, &email, &_name, &_picture).await {
-        tracing::error!("Failed to link OIDC account: {}", e);
+        error!(error = %e, "failed to link oidc account");
         return Redirect::to("/oidc/error?error=link_failed").into_response();
     }
 
     // Bust auth cache so new profile/name take effect next request
     auth.cache_clear_user(user_id);
 
-    tracing::info!(
+    info!(
         user_id = %user_id,
         subject = %subject,
         email = ?email,
         pkce_used = pkce_used,
-        "Successfully linked OIDC account"
+        "successfully linked oidc account"
     );
 
     // Get return URL from session, re-validate, default to root

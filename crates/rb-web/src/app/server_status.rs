@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use dioxus::{fullstack::use_websocket, prelude::*};
 use gloo_timers::future::sleep;
+use tracing::debug;
 
 use crate::app::{auth::hooks::use_auth, components::use_toast};
 
@@ -72,15 +73,13 @@ fn ServerStatusMonitor(state: Signal<ConnectionState>) -> Element {
     // Base connection; we'll manage reconnection ourselves.
     // Use a fixed client ID for status monitor to prevent duplicate registrations
     let mut ws = use_websocket(move || async move {
-        #[cfg(feature = "web")]
-        web_sys::console::log_1(&"ServerStatusMonitor: Opening WebSocket connection".into());
+        debug!("server status monitor: opening websocket connection");
         ssh_web_events("status-monitor".to_string(), None, WebSocketOptions::new()).await
     });
 
     // Log component lifecycle for debugging
     use_effect(move || {
-        #[cfg(feature = "web")]
-        web_sys::console::log_1(&"ServerStatusMonitor mounted, WebSocket connection active".into());
+        debug!("server status monitor: mounted, websocket connection active");
     });
 
     use_coroutine(move |_rx: UnboundedReceiver<()>| async move {

@@ -10,6 +10,7 @@ pub mod audit;
 pub mod auth;
 pub mod error;
 mod handler;
+pub mod logging;
 pub mod relay;
 pub use relay::connect_to_relay_local;
 pub mod secrets;
