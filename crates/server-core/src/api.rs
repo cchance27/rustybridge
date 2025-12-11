@@ -13,7 +13,7 @@ use rb_types::{
 use secrecy::ExposeSecret;
 use sqlx::{Row, SqlitePool};
 use state_store::ClaimType;
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::{
     error::{ServerError, ServerResult}, secrets, sessions::SessionRegistry

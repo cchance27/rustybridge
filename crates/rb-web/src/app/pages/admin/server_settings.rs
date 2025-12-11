@@ -55,13 +55,21 @@ pub fn ServerSettings() -> Element {
                             div {
                                 h2 { class: "text-xl font-semibold", "Logging Configuration" }
                                 p { class: "text-sm opacity-70", "Control the verbosity of server-side logs." }
+                                match server_log_level() {
+                                    Some(Ok(info)) if info.overridden_by_env => rsx! {
+                                        p { class: "text-xs opacity-70 mt-1 text-warning",
+                                            "Note: the RUST_LOG environment variable is set; runtime log output follows RUST_LOG and may not reflect changes made here."
+                                        }
+                                    },
+                                    _ => rsx! {},
+                                }
                             }
 
                             match server_log_level() {
                                 Some(Ok(current_level)) => rsx! {
                                     div { class: "dropdown dropdown-end",
                                         div { tabindex: "0", role: "button", class: "btn m-1",
-                                            "{current_level.to_uppercase()}"
+                                            "{current_level.level.to_uppercase()}"
                                             svg { xmlns: "http://www.w3.org/2000/svg", class: "h-4 w-4 ml-2", fill: "none", view_box: "0 0 24 24", stroke: "currentColor",
                                                 path { stroke_linecap: "round", stroke_linejoin: "round", stroke_width: "2", d: "M19 9l-7 7-7-7" }
                                             }
@@ -70,7 +78,7 @@ pub fn ServerSettings() -> Element {
                                             for level in ["error", "warn", "info", "debug", "trace"] {
                                                 li {
                                                     a {
-                                                        class: if current_level.to_lowercase() == level { "active" } else { "" },
+                                                        class: if current_level.level.to_lowercase() == level { "active" } else { "" },
                                                         onclick: move |_| {
                                                             let lvl = level.to_string();
                                                             spawn(async move {

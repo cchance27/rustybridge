@@ -3,7 +3,6 @@
 //! This module handles adding, removing, listing, and configuring groups and group memberships.
 
 use rb_types::auth::ClaimType;
-use tracing::info;
 
 use crate::error::{ServerError, ServerResult};
 

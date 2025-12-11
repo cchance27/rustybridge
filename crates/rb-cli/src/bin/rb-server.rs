@@ -24,8 +24,15 @@ async fn main() -> Result<()> {
     // Migrate server DB on Startup
     migrate_server_db().await?;
 
-    // Apply persisted log level
-    if let Ok(level) = server_core::logging::get_server_log_level().await {
+    // Apply persisted log level only when RUST_LOG is not set (or is empty)
+    // so that environment overrides continue to take precedence.
+    let has_rust_log = matches!(
+        std::env::var("RUST_LOG"),
+        Ok(s) if !s.trim().is_empty()
+    );
+    if !has_rust_log
+        && let Ok(level) = server_core::logging::get_server_log_level().await
+    {
         let parsed = match level.as_str() {
             "error" => tracing::level_filters::LevelFilter::ERROR,
             "warn" => tracing::level_filters::LevelFilter::WARN,

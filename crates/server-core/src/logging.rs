@@ -19,8 +19,15 @@ pub async fn set_server_log_level(level: &str) -> ServerResult<()> {
     let pool = db.into_pool();
     state_store::set_server_option(&pool, "log_level", level).await?;
 
-    // Apply to runtime
-    ssh_core::logging::set_level(parsed_level);
+    // Apply to runtime only when RUST_LOG is not set (or is empty) so that
+    // environment configuration continues to take precedence over persisted settings.
+    let has_rust_log = matches!(
+        std::env::var("RUST_LOG"),
+        Ok(s) if !s.trim().is_empty()
+    );
+    if !has_rust_log {
+        ssh_core::logging::set_level(parsed_level);
+    }
 
     Ok(())
 }
