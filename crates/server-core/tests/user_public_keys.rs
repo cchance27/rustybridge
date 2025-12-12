@@ -1,31 +1,24 @@
 use anyhow::Result;
-use serial_test::serial;
+use server_core::ServerContext;
 use sqlx::Row;
 
-mod common;
-
 #[tokio::test]
-#[serial]
 async fn add_user_public_key_stores_key() -> Result<()> {
-    common::set_test_db_env("user_pubkey_test");
-    // Secrets aren't used directly here but set for consistency with other tests.
-    unsafe {
-        std::env::set_var("RB_SERVER_SECRETS_PASSPHRASE", "pubkey-passphrase");
-    }
-
-    let handle = state_store::server_db().await?;
-    state_store::migrate_server(&handle).await?;
-    let pool = handle.into_pool();
+    let factory = state_store::test_support::SqliteTestDbFactory::new();
+    let (server_db, audit_db) = factory.server_and_audit().await?;
+    let master_key = [0x42u8; 32];
+    let server = ServerContext::new(server_db, audit_db, master_key);
+    let pool = server.server_db.clone().into_pool();
 
     let ctx = rb_types::audit::AuditContext::system("test");
-    server_core::add_user(&ctx, "alice", "password").await?;
+    server_core::add_user(&server, &ctx, "alice", "password").await?;
 
     // Generate a valid OpenSSH public key
     let mut rng = russh::keys::ssh_key::rand_core::OsRng;
     let privk = russh::keys::PrivateKey::random(&mut rng, russh::keys::Algorithm::Ed25519)?;
     let pubk = privk.public_key().to_openssh()?.to_string();
 
-    let key_id = server_core::add_user_public_key(&ctx, "alice", &pubk, Some("laptop")).await?;
+    let key_id = server_core::add_user_public_key(&server, &ctx, "alice", &pubk, Some("laptop")).await?;
 
     let row = sqlx::query("SELECT public_key, comment FROM user_public_keys WHERE id = ?")
         .bind(key_id)
@@ -44,33 +37,29 @@ async fn add_user_public_key_stores_key() -> Result<()> {
 }
 
 #[tokio::test]
-#[serial]
 async fn list_and_remove_user_public_key() -> Result<()> {
-    common::set_test_db_env("user_pubkey_test2");
-    unsafe {
-        std::env::set_var("RB_SERVER_SECRETS_PASSPHRASE", "pubkey-passphrase");
-    }
-
-    let handle = state_store::server_db().await?;
-    state_store::migrate_server(&handle).await?;
-    let pool = handle.into_pool();
+    let factory = state_store::test_support::SqliteTestDbFactory::new();
+    let (server_db, audit_db) = factory.server_and_audit().await?;
+    let master_key = [0x42u8; 32];
+    let server = ServerContext::new(server_db, audit_db, master_key);
+    let pool = server.server_db.clone().into_pool();
 
     let ctx = rb_types::audit::AuditContext::system("test");
-    server_core::add_user(&ctx, "bob", "password").await?;
+    server_core::add_user(&server, &ctx, "bob", "password").await?;
 
     let mut rng = russh::keys::ssh_key::rand_core::OsRng;
     let privk = russh::keys::PrivateKey::random(&mut rng, russh::keys::Algorithm::Ed25519)?;
     let pubk = privk.public_key().to_openssh()?.to_string();
 
-    let key_id = server_core::add_user_public_key(&ctx, "bob", &pubk, None).await?;
+    let key_id = server_core::add_user_public_key(&server, &ctx, "bob", &pubk, None).await?;
 
-    let keys = server_core::list_user_public_keys("bob").await?;
+    let keys = server_core::list_user_public_keys(&server, "bob").await?;
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0].0, key_id);
 
-    server_core::delete_user_public_key(&ctx, "bob", key_id).await?;
+    server_core::delete_user_public_key(&server, &ctx, "bob", key_id).await?;
 
-    let keys_after = server_core::list_user_public_keys("bob").await?;
+    let keys_after = server_core::list_user_public_keys(&server, "bob").await?;
     assert!(keys_after.is_empty());
 
     // Ensure the DB row is gone

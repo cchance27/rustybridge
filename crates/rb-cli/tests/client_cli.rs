@@ -1,12 +1,9 @@
-use std::{env, path::PathBuf, sync::Mutex};
+use std::{collections::HashMap, ffi::OsString, path::PathBuf};
 
 use anyhow::{Result, anyhow};
 use clap::{CommandFactory, Parser};
-use rb_cli::client_cli::ClientArgs;
+use rb_cli::client_cli::{ClientArgs, ClientEnv};
 use rb_types::{client::ClientConfig, ssh::LocaleMode};
-use serial_test::serial;
-
-static ENV_GUARD: Mutex<()> = Mutex::new(());
 
 struct Case {
     name: &'static str,
@@ -15,7 +12,6 @@ struct Case {
 }
 
 #[test]
-#[serial]
 fn forwarding_arg_matrix_parses_expected_configs() {
     let mut cases = vec![
         Case {
@@ -61,7 +57,6 @@ fn forwarding_arg_matrix_parses_expected_configs() {
 }
 
 #[test]
-#[serial]
 fn invalid_forward_specs_error() {
     match parse_config(&["-L", "bad-spec", "demo"]) {
         Err(err) => assert!(
@@ -81,7 +76,6 @@ fn invalid_forward_specs_error() {
 }
 
 #[test]
-#[serial]
 fn rekey_bytes_bounds() {
     match parse_config(&["--rekey-bytes=0", "demo"]) {
         Err(err) => assert!(err.to_string().contains("greater than zero")),
@@ -96,7 +90,6 @@ fn rekey_bytes_bounds() {
 }
 
 #[test]
-#[serial]
 fn agent_flags_require_socket() {
     match parse_config(&["--agent-auth", "demo"]) {
         Err(err) => assert!(err.to_string().contains("SSH_AUTH_SOCK must be set")),
@@ -118,7 +111,6 @@ fn agent_flags_require_socket() {
 }
 
 #[test]
-#[serial]
 fn target_parsing_matrix() {
     let cfg = parse_config(&["user@example.com:2222", "cmd"]).expect("user host port");
     assert_eq!(cfg.host, "example.com");
@@ -140,7 +132,6 @@ fn target_parsing_matrix() {
 }
 
 #[test]
-#[serial]
 fn locale_forwarding_descriptors() {
     let cfg = parse_config(&["--forward-locale=lang", "demo"]).expect("locale lang");
     assert!(matches!(cfg.forwarding.env.locale_mode, LocaleMode::Lang));
@@ -150,7 +141,6 @@ fn locale_forwarding_descriptors() {
 }
 
 #[test]
-#[serial]
 fn send_env_and_subsystem_parsing() {
     let cfg = parse_config(&[
         "--send-env",
@@ -175,7 +165,6 @@ fn send_env_and_subsystem_parsing() {
 }
 
 #[test]
-#[serial]
 fn subsystem_rejects_remote_command() {
     match parse_config(&["--subsystem", "sftp", "demo", "ls"]) {
         Err(err) => assert!(
@@ -187,7 +176,6 @@ fn subsystem_rejects_remote_command() {
 }
 
 #[test]
-#[serial]
 fn x11_flags_are_rejected() {
     match parse_config(&["--forward-x11", "demo"]) {
         Err(err) => assert!(
@@ -199,7 +187,6 @@ fn x11_flags_are_rejected() {
 }
 
 #[test]
-#[serial]
 fn unix_flag_visibility_matches_platform() {
     let mut command = ClientArgs::command();
     let usage = command.render_help().to_string();
@@ -287,42 +274,42 @@ fn parse_config(args: &[&str]) -> Result<ClientConfig> {
 }
 
 fn parse_config_with_env(args: &[&str], overrides: &[(&str, Option<&str>)]) -> Result<ClientConfig> {
-    with_clean_env(|| {
-        for (key, value) in overrides {
-            match value {
-                Some(v) => unsafe { env::set_var(key, v) },
-                None => unsafe { env::remove_var(key) },
+    let mut env = TestEnv::default();
+    env.vars.insert("RB_USER".to_string(), "cli-test".to_string());
+    for (key, value) in overrides {
+        match value {
+            Some(v) => {
+                if *key == "SSH_AUTH_SOCK" {
+                    env.vars_os.insert((*key).to_string(), OsString::from(v));
+                } else {
+                    env.vars.insert((*key).to_string(), (*v).to_string());
+                }
+            }
+            None => {
+                env.vars.remove(*key);
+                env.vars_os.remove(*key);
             }
         }
-        let mut argv = vec!["rb"];
-        argv.extend_from_slice(args);
-        let cli = ClientArgs::try_parse_from(&argv).map_err(|err| anyhow!(err.to_string()))?;
-        ClientConfig::try_from(cli)
-    })
+    }
+
+    let mut argv = vec!["rb"];
+    argv.extend_from_slice(args);
+    let cli = ClientArgs::try_parse_from(&argv).map_err(|err| anyhow!(err.to_string()))?;
+    rb_cli::client_cli::client_config_from_args_with_env(cli, &env)
 }
 
-fn with_clean_env<T>(f: impl FnOnce() -> T) -> T {
-    let guard = ENV_GUARD.lock().expect("env guard poisoned");
-    let prev_user = env::var("RB_USER").ok();
-    let prev_password = env::var("RB_PASSWORD").ok();
-    let prev_sock = env::var_os("SSH_AUTH_SOCK");
-    unsafe {
-        env::set_var("RB_USER", "cli-test");
-        env::remove_var("RB_PASSWORD");
-        env::remove_var("SSH_AUTH_SOCK");
+#[derive(Default)]
+struct TestEnv {
+    vars: HashMap<String, String>,
+    vars_os: HashMap<String, OsString>,
+}
+
+impl ClientEnv for TestEnv {
+    fn var(&self, key: &str) -> Option<String> {
+        self.vars.get(key).cloned()
     }
-    let result = f();
-    if let Some(value) = prev_user {
-        unsafe { env::set_var("RB_USER", value) };
-    } else {
-        unsafe { env::remove_var("RB_USER") };
+
+    fn var_os(&self, key: &str) -> Option<OsString> {
+        self.vars_os.get(key).cloned()
     }
-    if let Some(value) = prev_password {
-        unsafe { env::set_var("RB_PASSWORD", value) };
-    }
-    if let Some(value) = prev_sock {
-        unsafe { env::set_var("SSH_AUTH_SOCK", value) };
-    }
-    drop(guard);
-    result
 }

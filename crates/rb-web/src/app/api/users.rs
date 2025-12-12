@@ -28,13 +28,16 @@ pub async fn list_users() -> Result<Vec<UserGroupInfo<'static>>, ApiError> {
 #[post(
     "/api/users",
     auth: WebAuthSession,
-    audit: WebAuditContext
+    audit: WebAuditContext,
+    server: axum::Extension<server_core::ServerContext>
 )]
 pub async fn create_user(req: CreateUserRequest) -> Result<(), ApiError> {
     ensure_user_claim(&auth, ClaimLevel::Create)?;
     use server_core::add_user;
 
-    add_user(&audit.0, &req.username, &req.password).await.map_err(ApiError::internal)
+    add_user(&server.0, &audit.0, &req.username, &req.password)
+        .await
+        .map_err(ApiError::internal)
 }
 
 #[delete(
@@ -52,13 +55,14 @@ pub async fn delete_user(id: i64) -> Result<(), ApiError> {
 #[put(
     "/api/users/{id}",
     auth: WebAuthSession,
-    audit: WebAuditContext
+    audit: WebAuditContext,
+    server: axum::Extension<server_core::ServerContext>
 )]
 pub async fn update_user(id: i64, req: UpdateUserRequest) -> Result<(), ApiError> {
     ensure_user_claim(&auth, ClaimLevel::Edit)?;
 
     if let Some(password) = req.password {
-        server_core::update_user_password_by_id(&audit.0, id, &password)
+        server_core::update_user_password_by_id(&server.0, &audit.0, id, &password)
             .await
             .map_err(ApiError::internal)?;
     }
@@ -78,11 +82,12 @@ pub async fn get_user_claims(id: i64) -> Result<Vec<ClaimType<'static>>, ApiErro
 #[post(
     "/api/users/{id}/claims",
     auth: WebAuthSession,
-    audit: WebAuditContext
+    audit: WebAuditContext,
+    server: axum::Extension<server_core::ServerContext>
 )]
 pub async fn add_user_claim(id: i64, claim: ClaimType<'static>) -> Result<(), ApiError> {
     ensure_user_claim(&auth, ClaimLevel::Edit)?;
-    server_core::add_claim_to_user_by_id(&audit.0, id, &claim)
+    server_core::add_claim_to_user_by_id(&server.0, &audit.0, id, &claim)
         .await
         .map_err(ApiError::internal)
 }
@@ -92,11 +97,12 @@ pub async fn add_user_claim(id: i64, claim: ClaimType<'static>) -> Result<(), Ap
 #[delete(
     "/api/users/{id}/claims",
     auth: WebAuthSession,
-    audit: WebAuditContext
+    audit: WebAuditContext,
+    server: axum::Extension<server_core::ServerContext>
 )]
 pub async fn remove_user_claim(id: i64, claim: ClaimType<'static>) -> Result<(), ApiError> {
     ensure_user_claim(&auth, ClaimLevel::Edit)?;
-    server_core::remove_claim_from_user_by_id(&audit.0, id, &claim)
+    server_core::remove_claim_from_user_by_id(&server.0, &audit.0, id, &claim)
         .await
         .map_err(ApiError::internal)
 }

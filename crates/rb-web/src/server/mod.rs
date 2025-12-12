@@ -26,6 +26,11 @@ pub async fn run_web_server(
 
     // Initialize DB for session store
     let db_handle = server_core::api::server_db_handle().await?;
+    let server_ctx = server_core::ServerContext::new(
+        db_handle.clone(),
+        registry.audit_db.clone(),
+        server_core::secrets::master_key_from_env()?,
+    );
 
     // Session Layer
     // OIDC redirects arrive as cross-site navigations, so SameSite must allow the
@@ -64,6 +69,7 @@ pub async fn run_web_server(
         )
         .serve_dioxus_application(ServeConfig::new(), app)
         .layer(axum::Extension(registry))
+        .layer(axum::Extension(server_ctx))
         .layer(auth_layer)
         .layer(session_layer)
         .into_make_service_with_connect_info::<std::net::SocketAddr>();
@@ -72,6 +78,5 @@ pub async fn run_web_server(
 
     info!(%addr, "starting web server (HTTP) with Dioxus fullstack");
     axum::serve(listener, router).await?;
-
     Ok(())
 }

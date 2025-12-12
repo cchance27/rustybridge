@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 publish = false
 
+[lib]
+doctest = false
+
 [features]
 default = ["server"]
 web = [

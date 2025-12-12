@@ -46,7 +46,15 @@ impl ServerHandler {
                         id,
                         name: name_clone.clone(),
                     };
-                    match crate::handle_management_action(&ctx, action).await {
+                    let server = match crate::context::server_context_from_env().await {
+                        Ok(server) => server,
+                        Err(e) => {
+                            let _ = tx.send(AppAction::Error(format!("Server context init failed: {}", e)));
+                            let _ = server_handle.data(channel, CryptoVec::from_slice(b"\x1b[6n")).await;
+                            return;
+                        }
+                    };
+                    match crate::handle_management_action(&server, &ctx, action).await {
                         Ok(Some(res_action)) => {
                             let _ = tx.send(res_action);
                         }
@@ -80,7 +88,10 @@ impl ServerHandler {
                     _ => 0,
                 };
                 let ctx = self.ssh_audit_context();
-                match crate::handle_management_action(&ctx, cloned.clone()).await {
+                let server = crate::context::server_context_from_env()
+                    .await
+                    .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+                match crate::handle_management_action(&server, &ctx, cloned.clone()).await {
                     Ok(_) => {
                         // Reload Management app with fresh data and redraw.
                         self.reload_management_app(session, channel, tab, None).await?;

@@ -1,27 +1,21 @@
 use anyhow::Result;
-use serial_test::serial;
+use server_core::ServerContext;
 use sqlx::{Row, SqlitePool};
 
-mod common;
-
 #[tokio::test]
-#[serial]
 async fn assign_writes_encrypted_values_and_unassign_removes() -> Result<()> {
-    common::set_test_db_env("assign_test");
-    unsafe {
-        std::env::set_var("RB_SERVER_SECRETS_PASSPHRASE", "assign-pass");
-    }
-
-    let handle = state_store::server_db().await?;
-    state_store::migrate_server(&handle).await?;
-    let pool: SqlitePool = handle.into_pool();
+    let factory = state_store::test_support::SqliteTestDbFactory::new();
+    let (server_db, audit_db) = factory.server_and_audit().await?;
+    let master_key = [0x42u8; 32];
+    let server = ServerContext::new(server_db, audit_db, master_key);
+    let pool: SqlitePool = server.server_db.clone().into_pool();
 
     let ctx = rb_types::audit::AuditContext::server_cli(None, "test-host");
 
     let host_id = state_store::insert_relay_host(&pool, "h4", "127.0.0.1", 22).await?;
-    let cred_id = server_core::create_password_credential(&ctx, "credA", Some("uA"), "pwA", "fixed", true).await?;
+    let cred_id = server_core::create_password_credential(&server, &ctx, "credA", Some("uA"), "pwA", "fixed", true).await?;
 
-    server_core::assign_credential_by_ids(&ctx, host_id, cred_id).await?;
+    server_core::assign_credential_by_ids(&server, &ctx, host_id, cred_id).await?;
 
     // Verify auth.source, auth.id, and auth.method are stored as PLAIN TEXT (not encrypted)
     let source: String = sqlx::query_scalar("SELECT value FROM relay_host_options WHERE relay_host_id = ? AND key = 'auth.source'")
@@ -63,7 +57,7 @@ async fn assign_writes_encrypted_values_and_unassign_removes() -> Result<()> {
             .await?;
     assert!(!method_secure, "auth.method should have is_secure=false");
 
-    server_core::unassign_credential_by_id(&ctx, host_id).await?;
+    server_core::unassign_credential_by_id(&server, &ctx, host_id).await?;
 
     let count: i64 = sqlx::query(
         "SELECT COUNT(*) as c FROM relay_host_options WHERE relay_host_id=? AND key in ('auth.source','auth.id','auth.method')",

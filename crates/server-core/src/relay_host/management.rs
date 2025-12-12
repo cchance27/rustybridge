@@ -102,7 +102,8 @@ pub async fn store_relay_hostkey_by_id(ctx: &rb_types::audit::AuditContext, host
             > 0;
 
     // Use option helper to benefit from encryption + logging
-    crate::relay_host::options::set_relay_option_by_id(ctx, host_id, "hostkey.openssh", &key_pem, true).await?;
+    let server = crate::context::server_context_from_env().await?;
+    crate::relay_host::options::set_relay_option_by_id(&server, ctx, host_id, "hostkey.openssh", &key_pem, true).await?;
 
     // Parse key for fingerprint/type
     let parsed = russh::keys::PublicKey::from_openssh(&key_pem).ok();

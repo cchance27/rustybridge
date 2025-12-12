@@ -8,6 +8,24 @@ use rb_types::{
 use secrecy::SecretString;
 use ssh_core::{forwarding, terminal::newline_mode_from_env};
 
+pub trait ClientEnv {
+    fn var(&self, key: &str) -> Option<String>;
+    fn var_os(&self, key: &str) -> Option<std::ffi::OsString>;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SystemClientEnv;
+
+impl ClientEnv for SystemClientEnv {
+    fn var(&self, key: &str) -> Option<String> {
+        env::var(key).ok()
+    }
+
+    fn var_os(&self, key: &str) -> Option<std::ffi::OsString> {
+        env::var_os(key)
+    }
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "rb", about = "Legacy-friendly SSH client with relaxed crypto options")]
 pub struct ClientArgs {
@@ -128,152 +146,156 @@ impl TryFrom<ClientArgs> for ClientConfig {
     type Error = anyhow::Error;
 
     fn try_from(args: ClientArgs) -> Result<Self> {
-        let ClientArgs {
-            target,
-            command,
-            username,
-            password,
-            port,
-            newline,
-            local_echo,
-            compress,
-            rekey_interval,
-            rekey_bytes,
-            keepalive_interval,
-            keepalive_max,
-            accept_hostkey_once,
-            accept_store_hostkey,
-            replace_hostkey,
-            insecure,
-            identities,
-            identity_certs,
-            agent_auth,
-            forward_agent,
-            no_keyboard_interactive,
-            no_password,
-            local_forward,
-            remote_forward,
-            dynamic_forward,
-            #[cfg(unix)]
-            local_unix_forward,
-            #[cfg(unix)]
-            remote_unix_forward,
-            forward_x11,
-            x11_display,
-            x11_trusted,
-            x11_single_connection,
-            subsystems,
-            send_env,
-            forward_locale,
-        } = args;
-
-        let target = parse_target(&target)?;
-        let port = port.unwrap_or(target.port);
-        let newline_mode = newline.or_else(newline_mode_from_env).unwrap_or_default();
-
-        let local_echo = if local_echo {
-            true
-        } else {
-            env::var("RB_LOCAL_ECHO").map(|v| v != "0").unwrap_or(false)
-        };
-
-        let username = username
-            .or(target.inferred_username)
-            .or_else(fallback_username)
-            .ok_or_else(|| anyhow!("unable to determine username; use --username or user@host"))?;
-
-        let (password, prompt_password) = resolve_password_source(password.as_deref(), no_password)?;
-
-        let command = if command.is_empty() { None } else { Some(command.join(" ")) };
-
-        if !subsystems.is_empty() && command.is_some() {
-            bail!("--subsystem cannot be combined with remote commands");
-        }
-
-        let rekey_interval = rekey_interval.map(Duration::from_secs);
-        let rekey_bytes = rekey_bytes.map(validate_rekey_bytes).transpose()?;
-        let keepalive_interval = keepalive_interval.map(Duration::from_secs);
-
-        let mut cert_overrides = parse_cert_overrides(&identity_certs)?;
-        let identities = build_identities(&identities, &mut cert_overrides)?;
-        if !cert_overrides.is_empty() {
-            bail!("unused --identity-cert entries: {:?}", cert_overrides.keys().collect::<Vec<_>>());
-        }
-
-        let agent_socket = env::var_os("SSH_AUTH_SOCK").map(PathBuf::from);
-        if (agent_auth || forward_agent) && agent_socket.is_none() {
-            bail!("SSH_AUTH_SOCK must be set to use --agent-auth or --forward-agent");
-        }
-
-        let password_prompt = if prompt_password {
-            Some(format!("{username}@{} password: ", target.host))
-        } else {
-            None
-        };
-
-        if forward_x11 || x11_display.is_some() || x11_trusted || x11_single_connection {
-            bail!("X11 forwarding flags are unimplemented; see FORWARDING.md for status");
-        }
-
-        let mut forwarding_config = ForwardingConfig::default();
-        for spec in local_forward {
-            forwarding_config.local_tcp.push(forwarding::parse_local_tcp(&spec)?);
-        }
-        for spec in remote_forward {
-            forwarding_config.remote_tcp.push(forwarding::parse_remote_tcp(&spec)?);
-        }
-        for spec in dynamic_forward {
-            forwarding_config.dynamic_socks.push(forwarding::parse_dynamic_socks(&spec)?);
-        }
-        #[cfg(unix)]
-        {
-            for spec in local_unix_forward {
-                forwarding_config.local_unix.push(forwarding::parse_local_unix(&spec)?);
-            }
-            for spec in remote_unix_forward {
-                forwarding_config.remote_unix.push(forwarding::parse_remote_unix(&spec)?);
-            }
-        }
-        for subsystem in subsystems {
-            forwarding_config.subsystems.push(forwarding::parse_subsystem(&subsystem)?);
-        }
-        for entry in send_env {
-            forwarding_config.env.entries.push(forwarding::parse_env_entry(&entry)?);
-        }
-        forwarding_config.env.locale_mode = forward_locale.into();
-
-        Ok(ClientConfig {
-            host: target.host,
-            port,
-            username,
-            password,
-            command,
-            newline_mode,
-            local_echo,
-            prefer_compression: compress,
-            rekey_interval,
-            rekey_bytes,
-            keepalive_interval,
-            keepalive_max,
-            accept_hostkey_once,
-            accept_store_hostkey,
-            replace_hostkey,
-            insecure,
-            identities,
-            allow_keyboard_interactive: !no_keyboard_interactive,
-            agent_auth,
-            forward_agent,
-            ssh_agent_socket: agent_socket,
-            prompt_password,
-            password_prompt,
-            forwarding: forwarding_config,
-        })
+        client_config_from_args_with_env(args, &SystemClientEnv)
     }
 }
 
-fn fallback_username() -> Option<String> {
+pub fn client_config_from_args_with_env(args: ClientArgs, env: &impl ClientEnv) -> Result<ClientConfig> {
+    let ClientArgs {
+        target,
+        command,
+        username,
+        password,
+        port,
+        newline,
+        local_echo,
+        compress,
+        rekey_interval,
+        rekey_bytes,
+        keepalive_interval,
+        keepalive_max,
+        accept_hostkey_once,
+        accept_store_hostkey,
+        replace_hostkey,
+        insecure,
+        identities,
+        identity_certs,
+        agent_auth,
+        forward_agent,
+        no_keyboard_interactive,
+        no_password,
+        local_forward,
+        remote_forward,
+        dynamic_forward,
+        #[cfg(unix)]
+        local_unix_forward,
+        #[cfg(unix)]
+        remote_unix_forward,
+        forward_x11,
+        x11_display,
+        x11_trusted,
+        x11_single_connection,
+        subsystems,
+        send_env,
+        forward_locale,
+    } = args;
+
+    let target = parse_target(&target)?;
+    let port = port.unwrap_or(target.port);
+    let newline_mode = newline.or_else(newline_mode_from_env).unwrap_or_default();
+
+    let local_echo = if local_echo {
+        true
+    } else {
+        env.var("RB_LOCAL_ECHO").map(|v| v != "0").unwrap_or(false)
+    };
+
+    let username = username
+        .or(target.inferred_username)
+        .or_else(|| fallback_username(env))
+        .ok_or_else(|| anyhow!("unable to determine username; use --username or user@host"))?;
+
+    let (password, prompt_password) = resolve_password_source(env, password.as_deref(), no_password)?;
+
+    let command = if command.is_empty() { None } else { Some(command.join(" ")) };
+
+    if !subsystems.is_empty() && command.is_some() {
+        bail!("--subsystem cannot be combined with remote commands");
+    }
+
+    let rekey_interval = rekey_interval.map(Duration::from_secs);
+    let rekey_bytes = rekey_bytes.map(validate_rekey_bytes).transpose()?;
+    let keepalive_interval = keepalive_interval.map(Duration::from_secs);
+
+    let mut cert_overrides = parse_cert_overrides(&identity_certs)?;
+    let identities = build_identities(&identities, &mut cert_overrides)?;
+    if !cert_overrides.is_empty() {
+        bail!("unused --identity-cert entries: {:?}", cert_overrides.keys().collect::<Vec<_>>());
+    }
+
+    let agent_socket = env.var_os("SSH_AUTH_SOCK").map(PathBuf::from);
+    if (agent_auth || forward_agent) && agent_socket.is_none() {
+        bail!("SSH_AUTH_SOCK must be set to use --agent-auth or --forward-agent");
+    }
+
+    let password_prompt = if prompt_password {
+        Some(format!("{username}@{} password: ", target.host))
+    } else {
+        None
+    };
+
+    if forward_x11 || x11_display.is_some() || x11_trusted || x11_single_connection {
+        bail!("X11 forwarding flags are unimplemented; see FORWARDING.md for status");
+    }
+
+    let mut forwarding_config = ForwardingConfig::default();
+    for spec in local_forward {
+        forwarding_config.local_tcp.push(forwarding::parse_local_tcp(&spec)?);
+    }
+    for spec in remote_forward {
+        forwarding_config.remote_tcp.push(forwarding::parse_remote_tcp(&spec)?);
+    }
+    for spec in dynamic_forward {
+        forwarding_config.dynamic_socks.push(forwarding::parse_dynamic_socks(&spec)?);
+    }
+    #[cfg(unix)]
+    {
+        for spec in local_unix_forward {
+            forwarding_config.local_unix.push(forwarding::parse_local_unix(&spec)?);
+        }
+        for spec in remote_unix_forward {
+            forwarding_config.remote_unix.push(forwarding::parse_remote_unix(&spec)?);
+        }
+    }
+    for subsystem in subsystems {
+        forwarding_config.subsystems.push(forwarding::parse_subsystem(&subsystem)?);
+    }
+    for entry in send_env {
+        forwarding_config.env.entries.push(forwarding::parse_env_entry(&entry)?);
+    }
+    forwarding_config.env.locale_mode = forward_locale.into();
+
+    Ok(ClientConfig {
+        host: target.host,
+        port,
+        username,
+        password,
+        command,
+        newline_mode,
+        local_echo,
+        prefer_compression: compress,
+        rekey_interval,
+        rekey_bytes,
+        keepalive_interval,
+        keepalive_max,
+        accept_hostkey_once,
+        accept_store_hostkey,
+        replace_hostkey,
+        insecure,
+        identities,
+        allow_keyboard_interactive: !no_keyboard_interactive,
+        agent_auth,
+        forward_agent,
+        ssh_agent_socket: agent_socket,
+        prompt_password,
+        password_prompt,
+        forwarding: forwarding_config,
+    })
+}
+
+fn fallback_username(env: &impl ClientEnv) -> Option<String> {
     for key in ["RB_USER", "USER", "LOGNAME", "USERNAME"] {
-        if let Ok(value) = env::var(key)
+        if let Some(value) = env.var(key)
             && !value.is_empty()
         {
             return Some(value);
@@ -283,14 +305,14 @@ fn fallback_username() -> Option<String> {
     if current.is_empty() { None } else { Some(current) }
 }
 
-fn resolve_password_source(provided: Option<&str>, no_password: bool) -> Result<(Option<SecretString>, bool)> {
+fn resolve_password_source(env: &impl ClientEnv, provided: Option<&str>, no_password: bool) -> Result<(Option<SecretString>, bool)> {
     if no_password {
         return Ok((None, false));
     }
     if let Some(value) = provided {
         return Ok((Some(SecretString::new(value.to_string().into_boxed_str())), false));
     }
-    if let Ok(value) = env::var("RB_PASSWORD") {
+    if let Some(value) = env.var("RB_PASSWORD") {
         return Ok((Some(SecretString::new(value.into_boxed_str())), false));
     }
     Ok((None, true))

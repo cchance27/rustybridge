@@ -82,7 +82,8 @@ pub async fn delete_relay_host(id: i64) -> Result<(), ApiError> {
 #[post(
     "/api/relays/{id}/credential/{credential_id}",
     auth: WebAuthSession,
-    audit: WebAuditContext
+    audit: WebAuditContext,
+    server: axum::Extension<server_core::ServerContext>
 )]
 pub async fn assign_relay_credential(id: i64, credential_id: i64) -> Result<(), ApiError> {
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
@@ -97,7 +98,7 @@ pub async fn assign_relay_credential(id: i64, credential_id: i64) -> Result<(), 
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::not_found("credential", credential_id.to_string()))?;
 
-    server_core::assign_credential_by_ids(&audit.0, host.id, cred.id)
+    server_core::assign_credential_by_ids(&server.0, &audit.0, host.id, cred.id)
         .await
         .map_err(ApiError::internal)?;
     Ok(())
@@ -108,6 +109,7 @@ pub async fn assign_relay_credential(id: i64, credential_id: i64) -> Result<(), 
     "/api/relays/{id}/credential",
     auth: WebAuthSession,
     audit: WebAuditContext,
+    server: axum::Extension<server_core::ServerContext>,
 )]
 pub async fn clear_relay_credential(id: i64) -> Result<(), ApiError> {
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
@@ -117,7 +119,7 @@ pub async fn clear_relay_credential(id: i64) -> Result<(), ApiError> {
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::not_found("relay host", id.to_string()))?;
 
-    server_core::unassign_credential_by_id(&audit.0, host.id)
+    server_core::unassign_credential_by_id(&server.0, &audit.0, host.id)
         .await
         .map_err(ApiError::internal)?;
     Ok(())
@@ -162,7 +164,8 @@ pub async fn store_relay_hostkey(id: i64, key_pem: String) -> Result<(), ApiErro
 #[post(
     "/api/relays/{id}/auth/custom",
     auth: WebAuthSession,
-    audit: WebAuditContext
+    audit: WebAuditContext,
+    server: axum::Extension<server_core::ServerContext>
 )]
 pub async fn set_custom_auth(id: i64, req: CustomAuthRequest) -> Result<(), ApiError> {
     use rb_types::validation::CredentialValidationInput;
@@ -200,6 +203,7 @@ pub async fn set_custom_auth(id: i64, req: CustomAuthRequest) -> Result<(), ApiE
                 req.password.as_deref().unwrap_or("")
             };
             server_core::set_custom_password_auth_by_id(
+                &server.0,
                 &audit.0,
                 relay.id,
                 req.username.as_deref(),
@@ -216,6 +220,7 @@ pub async fn set_custom_auth(id: i64, req: CustomAuthRequest) -> Result<(), ApiE
                 .as_deref()
                 .ok_or_else(|| ApiError::validation("Private key required"))?;
             server_core::set_custom_ssh_key_auth_by_id(
+                &server.0,
                 &audit.0,
                 relay.id,
                 req.username.as_deref(),
@@ -231,9 +236,16 @@ pub async fn set_custom_auth(id: i64, req: CustomAuthRequest) -> Result<(), ApiE
                 .public_key
                 .as_deref()
                 .ok_or_else(|| ApiError::validation("Public key required"))?;
-            server_core::set_custom_agent_auth_by_id(&audit.0, relay.id, req.username.as_deref(), public_key, &req.username_mode)
-                .await
-                .map_err(ApiError::internal)?;
+            server_core::set_custom_agent_auth_by_id(
+                &server.0,
+                &audit.0,
+                relay.id,
+                req.username.as_deref(),
+                public_key,
+                &req.username_mode,
+            )
+            .await
+            .map_err(ApiError::internal)?;
         }
         _ => return Err(ApiError::bad_request(format!("Invalid auth type: {}", req.auth_type))),
     }
@@ -244,7 +256,8 @@ pub async fn set_custom_auth(id: i64, req: CustomAuthRequest) -> Result<(), ApiE
 #[delete(
     "/api/relays/{id}/auth",
     auth: WebAuthSession,
-    audit: WebAuditContext
+    audit: WebAuditContext,
+    server: axum::Extension<server_core::ServerContext>
 )]
 pub async fn clear_relay_auth(id: i64) -> Result<(), ApiError> {
     ensure_relay_claim(&auth, ClaimLevel::Edit)?;
@@ -254,7 +267,7 @@ pub async fn clear_relay_auth(id: i64) -> Result<(), ApiError> {
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::not_found("relay host", id.to_string()))?;
 
-    server_core::clear_all_auth_by_id(&audit.0, relay.id)
+    server_core::clear_all_auth_by_id(&server.0, &audit.0, relay.id)
         .await
         .map_err(ApiError::internal)?;
     Ok(())

@@ -45,6 +45,9 @@ pub use relay::*;
 pub use ssh_keys::*;
 pub use users::*;
 
+#[cfg(feature = "test-support")]
+pub mod test_support;
+
 /// The ID of the Super Admin role (always 1).
 pub const SUPER_ADMIN_ROLE_ID: i64 = 1;
 

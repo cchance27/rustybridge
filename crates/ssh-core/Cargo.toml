@@ -3,6 +3,9 @@ name = "ssh-core"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+doctest = false
+
 [features]
 forwarding-tests = []
 

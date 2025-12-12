@@ -65,6 +65,20 @@ fn get_master_key() -> ServerResult<SecretVec<u8>> {
     }
 }
 
+/// Load the current master key from the process environment/config.
+///
+/// This is intended for callers building a [`crate::ServerContext`] once at startup.
+pub fn master_key_from_env() -> ServerResult<[u8; 32]> {
+    let key = get_master_key()?;
+    let bytes = key.expose_secret();
+    if bytes.len() != 32 {
+        return Err(ServerError::InvalidMasterSecret("Master key must be exactly 32 bytes".to_string()));
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(bytes);
+    Ok(out)
+}
+
 #[cfg(test)]
 pub fn reset_master_key_for_test() {
     let mut lock = MASTER_KEY_CACHE.write().unwrap();

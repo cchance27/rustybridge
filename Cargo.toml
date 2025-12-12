@@ -18,6 +18,7 @@ edition = "2024"
 [workspace.dependencies]
 anyhow = "1"
 thiserror = "2"
+tempfile = "3"
 tokio = { version = "1", features = [
     "rt-multi-thread",
     "macros",

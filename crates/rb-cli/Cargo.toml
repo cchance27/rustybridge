@@ -3,6 +3,9 @@ name = "rb-cli"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
@@ -23,4 +26,3 @@ rb-web = { path = "../rb-web", features = ["server"] }
 tracing-panic.workspace = true
 
 [dev-dependencies]
-serial_test = "3"

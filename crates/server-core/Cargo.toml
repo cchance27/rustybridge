@@ -3,6 +3,9 @@ name = "server-core"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 ratatui.workspace = true
 russh.workspace = true
@@ -40,11 +43,10 @@ zstd = "0.13"
 
 [dev-dependencies]
 anyhow.workspace = true
-serial_test = "3"
 sqlx = { version = "0.8.6", features = [
     "chrono",
     "macros",
     "runtime-tokio",
     "sqlite",
 ] }
-state-store = { path = "../state-store" }
+state-store = { path = "../state-store", features = ["test-support", "server"] }

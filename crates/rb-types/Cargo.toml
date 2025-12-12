@@ -3,6 +3,9 @@ name = "rb-types"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+doctest = false
+
 [features]
 sqlx = ["dep:sqlx"]
 secrecy = ["dep:secrecy"]

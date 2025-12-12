@@ -700,21 +700,28 @@ fn contains_enter(data: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::Ordering;
+    use std::sync::{OnceLock, atomic::Ordering};
 
     use base64::Engine;
     use serde_json::json;
-    use serial_test::serial;
     use sqlx::{Row, sqlite::SqlitePoolOptions};
     use state_store::{DbHandle, migrate_audit};
 
     use super::*;
 
+    static SECRETS_INIT: OnceLock<()> = OnceLock::new();
+
+    fn init_test_secrets() {
+        SECRETS_INIT.get_or_init(|| {
+            let key = base64::engine::general_purpose::STANDARD
+                .decode("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+                .unwrap();
+            secrets::set_master_key_for_test(&key);
+        });
+    }
+
     async fn setup_recorder() -> (DbHandle, Arc<SessionRecorder>) {
-        let key = base64::engine::general_purpose::STANDARD
-            .decode("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
-            .unwrap();
-        secrets::set_master_key_for_test(&key);
+        init_test_secrets();
 
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -734,7 +741,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn record_input_flush_preserves_triggering_bytes() {
         let (db, recorder) = setup_recorder().await;
 
@@ -769,7 +775,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_idle_flush_creates_no_chunks() {
         let (db, recorder) = setup_recorder().await;
 
@@ -804,7 +809,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_smart_flush_buffering() {
         let (db, recorder) = setup_recorder().await;
 
@@ -838,7 +842,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_smart_flush_size_limit() {
         let (db, recorder) = setup_recorder().await;
 

@@ -17,11 +17,14 @@ fn ensure_credential_claim(auth: &WebAuthSession, level: ClaimLevel) -> Result<(
 /// List all credentials with assignment counts
 #[get(
     "/api/credentials",
-    auth: WebAuthSession
+    auth: WebAuthSession,
+    server: axum::Extension<server_core::ServerContext>
 )]
 pub async fn list_credentials() -> Result<Vec<CredentialInfo>, ApiError> {
     ensure_credential_claim(&auth, ClaimLevel::View)?;
-    let creds = server_core::list_credentials_with_assignments().await.map_err(ApiError::internal)?;
+    let creds = server_core::list_credentials_with_assignments(&server.0)
+        .await
+        .map_err(ApiError::internal)?;
 
     let result = creds
         .into_iter()
@@ -46,7 +49,8 @@ pub async fn list_credentials() -> Result<Vec<CredentialInfo>, ApiError> {
 #[post(
     "/api/credentials",
     auth: WebAuthSession,
-    audit: WebAuditContext
+    audit: WebAuditContext,
+    server: axum::Extension<server_core::ServerContext>
 )]
 pub async fn create_credential(req: CreateCredentialRequest) -> Result<(), ApiError> {
     use rb_types::validation::CredentialValidationInput;
@@ -81,9 +85,17 @@ pub async fn create_credential(req: CreateCredentialRequest) -> Result<(), ApiEr
                 // For interactive/passthrough modes, password is optional (will be prompted)
                 req.password.as_deref().unwrap_or("")
             };
-            server_core::create_password_credential(&audit.0, &req.name, username, password, &req.username_mode, req.password_required)
-                .await
-                .map_err(ApiError::internal)?;
+            server_core::create_password_credential(
+                &server.0,
+                &audit.0,
+                &req.name,
+                username,
+                password,
+                &req.username_mode,
+                req.password_required,
+            )
+            .await
+            .map_err(ApiError::internal)?;
         }
         "ssh_key" => {
             let username = req.username.as_deref();
@@ -92,9 +104,18 @@ pub async fn create_credential(req: CreateCredentialRequest) -> Result<(), ApiEr
                 .as_deref()
                 .ok_or_else(|| ApiError::validation("Private key required for SSH key credential"))?;
             let passphrase = req.passphrase.as_deref();
-            server_core::create_ssh_key_credential(&audit.0, &req.name, username, key_data, None, passphrase, &req.username_mode)
-                .await
-                .map_err(ApiError::internal)?;
+            server_core::create_ssh_key_credential(
+                &server.0,
+                &audit.0,
+                &req.name,
+                username,
+                key_data,
+                None,
+                passphrase,
+                &req.username_mode,
+            )
+            .await
+            .map_err(ApiError::internal)?;
         }
         "agent" => {
             let username = req.username.as_deref();
@@ -102,7 +123,7 @@ pub async fn create_credential(req: CreateCredentialRequest) -> Result<(), ApiEr
                 .public_key
                 .as_deref()
                 .ok_or_else(|| ApiError::validation("Public key required for agent credential"))?;
-            server_core::create_agent_credential(&audit.0, &req.name, username, pubkey, &req.username_mode)
+            server_core::create_agent_credential(&server.0, &audit.0, &req.name, username, pubkey, &req.username_mode)
                 .await
                 .map_err(ApiError::internal)?;
         }
@@ -114,7 +135,8 @@ pub async fn create_credential(req: CreateCredentialRequest) -> Result<(), ApiEr
 #[put(
     "/api/credentials/{id}",
     auth: WebAuthSession,
-    audit: WebAuditContext
+    audit: WebAuditContext,
+    server: axum::Extension<server_core::ServerContext>
 )]
 pub async fn update_credential(id: i64, req: UpdateCredentialRequest) -> Result<(), ApiError> {
     use rb_types::validation::CredentialValidationInput;
@@ -156,6 +178,7 @@ pub async fn update_credential(id: i64, req: UpdateCredentialRequest) -> Result<
             let username = req.username.as_deref();
             let password = req.password.as_deref();
             server_core::update_password_credential(
+                &server.0,
                 &audit.0,
                 id,
                 &req.name,
@@ -171,14 +194,24 @@ pub async fn update_credential(id: i64, req: UpdateCredentialRequest) -> Result<
             let username = req.username.as_deref();
             let key_data = req.private_key.as_deref();
             let passphrase = req.passphrase.as_deref();
-            server_core::update_ssh_key_credential(&audit.0, id, &req.name, username, key_data, None, passphrase, &req.username_mode)
-                .await
-                .map_err(ApiError::internal)?;
+            server_core::update_ssh_key_credential(
+                &server.0,
+                &audit.0,
+                id,
+                &req.name,
+                username,
+                key_data,
+                None,
+                passphrase,
+                &req.username_mode,
+            )
+            .await
+            .map_err(ApiError::internal)?;
         }
         "agent" => {
             let username = req.username.as_deref();
             let pubkey = req.public_key.as_deref();
-            server_core::update_agent_credential(&audit.0, id, &req.name, username, pubkey, &req.username_mode)
+            server_core::update_agent_credential(&server.0, &audit.0, id, &req.name, username, pubkey, &req.username_mode)
                 .await
                 .map_err(ApiError::internal)?;
         }
@@ -191,12 +224,13 @@ pub async fn update_credential(id: i64, req: UpdateCredentialRequest) -> Result<
 #[delete(
     "/api/credentials/{id}",
     auth: WebAuthSession,
-    audit: WebAuditContext
+    audit: WebAuditContext,
+    server: axum::Extension<server_core::ServerContext>
 )]
 pub async fn delete_credential(id: i64) -> Result<(), ApiError> {
     ensure_credential_claim(&auth, ClaimLevel::Delete)?;
 
-    server_core::delete_credential_by_id(&audit.0, id)
+    server_core::delete_credential_by_id(&server.0, &audit.0, id)
         .await
         .map_err(ApiError::internal)?;
     Ok(())

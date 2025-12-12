@@ -8,11 +8,12 @@ use sqlx::Row;
 use tracing::{info, warn};
 
 use crate::{
-    error::{ServerError, ServerResult}, secrets::SecretBoxedString
+    ServerContext, error::{ServerError, ServerResult}, secrets::SecretBoxedString
 };
 
 /// Create a password credential, tracking the full context.
 pub async fn create_password_credential(
+    server: &ServerContext,
     ctx: &rb_types::audit::AuditContext,
     name: &str,
     username: Option<&str>,
@@ -20,13 +21,11 @@ pub async fn create_password_credential(
     username_mode: &str,
     password_required: bool,
 ) -> ServerResult<i64> {
-    let db = state_store::server_db().await?;
-
-    let pool = db.into_pool();
-    let blob = crate::secrets::encrypt_secret(password.as_bytes())?;
+    let pool = server.server_pool();
+    let blob = crate::secrets::encrypt_secret_with(password.as_bytes(), &server.master_key)?;
     let meta = username.map(|u| serde_json::json!({"username": u}).to_string());
     let id = state_store::insert_relay_credential(
-        &pool,
+        pool,
         name,
         "password",
         &blob.salt,
@@ -50,7 +49,9 @@ pub async fn create_password_credential(
 }
 
 /// Create an SSH key credential, tracking the full context.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_ssh_key_credential(
+    server: &ServerContext,
     ctx: &rb_types::audit::AuditContext,
     name: &str,
     username: Option<&str>,
@@ -59,9 +60,7 @@ pub async fn create_ssh_key_credential(
     passphrase: Option<&str>,
     username_mode: &str,
 ) -> ServerResult<i64> {
-    let db = state_store::server_db().await?;
-
-    let pool = db.into_pool();
+    let pool = server.server_pool();
     let mut secret_obj = serde_json::Map::new();
     secret_obj.insert("private_key".to_string(), serde_json::Value::String(key.to_string()));
     if let Some(c) = certificate {
@@ -71,10 +70,10 @@ pub async fn create_ssh_key_credential(
         secret_obj.insert("passphrase".to_string(), serde_json::Value::String(p.to_string()));
     }
     let secret_json = serde_json::Value::Object(secret_obj).to_string();
-    let blob = crate::secrets::encrypt_secret(secret_json.as_bytes())?;
+    let blob = crate::secrets::encrypt_secret_with(secret_json.as_bytes(), &server.master_key)?;
     let meta = username.map(|u| serde_json::json!({"username": u}).to_string());
     let id = state_store::insert_relay_credential(
-        &pool,
+        pool,
         name,
         "ssh_key",
         &blob.salt,
@@ -99,15 +98,14 @@ pub async fn create_ssh_key_credential(
 
 /// Create an SSH agent credential, tracking the full context.
 pub async fn create_agent_credential(
+    server: &ServerContext,
     ctx: &rb_types::audit::AuditContext,
     name: &str,
     username: Option<&str>,
     public_key: &str,
     username_mode: &str,
 ) -> ServerResult<i64> {
-    let db = state_store::server_db().await?;
-
-    let pool = db.into_pool();
+    let pool = server.server_pool();
     // For agent, we store the public key fingerprint/content to match against agent keys
     // We'll store it as a JSON object in the secret
     let secret = serde_json::json!({
@@ -115,10 +113,10 @@ pub async fn create_agent_credential(
         // We could also store fingerprint if we wanted to pre-calculate it
     })
     .to_string();
-    let blob = crate::secrets::encrypt_secret(secret.as_bytes())?;
+    let blob = crate::secrets::encrypt_secret_with(secret.as_bytes(), &server.master_key)?;
     let meta = username.map(|u| serde_json::json!({"username": u}).to_string());
     let id = state_store::insert_relay_credential(
-        &pool,
+        pool,
         name,
         "agent",
         &blob.salt,
@@ -142,7 +140,9 @@ pub async fn create_agent_credential(
 }
 
 /// Update a password credential, tracking the full context.
+#[allow(clippy::too_many_arguments)]
 pub async fn update_password_credential(
+    server: &ServerContext,
     ctx: &rb_types::audit::AuditContext,
     id: i64,
     name: &str,
@@ -151,22 +151,20 @@ pub async fn update_password_credential(
     username_mode: &str,
     password_required: bool,
 ) -> ServerResult<()> {
-    let db = state_store::server_db().await?;
-
-    let pool = db.into_pool();
+    let pool = server.server_pool();
     let (salt, nonce, secret) = if let Some(p) = password {
-        let blob = crate::secrets::encrypt_secret(p.as_bytes())?;
+        let blob = crate::secrets::encrypt_secret_with(p.as_bytes(), &server.master_key)?;
         (blob.salt, blob.nonce, blob.ciphertext)
     } else {
         // Keep existing secret
-        let current = state_store::get_relay_credential_by_id(&pool, id)
+        let current = state_store::get_relay_credential_by_id(pool, id)
             .await?
             .ok_or_else(|| ServerError::not_found("credential", id.to_string()))?;
         (current.salt, current.nonce, current.secret)
     };
     let meta = username.map(|u| serde_json::json!({"username": u}).to_string());
     state_store::update_relay_credential(
-        &pool,
+        pool,
         id,
         "password",
         &salt,
@@ -193,6 +191,7 @@ pub async fn update_password_credential(
 /// Update an SSH key credential, tracking the full context.
 #[allow(clippy::too_many_arguments)]
 pub async fn update_ssh_key_credential(
+    server: &ServerContext,
     ctx: &rb_types::audit::AuditContext,
     id: i64,
     name: &str,
@@ -202,9 +201,7 @@ pub async fn update_ssh_key_credential(
     passphrase: Option<&str>,
     username_mode: &str,
 ) -> ServerResult<()> {
-    let db = state_store::server_db().await?;
-
-    let pool = db.into_pool();
+    let pool = server.server_pool();
     let (salt, nonce, secret) = if let Some(k) = key {
         let mut secret_obj = serde_json::Map::new();
         secret_obj.insert("private_key".to_string(), serde_json::Value::String(k.to_string()));
@@ -215,18 +212,18 @@ pub async fn update_ssh_key_credential(
             secret_obj.insert("passphrase".to_string(), serde_json::Value::String(p.to_string()));
         }
         let secret_json = serde_json::Value::Object(secret_obj).to_string();
-        let blob = crate::secrets::encrypt_secret(secret_json.as_bytes())?;
+        let blob = crate::secrets::encrypt_secret_with(secret_json.as_bytes(), &server.master_key)?;
         (blob.salt, blob.nonce, blob.ciphertext)
     } else {
         // Keep existing secret
-        let current = state_store::get_relay_credential_by_id(&pool, id)
+        let current = state_store::get_relay_credential_by_id(pool, id)
             .await?
             .ok_or_else(|| ServerError::not_found("credential", id.to_string()))?;
         (current.salt, current.nonce, current.secret)
     };
     let meta = username.map(|u| serde_json::json!({"username": u}).to_string());
     state_store::update_relay_credential(
-        &pool,
+        pool,
         id,
         "ssh_key",
         &salt,
@@ -252,6 +249,7 @@ pub async fn update_ssh_key_credential(
 
 /// Update an SSH agent credential, tracking the full context.
 pub async fn update_agent_credential(
+    server: &ServerContext,
     ctx: &rb_types::audit::AuditContext,
     id: i64,
     name: &str,
@@ -259,26 +257,24 @@ pub async fn update_agent_credential(
     public_key: Option<&str>,
     username_mode: &str,
 ) -> ServerResult<()> {
-    let db = state_store::server_db().await?;
-
-    let pool = db.into_pool();
+    let pool = server.server_pool();
     let (salt, nonce, secret) = if let Some(pk) = public_key {
         let secret = serde_json::json!({
             "public_key": pk,
         })
         .to_string();
-        let blob = crate::secrets::encrypt_secret(secret.as_bytes())?;
+        let blob = crate::secrets::encrypt_secret_with(secret.as_bytes(), &server.master_key)?;
         (blob.salt, blob.nonce, blob.ciphertext)
     } else {
         // Keep existing secret
-        let current = state_store::get_relay_credential_by_id(&pool, id)
+        let current = state_store::get_relay_credential_by_id(pool, id)
             .await?
             .ok_or_else(|| ServerError::not_found("credential", id.to_string()))?;
         (current.salt, current.nonce, current.secret)
     };
     let meta = username.map(|u| serde_json::json!({"username": u}).to_string());
     state_store::update_relay_credential(
-        &pool,
+        pool,
         id,
         "agent",
         &salt,
@@ -310,10 +306,9 @@ pub async fn update_agent_credential(
 /// let ctx = AuditContext::web(user_id, username, ip_address, session_id);
 /// delete_credential_by_id(&ctx, credential_id).await?;
 /// ```
-pub async fn delete_credential_by_id(ctx: &rb_types::audit::AuditContext, id: i64) -> ServerResult<()> {
-    let db = state_store::server_db().await?;
-
-    let pool = db.into_pool();
+pub async fn delete_credential_by_id(server: &ServerContext, ctx: &rb_types::audit::AuditContext, id: i64) -> ServerResult<()> {
+    // TODO: this should be migrated to use `encrypt_string_with` + v1 handling if needed.
+    let pool = server.server_pool();
 
     let mut tx = pool.begin().await.map_err(ServerError::Database)?;
 
@@ -380,27 +375,25 @@ pub async fn delete_credential_by_id(ctx: &rb_types::audit::AuditContext, id: i6
 }
 
 /// List all credentials
-pub async fn list_credentials() -> ServerResult<Vec<(i64, String, String, Option<String>, String, bool)>> {
-    let db = state_store::server_db().await?;
-
-    let pool = db.into_pool();
-    let rows = state_store::list_relay_credentials(&pool).await?;
+pub async fn list_credentials(server: &ServerContext) -> ServerResult<Vec<(i64, String, String, Option<String>, String, bool)>> {
+    let pool = server.server_pool();
+    let rows = state_store::list_relay_credentials(pool).await?;
     Ok(rows)
 }
 
 /// List credentials with assigned relay hosts
 /// Returns (id, name, kind, username, username_mode, password_required, assigned_relays)
-pub async fn list_credentials_with_assignments() -> ServerResult<Vec<(i64, String, String, Option<String>, String, bool, Vec<String>)>> {
-    let db = state_store::server_db().await?;
+pub async fn list_credentials_with_assignments(
+    server: &ServerContext,
+) -> ServerResult<Vec<(i64, String, String, Option<String>, String, bool, Vec<String>)>> {
+    let pool = server.server_pool();
 
-    let pool = db.into_pool();
-
-    let creds = state_store::list_relay_credentials(&pool).await?;
-    let hosts = state_store::list_relay_hosts(&pool, None).await?;
+    let creds = state_store::list_relay_credentials(pool).await?;
+    let hosts = state_store::list_relay_hosts(pool, None).await?;
     let host_map: std::collections::HashMap<i64, String> = hosts.into_iter().map(|h| (h.id, h.name)).collect();
 
     let opts_rows: Vec<(i64, String)> = sqlx::query_as("SELECT relay_host_id, value FROM relay_host_options WHERE key = 'auth.id'")
-        .fetch_all(&pool)
+        .fetch_all(pool)
         .await?;
 
     let mut assignments: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
@@ -423,7 +416,7 @@ pub async fn list_credentials_with_assignments() -> ServerResult<Vec<(i64, Strin
                 let _ = sqlx::query("UPDATE relay_host_options SET value = ? WHERE relay_host_id = ? AND key = 'auth.id'")
                     .bind(new_enc)
                     .bind(host_id)
-                    .execute(&pool)
+                    .execute(pool)
                     .await;
             }
         }
@@ -451,16 +444,20 @@ pub async fn list_credentials_with_assignments() -> ServerResult<Vec<(i64, Strin
 }
 
 /// Assign a credential to a host by IDs, tracking the full context.
-pub async fn assign_credential_by_ids(ctx: &rb_types::audit::AuditContext, host_id: i64, cred_id: i64) -> ServerResult<()> {
-    let db = state_store::server_db().await?;
-    let pool = db.into_pool();
+pub async fn assign_credential_by_ids(
+    server: &ServerContext,
+    ctx: &rb_types::audit::AuditContext,
+    host_id: i64,
+    cred_id: i64,
+) -> ServerResult<()> {
+    let pool = server.server_pool();
 
-    let cred = state_store::get_relay_credential_by_id(&pool, cred_id)
+    let cred = state_store::get_relay_credential_by_id(pool, cred_id)
         .await?
         .ok_or_else(|| ServerError::not_found("credential", cred_id.to_string()))?;
     let credential_name = cred.name.clone(); // Capture for audit log
 
-    let host = state_store::fetch_relay_host_by_id(&pool, host_id)
+    let host = state_store::fetch_relay_host_by_id(pool, host_id)
         .await?
         .ok_or_else(|| ServerError::not_found("relay_host", host_id.to_string()))?;
     let relay_name = host.name.clone(); // Capture for audit log
@@ -486,11 +483,17 @@ pub async fn assign_credential_by_ids(ctx: &rb_types::audit::AuditContext, host_
 
     // Use set_relay_option_internal inside the transaction; log after commit
     let mut set_keys = Vec::new();
-    let enc = crate::relay_host::options::set_relay_option_internal(&mut *tx, host_id, "auth.source", "credential", true).await?;
+    let enc =
+        crate::relay_host::options::set_relay_option_internal(&mut *tx, &server.master_key, host_id, "auth.source", "credential", true)
+            .await?;
     set_keys.push(("auth.source".to_string(), enc));
-    let enc = crate::relay_host::options::set_relay_option_internal(&mut *tx, host_id, "auth.id", &cred.id.to_string(), true).await?;
+    let enc =
+        crate::relay_host::options::set_relay_option_internal(&mut *tx, &server.master_key, host_id, "auth.id", &cred.id.to_string(), true)
+            .await?;
     set_keys.push(("auth.id".to_string(), enc));
-    let enc = crate::relay_host::options::set_relay_option_internal(&mut *tx, host_id, "auth.method", method_plain, true).await?;
+    let enc =
+        crate::relay_host::options::set_relay_option_internal(&mut *tx, &server.master_key, host_id, "auth.method", method_plain, true)
+            .await?;
     set_keys.push(("auth.method".to_string(), enc));
 
     tx.commit().await.map_err(ServerError::Database)?;
@@ -508,7 +511,7 @@ pub async fn assign_credential_by_ids(ctx: &rb_types::audit::AuditContext, host_
         }
     );
 
-    if let Some(relay) = state_store::fetch_relay_host_by_id(&pool, host_id).await? {
+    if let Some(relay) = state_store::fetch_relay_host_by_id(pool, host_id).await? {
         for key in existing_keys {
             crate::audit!(
                 ctx,
@@ -537,22 +540,21 @@ pub async fn assign_credential_by_ids(ctx: &rb_types::audit::AuditContext, host_
 }
 
 /// Unassign a credential from a host by ID, tracking the full context.
-pub async fn unassign_credential_by_id(ctx: &rb_types::audit::AuditContext, host_id: i64) -> ServerResult<()> {
-    let db = state_store::server_db().await?;
-    let pool = db.into_pool();
+pub async fn unassign_credential_by_id(server: &ServerContext, ctx: &rb_types::audit::AuditContext, host_id: i64) -> ServerResult<()> {
+    let pool = server.server_pool();
 
     // Fetch relay info before modification for audit log
-    let relay_info = state_store::fetch_relay_host_by_id(&pool, host_id).await?;
+    let relay_info = state_store::fetch_relay_host_by_id(pool, host_id).await?;
 
     // Capture current auth keys for logging
     let existing_keys: Vec<String> = sqlx::query_scalar("SELECT key FROM relay_host_options WHERE relay_host_id = ? AND key LIKE 'auth.%'")
         .bind(host_id)
-        .fetch_all(&pool)
+        .fetch_all(pool)
         .await?;
 
     sqlx::query("DELETE FROM relay_host_options WHERE relay_host_id = ? AND key LIKE 'auth.%'")
         .bind(host_id)
-        .execute(&pool)
+        .execute(pool)
         .await?;
     info!(relay_host_id = host_id, context = %ctx, "credential unassigned from host");
 

@@ -3,6 +3,9 @@ name = "tui-core"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 ratatui.workspace = true
 tokio.workspace = true

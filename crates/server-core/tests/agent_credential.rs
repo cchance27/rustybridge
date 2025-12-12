@@ -1,19 +1,14 @@
 use anyhow::Result;
-use serial_test::serial;
+use server_core::ServerContext;
 use sqlx::{Row, SqlitePool};
 
-mod common;
-
 #[tokio::test]
-#[serial]
 async fn agent_credential_store() -> Result<()> {
-    common::set_test_db_env("agent_test");
-    unsafe {
-        std::env::set_var("RB_SERVER_SECRETS_PASSPHRASE", "agent-pass");
-    }
-    let handle = state_store::server_db().await?;
-    state_store::migrate_server(&handle).await?;
-    let pool: SqlitePool = handle.into_pool();
+    let factory = state_store::test_support::SqliteTestDbFactory::new();
+    let (server_db, audit_db) = factory.server_and_audit().await?;
+    let master_key = [0x42u8; 32];
+    let server = ServerContext::new(server_db, audit_db, master_key);
+    let pool: SqlitePool = server.server_db.clone().into_pool();
 
     // Public key: generate from random private key
     let mut osrng = russh::keys::ssh_key::rand_core::OsRng;
@@ -21,7 +16,7 @@ async fn agent_credential_store() -> Result<()> {
     let pubk = privk.public_key().to_openssh()?.to_string();
 
     let ctx = rb_types::audit::AuditContext::system("test");
-    let _id = server_core::create_agent_credential(&ctx, "credAgent", Some("userA"), &pubk, "fixed").await?;
+    let _id = server_core::create_agent_credential(&server, &ctx, "credAgent", Some("userA"), &pubk, "fixed").await?;
     let row = sqlx::query("SELECT salt, nonce, secret FROM relay_credentials WHERE name='credAgent'")
         .fetch_one(&pool)
         .await?;

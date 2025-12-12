@@ -3,10 +3,14 @@ name = "state-store"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+doctest = false
+
 [features]
 default = ["client", "server"]
 client = []
 server = []
+test-support = ["dep:tempfile"]
 
 [dependencies]
 sqlx = { workspace = true, features = ["runtime-tokio", "sqlite", "macros"] }
@@ -21,3 +25,4 @@ uuid = { version = "1", features = ["v7", "serde"] }
 zstd = "0.13"
 chrono = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true, optional = true }

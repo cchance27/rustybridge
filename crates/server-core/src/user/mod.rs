@@ -8,7 +8,9 @@ use rb_types::auth::ClaimType;
 use russh::keys::ssh_key;
 use tracing::{info, warn};
 
-use crate::error::{ServerError, ServerResult};
+use crate::{
+    ServerContext, error::{ServerError, ServerResult}
+};
 
 /// Add a user with a password, tracking the full context of who performed the action.
 ///
@@ -32,9 +34,8 @@ use crate::error::{ServerError, ServerResult};
 /// let ctx = AuditContext::server_cli(None, hostname);
 /// add_user(&ctx, "charlie", "password").await?;
 /// ```
-pub async fn add_user(ctx: &rb_types::audit::AuditContext, user: &str, password: &str) -> ServerResult<()> {
-    let db = state_store::server_db().await?;
-    let pool = db.into_pool();
+pub async fn add_user(server: &ServerContext, ctx: &rb_types::audit::AuditContext, user: &str, password: &str) -> ServerResult<()> {
+    let pool = server.server_pool();
 
     // Check if user already exists (read-only check before transaction is fine,
     // but better inside transaction for strict correctness, though SQLite only allows one writer anyway)
@@ -65,17 +66,21 @@ pub async fn add_user(ctx: &rb_types::audit::AuditContext, user: &str, password:
 }
 
 /// Update a user's password, tracking the full context.
-pub async fn update_user_password_by_id(ctx: &rb_types::audit::AuditContext, user_id: i64, password: &str) -> ServerResult<()> {
-    let db = state_store::server_db().await?;
-    let pool = db.into_pool();
+pub async fn update_user_password_by_id(
+    server: &ServerContext,
+    ctx: &rb_types::audit::AuditContext,
+    user_id: i64,
+    password: &str,
+) -> ServerResult<()> {
+    let pool = server.server_pool();
 
     // Fetch username for audit log
-    let username = state_store::fetch_username_by_id(&pool, user_id)
+    let username = state_store::fetch_username_by_id(pool, user_id)
         .await?
         .ok_or_else(|| ServerError::not_found("user", user_id.to_string()))?;
 
     let hash = crate::auth::hash_password(password)?;
-    state_store::update_user_password_by_id(&pool, user_id, &hash).await?;
+    state_store::update_user_password_by_id(pool, user_id, &hash).await?;
 
     // Log audit event
     crate::audit!(ctx, UserPasswordChanged { username, user_id });
@@ -84,16 +89,20 @@ pub async fn update_user_password_by_id(ctx: &rb_types::audit::AuditContext, use
 }
 
 /// Add a claim to a user, tracking the full context.
-pub async fn add_claim_to_user_by_id(ctx: &rb_types::audit::AuditContext, user_id: i64, claim: &ClaimType<'static>) -> ServerResult<()> {
-    let db = state_store::server_db().await?;
-    let pool = db.into_pool();
+pub async fn add_claim_to_user_by_id(
+    server: &ServerContext,
+    ctx: &rb_types::audit::AuditContext,
+    user_id: i64,
+    claim: &ClaimType<'static>,
+) -> ServerResult<()> {
+    let pool = server.server_pool();
 
     // Fetch username for audit log
-    let username = state_store::fetch_username_by_id(&pool, user_id)
+    let username = state_store::fetch_username_by_id(pool, user_id)
         .await?
         .ok_or_else(|| ServerError::not_found("user", user_id.to_string()))?;
 
-    state_store::add_claim_to_user_by_id(&pool, user_id, claim).await?;
+    state_store::add_claim_to_user_by_id(pool, user_id, claim).await?;
 
     // Log audit event
     crate::audit!(
@@ -110,19 +119,19 @@ pub async fn add_claim_to_user_by_id(ctx: &rb_types::audit::AuditContext, user_i
 
 /// Remove a claim from a user, tracking the full context.
 pub async fn remove_claim_from_user_by_id(
+    server: &ServerContext,
     ctx: &rb_types::audit::AuditContext,
     user_id: i64,
     claim: &ClaimType<'static>,
 ) -> ServerResult<()> {
-    let db = state_store::server_db().await?;
-    let pool = db.into_pool();
+    let pool = server.server_pool();
 
     // Fetch username for audit log
-    let username = state_store::fetch_username_by_id(&pool, user_id)
+    let username = state_store::fetch_username_by_id(pool, user_id)
         .await?
         .ok_or_else(|| ServerError::not_found("user", user_id.to_string()))?;
 
-    state_store::remove_claim_from_user_by_id(&pool, user_id, claim).await?;
+    state_store::remove_claim_from_user_by_id(pool, user_id, claim).await?;
 
     // Log audit event
     crate::audit!(
@@ -145,24 +154,24 @@ pub async fn remove_claim_from_user_by_id(
 /// - CLI commands that work with usernames
 /// - TUI interfaces that display usernames
 pub async fn add_user_public_key(
+    server: &ServerContext,
     ctx: &rb_types::audit::AuditContext,
     username: &str,
     public_key: &str,
     comment: Option<&str>,
 ) -> ServerResult<i64> {
-    let db = state_store::server_db().await?;
-    let pool = db.into_pool();
+    let pool = server.server_pool();
 
     // Basic validation to prevent storing malformed keys.
     let parsed_key =
         ssh_key::PublicKey::from_openssh(public_key).map_err(|e| ServerError::InvalidConfig(format!("invalid public key: {}", e)))?;
     let fingerprint = parsed_key.fingerprint(Default::default()).to_string();
 
-    let user_id = state_store::fetch_user_id_by_name(&pool, username)
+    let user_id = state_store::fetch_user_id_by_name(pool, username)
         .await?
         .ok_or_else(|| ServerError::not_found("user", username))?;
 
-    let id = state_store::add_user_public_key_by_id(&pool, user_id, public_key, comment).await?;
+    let id = state_store::add_user_public_key_by_id(pool, user_id, public_key, comment).await?;
     // Log audit event
     crate::audit!(
         ctx,
@@ -183,15 +192,14 @@ pub async fn add_user_public_key(
 /// This function accepts a username instead of user_id because it's used by:
 /// - CLI commands that work with usernames
 /// - TUI interfaces that display usernames
-pub async fn list_user_public_keys(username: &str) -> ServerResult<Vec<(i64, String, Option<String>, i64)>> {
-    let db = state_store::server_db().await?;
-    let pool = db.into_pool();
+pub async fn list_user_public_keys(server: &ServerContext, username: &str) -> ServerResult<Vec<(i64, String, Option<String>, i64)>> {
+    let pool = server.server_pool();
 
-    let user_id = state_store::fetch_user_id_by_name(&pool, username)
+    let user_id = state_store::fetch_user_id_by_name(pool, username)
         .await?
         .ok_or_else(|| ServerError::not_found("user", username))?;
 
-    let keys = state_store::list_user_public_keys_by_id(&pool, user_id).await?;
+    let keys = state_store::list_user_public_keys_by_id(pool, user_id).await?;
     Ok(keys)
 }
 
@@ -204,9 +212,13 @@ pub async fn list_user_public_keys(username: &str) -> ServerResult<Vec<(i64, Str
 ///
 /// # Security
 /// Validates that the key belongs to the specified user to prevent cross-user deletion.
-pub async fn delete_user_public_key(ctx: &rb_types::audit::AuditContext, username: &str, key_id: i64) -> ServerResult<()> {
-    let db = state_store::server_db().await?;
-    let pool = db.into_pool();
+pub async fn delete_user_public_key(
+    server: &ServerContext,
+    ctx: &rb_types::audit::AuditContext,
+    username: &str,
+    key_id: i64,
+) -> ServerResult<()> {
+    let pool = server.server_pool();
 
     let mut tx = pool.begin().await.map_err(ServerError::Database)?;
 

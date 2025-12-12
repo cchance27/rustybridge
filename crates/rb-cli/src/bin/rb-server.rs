@@ -65,6 +65,7 @@ async fn main() -> Result<()> {
     // Create audit context for CLI operations
     let hostname = whoami::fallible::hostname().unwrap_or_else(|_| "unknown".to_string());
     let ctx = AuditContext::server_cli(None, hostname);
+    let server_ctx = server_core::context::server_context_from_env().await?;
 
     match args.cmd {
         None => {
@@ -166,7 +167,7 @@ async fn main() -> Result<()> {
                     let host = fetch_relay_by_name(&name)
                         .await?
                         .ok_or_else(|| anyhow!("Relay host '{}' not found", name))?;
-                    for (k, v) in list_options_by_id(host.id).await? {
+                    for (k, v) in list_options_by_id(&server_ctx, host.id).await? {
                         println!("{}={}", k, v);
                     }
                 }
@@ -174,13 +175,13 @@ async fn main() -> Result<()> {
                     let host = fetch_relay_by_name(&name)
                         .await?
                         .ok_or_else(|| anyhow!("Relay host '{}' not found", name))?;
-                    set_relay_option_by_id(&ctx, host.id, &key, &value, true).await?;
+                    set_relay_option_by_id(&server_ctx, &ctx, host.id, &key, &value, true).await?;
                 }
                 HostsOptionsCmd::Unset { name, key } => {
                     let host = fetch_relay_by_name(&name)
                         .await?
                         .ok_or_else(|| anyhow!("Relay host '{}' not found", name))?;
-                    unset_relay_option_by_id(&ctx, host.id, &key).await?;
+                    unset_relay_option_by_id(&server_ctx, &ctx, host.id, &key).await?;
                 }
             },
             HostsCmd::Access(sub) => match sub {
@@ -239,14 +240,14 @@ async fn main() -> Result<()> {
                         .await?
                         .ok_or_else(|| anyhow!("Credential '{}' not found", cred_name))?;
 
-                    assign_credential_by_ids(&ctx, host.id, cred.id).await?
+                    assign_credential_by_ids(&server_ctx, &ctx, host.id, cred.id).await?
                 }
                 HostsCredsCmd::Unassign { name } => {
                     let host = fetch_relay_by_name(&name)
                         .await?
                         .ok_or_else(|| anyhow!("Relay host '{}' not found", name))?;
 
-                    unassign_credential_by_id(&ctx, host.id).await?
+                    unassign_credential_by_id(&server_ctx, &ctx, host.id).await?
                 }
             },
         },
@@ -257,7 +258,7 @@ async fn main() -> Result<()> {
                 } else {
                     rpassword::prompt_password(format!("Enter password for {user}: "))?
                 };
-                add_user(&ctx, &user, &pass).await?;
+                add_user(&server_ctx, &ctx, &user, &pass).await?;
             }
             UsersCmd::AddPubkey {
                 user,
@@ -273,11 +274,11 @@ async fn main() -> Result<()> {
                     return Err(anyhow!("public key is required (pass as positional or --key-file)"));
                 };
 
-                let id = add_user_public_key(&ctx, &user, &key_data, comment.as_deref()).await?;
+                let id = add_user_public_key(&server_ctx, &ctx, &user, &key_data, comment.as_deref()).await?;
                 println!("added public key {} for {}", id, user);
             }
             UsersCmd::ListPubkeys { user } => {
-                let keys = list_user_public_keys(&user).await?;
+                let keys = list_user_public_keys(&server_ctx, &user).await?;
                 if keys.is_empty() {
                     println!("no public keys found for {}", user);
                 } else {
@@ -289,7 +290,7 @@ async fn main() -> Result<()> {
                 }
             }
             UsersCmd::RemovePubkey { user, key_id } => {
-                delete_user_public_key(&ctx, &user, key_id).await?;
+                delete_user_public_key(&server_ctx, &ctx, &user, key_id).await?;
                 println!("removed public key {} for {}", key_id, user);
             }
             UsersCmd::Remove { user } => {
@@ -380,7 +381,7 @@ async fn main() -> Result<()> {
                     } else {
                         rpassword::prompt_password(format!("Enter credential password for {name}: "))?
                     };
-                    let _ = create_password_credential(&ctx, &name, Some(&username), &pass, "fixed", true).await?;
+                    let _ = create_password_credential(&server_ctx, &ctx, &name, Some(username.as_str()), &pass, "fixed", true).await?;
                 }
                 CredsCreateCmd::SshKey {
                     name,
@@ -412,9 +413,10 @@ async fn main() -> Result<()> {
                         None => None,
                     };
                     let _ = server_core::create_ssh_key_credential(
+                        &server_ctx,
                         &ctx,
                         &name,
-                        Some(&username),
+                        Some(username.as_str()),
                         &key_data,
                         cert_data.as_deref(),
                         pass_opt.as_deref(),
@@ -435,7 +437,7 @@ async fn main() -> Result<()> {
                     } else {
                         return Err(anyhow!("--pubkey-file or --value is required for agent credentials"));
                     };
-                    let _ = create_agent_credential(&ctx, &name, Some(&username), &pubkey, "fixed").await?;
+                    let _ = create_agent_credential(&server_ctx, &ctx, &name, Some(username.as_str()), &pubkey, "fixed").await?;
                 }
             },
             CredsCmd::Delete { name, force: _ } => {
@@ -443,10 +445,10 @@ async fn main() -> Result<()> {
                     .await?
                     .ok_or_else(|| anyhow!("Credential '{}' not found", name))?;
                 // force not yet used; guard already enforced in server-core
-                delete_credential_by_id(&ctx, cred.id).await?;
+                delete_credential_by_id(&server_ctx, &ctx, cred.id).await?;
             }
             CredsCmd::List => {
-                for (_id, name, kind, _meta, _username_mode, _password_required) in list_credentials().await? {
+                for (_id, name, kind, _meta, _username_mode, _password_required) in list_credentials(&server_ctx).await? {
                     println!("{} {}", name, kind);
                 }
             }
@@ -457,7 +459,7 @@ async fn main() -> Result<()> {
             println!("Rotate server secrets will re-encrypt all credentials and relay options.");
             let old = rpassword::prompt_password("Enter CURRENT secrets key or passphrase: ")?;
             let new = rpassword::prompt_password("Enter NEW secrets key or passphrase: ")?;
-            rotate_secrets_key(&old, &new).await?;
+            rotate_secrets_key(&server_ctx, &old, &new).await?;
             println!(
                 "Secrets rotation complete. Set RB_SERVER_SECRETS_KEY (base64 32B) or RB_SERVER_SECRETS_PASSPHRASE to the NEW value and restart rb-server."
             );
@@ -467,7 +469,7 @@ async fn main() -> Result<()> {
             // Load app with real data from database (as admin)
             let app: Box<dyn tui_core::TuiApp> = match cmd {
                 TuiCmd::RelaySelector => Box::new(server_core::create_relay_selector_app(None).await?),
-                TuiCmd::Management => Box::new(server_core::create_management_app(None).await?),
+                TuiCmd::Management => Box::new(server_core::create_management_app(&server_ctx, None).await?),
             };
 
             run_tui(app).await?;
@@ -514,7 +516,7 @@ async fn main() -> Result<()> {
                     WebOptionKey::OidcRedirectUrl => ("oidc_redirect_url", "oidc_redirect_url", false),
                 };
 
-                server_core::set_server_option(stored_key, &value).await?;
+                server_core::set_server_option(&server_ctx, stored_key, &value).await?;
 
                 // Emit OidcConfigured audit event when setting the issuer URL
                 if matches!(key, WebOptionKey::OidcIssuerUrl) {
@@ -586,6 +588,7 @@ async fn handle_local_action(
 ) -> Result<bool> {
     let hostname = whoami::fallible::hostname().unwrap_or_else(|_| "unknown".to_string());
     let ctx = AuditContext::server_cli(None, hostname);
+    let server_ctx = server_core::context::server_context_from_env().await?;
 
     use AppAction::*;
     match action {
@@ -621,10 +624,10 @@ async fn handle_local_action(
             session.render().map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
             // Perform the fetch inline
             let action = tui_core::AppAction::FetchHostkey { id, name: name.clone() };
-            match server_core::handle_management_action(&ctx, action).await {
+            match server_core::handle_management_action(&server_ctx, &ctx, action).await {
                 Ok(Some(AppAction::ReviewHostkey(review))) => {
                     // Reload with the review data
-                    let app2 = server_core::create_management_app_with_tab(0, Some(review)).await?;
+                    let app2 = server_core::create_management_app_with_tab(&server_ctx, 0, Some(review)).await?;
                     session
                         .set_app(Box::new(app2))
                         .map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
@@ -664,7 +667,7 @@ async fn handle_local_action(
             } else {
                 0
             };
-            let res = server_core::handle_management_action(&ctx, add.clone()).await;
+            let res = server_core::handle_management_action(&server_ctx, &ctx, add.clone()).await;
             let app = build_app_for_local("Management", Some(tab)).await?;
             session.set_app(app).map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
             match res {
@@ -697,7 +700,7 @@ async fn handle_local_action(
         }
         ReviewHostkey(review) => {
             // Reload management app with the review
-            let app = server_core::create_management_app_with_tab(0, Some(review)).await?;
+            let app = server_core::create_management_app_with_tab(&server_ctx, 0, Some(review)).await?;
             session.set_app(Box::new(app)).map_err(|e: tui_core::TuiError| anyhow::anyhow!(e))?;
             Ok(false)
         }
@@ -714,6 +717,7 @@ async fn handle_local_action(
 }
 
 async fn build_app_for_local(name: &str, tab: Option<usize>) -> anyhow::Result<Box<dyn tui_core::TuiApp>> {
-    let app = server_core::create_app_by_name(None, name, tab).await?;
+    let server_ctx = server_core::context::server_context_from_env().await?;
+    let app = server_core::create_app_by_name(&server_ctx, None, name, tab).await?;
     Ok(app)
 }

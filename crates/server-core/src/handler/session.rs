@@ -91,11 +91,14 @@ impl ServerHandler {
 
         let (app, app_name, active_app): (Box<dyn tui_core::TuiApp>, &str, Option<TUIApplication>) = if can_manage {
             (
-                Box::new(
-                    create_management_app(None)
+                Box::new({
+                    let server = crate::context::server_context_from_env()
                         .await
-                        .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?,
-                ),
+                        .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+                    create_management_app(&server, None)
+                        .await
+                        .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?
+                }),
                 "ManagementApp",
                 Some(TUIApplication::Management),
             )
@@ -235,7 +238,10 @@ impl ServerHandler {
         tab: usize,
         review: Option<HostkeyReview>,
     ) -> Result<(), russh::Error> {
-        let app = create_management_app_with_tab(tab, review)
+        let server = crate::context::server_context_from_env()
+            .await
+            .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+        let app = create_management_app_with_tab(&server, tab, review)
             .await
             .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
         if let Some(app_session) = self.app_session.as_mut() {
@@ -276,7 +282,10 @@ impl ServerHandler {
         session: &mut Session,
         channel: ChannelId,
     ) -> Result<(), russh::Error> {
-        let app = create_app_by_name(self.username.as_deref(), name, selected_tab)
+        let server = crate::context::server_context_from_env()
+            .await
+            .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
+        let app = create_app_by_name(&server, self.username.as_deref(), name, selected_tab)
             .await
             .map_err(|e| russh::Error::IO(std::io::Error::other(e)))?;
         let result = self.set_and_render_app(app, session, channel);

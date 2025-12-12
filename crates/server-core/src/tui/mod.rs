@@ -12,16 +12,20 @@ use tui_core::{
 };
 
 use crate::{
-    error::{ServerError, ServerResult}, secrets::{SecretBoxedString, decrypt_string_if_encrypted, is_encrypted_marker}
+    ServerContext, error::{ServerError, ServerResult}, secrets::{SecretBoxedString, decrypt_string_if_encrypted, is_encrypted_marker}
 };
 
 /// Create a ManagementApp with all relay hosts loaded from the database (admin view)
-pub async fn create_management_app(review: Option<HostkeyReview>) -> ServerResult<ManagementApp> {
-    create_management_app_with_tab(0, review).await
+pub async fn create_management_app(server: &ServerContext, review: Option<HostkeyReview>) -> ServerResult<ManagementApp> {
+    create_management_app_with_tab(server, 0, review).await
 }
 
 /// Create a ManagementApp with a specific tab selected
-pub async fn create_management_app_with_tab(selected_tab: usize, review: Option<HostkeyReview>) -> ServerResult<ManagementApp> {
+pub async fn create_management_app_with_tab(
+    server: &ServerContext,
+    selected_tab: usize,
+    review: Option<HostkeyReview>,
+) -> ServerResult<ManagementApp> {
     // Admin sees all relay hosts (no filtering)
     use relay_selector::RelayItem;
     let hosts = crate::relay_host::list_hosts().await?;
@@ -35,7 +39,7 @@ pub async fn create_management_app_with_tab(selected_tab: usize, review: Option<
         .collect();
 
     // Credentials with counts
-    let creds_rows = crate::credential::list_credentials_with_assignments().await?;
+    let creds_rows = crate::credential::list_credentials_with_assignments(server).await?;
     let credentials: Vec<CredentialItem> = creds_rows
         .into_iter()
         .map(
@@ -70,13 +74,18 @@ pub async fn create_management_app_with_tab(selected_tab: usize, review: Option<
 /// - name: "Management" or any other value (treated as relay selector)
 /// - tab: optional tab index for Management
 /// - user: optional username; when None or Some("admin"), full admin relay list is shown
-pub async fn create_app_by_name(user: Option<&str>, name: &str, tab: Option<usize>) -> ServerResult<Box<dyn tui_core::TuiApp>> {
+pub async fn create_app_by_name(
+    server: &ServerContext,
+    user: Option<&str>,
+    name: &str,
+    tab: Option<usize>,
+) -> ServerResult<Box<dyn tui_core::TuiApp>> {
     match name {
         "Management" => {
             let app = if let Some(t) = tab {
-                create_management_app_with_tab(t, None).await?
+                create_management_app_with_tab(server, t, None).await?
             } else {
-                create_management_app(None).await?
+                create_management_app(server, None).await?
             };
             Ok(Box::new(app))
         }
@@ -90,6 +99,7 @@ pub async fn create_app_by_name(user: Option<&str>, name: &str, tab: Option<usiz
 /// Apply side effects for management-related AppActions (add/update/delete relay hosts).
 /// Centralizing this logic avoids divergence between local and SSH TUI paths.
 pub async fn handle_management_action(
+    server: &ServerContext,
     ctx: &rb_types::audit::AuditContext,
     action: tui_core::AppAction,
 ) -> ServerResult<Option<tui_core::AppAction>> {
@@ -116,6 +126,7 @@ pub async fn handle_management_action(
                     password,
                 } => {
                     let _ = super::credential::create_password_credential(
+                        server,
                         ctx,
                         &name,
                         username.as_deref(),
@@ -142,6 +153,7 @@ pub async fn handle_management_action(
                     };
                     let cert_data = cert_file; // may be None
                     let _ = super::credential::create_ssh_key_credential(
+                        server,
                         ctx,
                         &name,
                         username.as_deref(),
@@ -159,13 +171,16 @@ pub async fn handle_management_action(
                     public_key,
                 } => {
                     let _ =
-                        super::credential::create_agent_credential(ctx, &name, username.as_deref(), &public_key, &username_mode).await?;
+                        super::credential::create_agent_credential(server, ctx, &name, username.as_deref(), &public_key, &username_mode)
+                            .await?;
                 }
             }
         }
-        AppAction::DeleteCredential(id) => super::credential::delete_credential_by_id(ctx, id).await?,
-        AppAction::UnassignCredential(host_id) => super::credential::unassign_credential_by_id(ctx, host_id).await?,
-        AppAction::AssignCredential { host_id, cred_id } => super::credential::assign_credential_by_ids(ctx, host_id, cred_id).await?,
+        AppAction::DeleteCredential(id) => super::credential::delete_credential_by_id(server, ctx, id).await?,
+        AppAction::UnassignCredential(host_id) => super::credential::unassign_credential_by_id(server, ctx, host_id).await?,
+        AppAction::AssignCredential { host_id, cred_id } => {
+            super::credential::assign_credential_by_ids(server, ctx, host_id, cred_id).await?
+        }
         AppAction::FetchHostkey { id, name } => {
             info!(relay = %name, relay_id = id, "refreshing relay host key");
             // Fetch and stage hostkey for review
@@ -367,7 +382,8 @@ pub async fn fetch_relay_hostkey_for_web(
         .ok_or_else(|| ServerError::not_found("relay host", id.to_string()))?;
 
     let action = AppAction::FetchHostkey { id, name: host.name };
-    let result = handle_management_action(ctx, action).await?;
+    let server = crate::context::server_context_from_env().await?;
+    let result = handle_management_action(&server, ctx, action).await?;
 
     match result {
         Some(AppAction::ReviewHostkey(review)) => Ok((
@@ -390,6 +406,7 @@ pub async fn store_relay_hostkey_from_web(ctx: &rb_types::audit::AuditContext, i
         name: String::new(), // name is not used in StoreHostkey handler
         key: key_pem,
     };
-    handle_management_action(ctx, action).await?;
+    let server = crate::context::server_context_from_env().await?;
+    handle_management_action(&server, ctx, action).await?;
     Ok(())
 }

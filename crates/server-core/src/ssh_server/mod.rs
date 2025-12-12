@@ -272,17 +272,15 @@ async fn load_or_create_host_key(pool: &sqlx::SqlitePool) -> ServerResult<Privat
 
 /// Set a server option key/value in the shared state database.
 /// Avoid logging values here to prevent leaking secrets (OIDC client secrets, etc.).
-pub async fn set_server_option(key: &str, value: &str) -> ServerResult<()> {
-    let db = state_store::server_db().await?;
-    let pool = db.into_pool();
-
-    state_store::set_server_option(&pool, key, value).await?;
+pub async fn set_server_option(server: &crate::ServerContext, key: &str, value: &str) -> ServerResult<()> {
+    let pool = server.server_pool();
+    state_store::set_server_option(pool, key, value).await?;
     info!(key, "server option updated");
     Ok(())
 }
 
 /// Rotate secrets key - changes the master key and re-encrypts all encrypted data
-pub async fn rotate_secrets_key(old_input: &str, new_input: &str) -> ServerResult<()> {
+pub async fn rotate_secrets_key(server: &crate::ServerContext, old_input: &str, new_input: &str) -> ServerResult<()> {
     // Trim inputs to match load_master_key behavior (prevents rotation failures with whitespace)
     let old_input = old_input.trim();
     let new_input = new_input.trim();
@@ -306,14 +304,12 @@ pub async fn rotate_secrets_key(old_input: &str, new_input: &str) -> ServerResul
         secrets::derive_master_key_from_passphrase(new_input)?
     };
 
-    let db = state_store::server_db().await?;
-
-    let pool = db.into_pool();
+    let pool = server.server_pool();
 
     // Rotate credentials
     {
         let rows = sqlx::query("SELECT id, salt, nonce, secret FROM relay_credentials")
-            .fetch_all(&pool)
+            .fetch_all(pool)
             .await?;
         for row in rows {
             let id: i64 = row.get("id");
@@ -332,7 +328,7 @@ pub async fn rotate_secrets_key(old_input: &str, new_input: &str) -> ServerResul
                 .bind(&blob.ciphertext)
                 .bind(now)
                 .bind(id)
-                .execute(&pool)
+                .execute(pool)
                 .await?;
         }
     }
@@ -341,7 +337,7 @@ pub async fn rotate_secrets_key(old_input: &str, new_input: &str) -> ServerResul
     // options remain plaintext and only sensitive rows are re-encrypted.
     {
         let rows = sqlx::query("SELECT relay_host_id, key, value, is_secure FROM relay_host_options")
-            .fetch_all(&pool)
+            .fetch_all(pool)
             .await?;
         for row in rows {
             let host_id: i64 = row.get("relay_host_id");
@@ -362,7 +358,7 @@ pub async fn rotate_secrets_key(old_input: &str, new_input: &str) -> ServerResul
                     .bind(reenc)
                     .bind(host_id)
                     .bind(key)
-                    .execute(&pool)
+                    .execute(pool)
                     .await?;
             } else if secrets::is_encrypted_marker(&value) {
                 // Data hygiene: if a non-secure row was encrypted previously, restore plaintext so consumers do not misinterpret it.
@@ -371,7 +367,7 @@ pub async fn rotate_secrets_key(old_input: &str, new_input: &str) -> ServerResul
                     .bind(plaintext.expose_secret().to_string())
                     .bind(host_id)
                     .bind(key)
-                    .execute(&pool)
+                    .execute(pool)
                     .await?;
             }
         }
