@@ -649,8 +649,8 @@ async fn handle_reattach(
     });
 }
 
-#[cfg(feature = "server")]
 #[allow(clippy::too_many_arguments)]
+#[cfg(feature = "server")]
 async fn handle_new_session(
     mut socket: TypedWebsocket<SshClientMsg, SshServerMsg, JsonEncoding>,
     registry: SharedRegistry,
@@ -664,7 +664,6 @@ async fn handle_new_session(
     term_dims: (u32, u32),
     axum_session_id: Option<String>,
 ) {
-    use server_core::sessions::session_backend::SessionBackend as _;
     use tokio::sync::{Mutex, mpsc::unbounded_channel};
     use uuid::Uuid;
 
@@ -704,15 +703,15 @@ async fn handle_new_session(
     // Track minimize state update if any arrived during handshake (unlikely given wait_for_client_ready)
     let mut current_minimized = is_minimized;
 
-    let backend: server_core::sessions::session_backend::RelayBackend = loop {
+    let (backend, initial_rx) = loop {
         use rb_types::ssh::SshControl;
 
         tokio::select! {
             res = &mut connect_fut => {
                 match res {
-                    Ok(backend) => {
+                    Ok((backend, initial_rx)) => {
                         info!(relay = %relay_name, "successfully connected to relay");
-                        break backend;
+                        break (backend, initial_rx);
                     }
                     Err(e) => {
                         error!(relay = %relay_name, error = %e, "failed to connect to relay");
@@ -790,10 +789,9 @@ async fn handle_new_session(
     // Connected! Backend is already managing the relay I/O
     use std::sync::Arc;
     let backend = Arc::new(backend);
-
-    // CRITICAL FIX: Subscribe NOW to capture any output that happens between now and appender start
-    // This prevents first message loss (race condition)
-    let initial_rx = backend.subscribe();
+    // `initial_rx` is pre-subscribed in `start_bridge_backend` before the relay I/O task starts.
+    // Use a resubscribe for history so both streams start at the same point.
+    let history_rx = initial_rx.resubscribe();
 
     // Record connection to ensure client_sessions entry exists for FK
     let registry_for_audit = registry.clone();
@@ -850,8 +848,7 @@ async fn handle_new_session(
 
     // Spawn task to append backend output to session history
     tokio::spawn(async move {
-        use server_core::sessions::session_backend::SessionBackend;
-        let mut output_rx = backend.as_ref().subscribe();
+        let mut output_rx = history_rx;
         let mut close_rx = session_for_history.close_tx.subscribe();
 
         loop {

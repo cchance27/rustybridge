@@ -10,7 +10,7 @@ use rb_types::{
 use russh::{ChannelMsg, client};
 use secrecy::ExposeSecret;
 use ssh_core::{crypto::default_preferred, forwarding::ForwardingManager, session::run_shell};
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::{broadcast, mpsc::{self, UnboundedReceiver, UnboundedSender}};
 use tracing::{info, warn};
 
 use super::{auth::authenticate_relay_session, credential::fetch_and_resolve_credential, handler::SharedRelayHandler};
@@ -84,7 +84,7 @@ pub async fn start_bridge_backend(
     options: &HashMap<String, SecretBoxedString>,
     prompt_tx: Option<UnboundedSender<AuthPromptEvent>>,
     auth_rx: Option<Arc<tokio::sync::Mutex<UnboundedReceiver<String>>>>,
-) -> Result<crate::sessions::session_backend::RelayBackend> {
+) -> Result<(crate::sessions::session_backend::RelayBackend, broadcast::Receiver<Vec<u8>>)> {
     use crate::sessions::session_backend::RelayBackend;
 
     // Build client config with secure defaults
@@ -161,6 +161,12 @@ pub async fn start_bridge_backend(
     // Create the backend
     let backend = RelayBackend::new(relay_handle, resize_tx);
     let output_tx = backend.output_tx();
+
+    // Pre-subscribe before spawning the relay I/O task.
+    // Tokio broadcast drops sends when there are zero receivers, which can lose
+    // the first chunk (often the MOTD/banner) during the tiny window between
+    // channel start and first client attach.
+    let initial_rx = output_tx.subscribe();
     let relay_name = relay.name.clone();
 
     // Spawn task to handle relay I/O and broadcast to all viewers
@@ -227,7 +233,7 @@ pub async fn start_bridge_backend(
         info!(relay = %relay_name, "relay loop terminated");
     });
 
-    Ok(backend)
+    Ok((backend, initial_rx))
 }
 
 /// Connect to a relay by name and return a RelayBackend for unified session management.
@@ -247,7 +253,7 @@ pub async fn connect_to_relay_backend(
     term_size: (u32, u32),
     prompt_tx: Option<UnboundedSender<AuthPromptEvent>>,
     auth_rx: Option<tokio::sync::Mutex<UnboundedReceiver<String>>>,
-) -> Result<crate::sessions::session_backend::RelayBackend> {
+) -> Result<(crate::sessions::session_backend::RelayBackend, broadcast::Receiver<Vec<u8>>)> {
     let db = state_store::server_db().await?;
     let pool = db.into_pool();
 

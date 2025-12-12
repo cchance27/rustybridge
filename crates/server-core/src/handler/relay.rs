@@ -134,8 +134,9 @@ impl ServerHandler {
                                     .await;
 
                                     match backend_result {
-                                        Ok(backend) => {
+                                        Ok((backend, initial_rx)) => {
                                             let backend = Arc::new(backend);
+                                            let initial_rx_for_bridge = initial_rx;
 
                                             // Register session with unified backend
                                             let (session_number, ssh_session) = registry_clone
@@ -233,7 +234,7 @@ impl ServerHandler {
                                             let ip_address_for_log = ip_address.clone();
 
                                             tokio::spawn(async move {
-                                                let mut output_rx = backend_for_bridge.subscribe();
+                                                let mut output_rx = initial_rx_for_bridge;
                                                 let mut close_rx = session_for_bridge.close_tx.subscribe();
                                                 let mut relay_closed = false;
                                                 let mut ping = tokio::time::interval(std::time::Duration::from_secs(5));
