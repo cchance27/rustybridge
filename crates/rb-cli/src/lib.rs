@@ -4,15 +4,13 @@ pub mod tui_input;
 
 pub fn init_tracing() {
     use tracing::level_filters::LevelFilter;
-    use tracing_subscriber::{fmt, prelude::*, reload, EnvFilter};
+    use tracing_subscriber::{EnvFilter, fmt, prelude::*, reload};
 
     // Set up panic hook to route panics through tracing
     std::panic::set_hook(Box::new(tracing_panic::panic_hook));
 
     let default_filter_str = "info,axum_session=warn".to_string();
-    let rust_log = std::env::var("RUST_LOG")
-        .ok()
-        .filter(|s| !s.trim().is_empty());
+    let rust_log = std::env::var("RUST_LOG").ok().filter(|s| !s.trim().is_empty());
 
     let (base_filter_str, env_filter) = match rust_log {
         Some(s) => match EnvFilter::try_new(&s) {

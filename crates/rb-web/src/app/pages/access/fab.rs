@@ -7,15 +7,15 @@ use rb_types::{
 };
 
 use crate::{
-    app::components::{MultiFab, Protected}, pages::access::modals::{AddGroupModal, AddRoleModal, AddUserModal}
+    app::components::{MultiFab, Protected}, error::ApiError, pages::access::modals::{AddGroupModal, AddRoleModal, AddUserModal}
 };
 
 /// Main FAB component - just controls which modals are open
 #[component]
 pub fn AccessFab(
-    users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>,
-    groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>,
-    roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>,
+    users: Resource<Result<Vec<UserGroupInfo<'static>>, ApiError>>,
+    groups: Resource<Result<Vec<GroupInfo<'static>>, ApiError>>,
+    roles: Resource<Result<Vec<RoleInfo<'static>>, ApiError>>,
 ) -> Element {
     let mut user_modal_open = use_signal(|| false);
     let mut group_modal_open = use_signal(|| false);

@@ -30,9 +30,7 @@ async fn main() -> Result<()> {
         std::env::var("RUST_LOG"),
         Ok(s) if !s.trim().is_empty()
     );
-    if !has_rust_log
-        && let Ok(level) = server_core::logging::get_server_log_level().await
-    {
+    if !has_rust_log && let Ok(level) = server_core::logging::get_server_log_level().await {
         let parsed = match level.as_str() {
             "error" => tracing::level_filters::LevelFilter::ERROR,
             "warn" => tracing::level_filters::LevelFilter::WARN,

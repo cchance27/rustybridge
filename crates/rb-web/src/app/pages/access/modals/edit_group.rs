@@ -8,7 +8,7 @@ use rb_types::{
 use crate::{
     app::api::{
         groups::{add_group_claim, remove_group_claim}, roles::{assign_role_to_group, revoke_role_from_group}
-    }, components::{Modal, use_toast}
+    }, components::{Modal, use_toast}, error::ApiError
 };
 
 /// Edit Group Modal with name, roles, and claims management
@@ -17,8 +17,8 @@ pub fn EditGroupModal(
     open: Signal<bool>,
     group_id: Signal<i64>,
     group_name: Signal<String>,
-    roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>,
-    groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>,
+    roles: Resource<Result<Vec<RoleInfo<'static>>, ApiError>>,
+    groups: Resource<Result<Vec<GroupInfo<'static>>, ApiError>>,
 ) -> Element {
     let name = group_name();
     let group_id_val = group_id();

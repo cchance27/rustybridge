@@ -7,15 +7,15 @@ use rb_types::{
 };
 
 use crate::{
-    app::api::{groups::*, users::*}, components::{Modal, Protected, StructuredTooltip, Table, TooltipSection, use_toast}, pages::access::modals::{ConfirmDeleteGroupModal, EditGroupModal, ManageGroupRolesModal}
+    app::api::{groups::*, users::*}, components::{Modal, Protected, StructuredTooltip, Table, TooltipSection, use_toast}, error::ApiError, pages::access::modals::{ConfirmDeleteGroupModal, EditGroupModal, ManageGroupRolesModal}
 };
 
 /// Main Groups Section component
 #[component]
 pub fn GroupsSection(
-    groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>,
-    users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>,
-    roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>,
+    groups: Resource<Result<Vec<GroupInfo<'static>>, ApiError>>,
+    users: Resource<Result<Vec<UserGroupInfo<'static>>, ApiError>>,
+    roles: Resource<Result<Vec<RoleInfo<'static>>, ApiError>>,
 ) -> Element {
     // Toast notification state
     let toast = use_toast();

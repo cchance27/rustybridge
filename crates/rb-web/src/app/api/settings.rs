@@ -5,14 +5,15 @@ use rb_types::audit::{DatabaseStats, RetentionConfig, RetentionResult, VacuumRes
 #[cfg(feature = "server")]
 use rb_types::auth::ClaimLevel;
 
+use crate::error::ApiError;
 #[cfg(feature = "server")]
 use crate::server::audit::WebAuditContext;
 #[cfg(feature = "server")]
 use crate::server::auth::guards::{WebAuthSession, ensure_claim};
 
 #[cfg(feature = "server")]
-fn ensure_server_claim(auth: &WebAuthSession, level: ClaimLevel) -> Result<(), ServerFnError> {
-    ensure_claim(auth, &rb_types::auth::ClaimType::Server(level)).map_err(|e| ServerFnError::new(e.to_string()))
+fn ensure_server_claim(auth: &WebAuthSession, level: ClaimLevel) -> Result<(), ApiError> {
+    ensure_claim(auth, &rb_types::auth::ClaimType::Server(level))
 }
 
 // --------------------------------
@@ -24,11 +25,9 @@ fn ensure_server_claim(auth: &WebAuthSession, level: ClaimLevel) -> Result<(), S
     "/api/admin/settings/retention",
     auth: WebAuthSession
 )]
-pub async fn get_retention_settings() -> Result<RetentionConfig, ServerFnError> {
+pub async fn get_retention_settings() -> Result<RetentionConfig, ApiError> {
     ensure_server_claim(&auth, ClaimLevel::View)?;
-    server_core::retention::get_retention_config()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))
+    server_core::retention::get_retention_config().await.map_err(ApiError::internal)
 }
 
 /// Update the retention configuration
@@ -37,7 +36,7 @@ pub async fn get_retention_settings() -> Result<RetentionConfig, ServerFnError> 
     auth: WebAuthSession,
     audit: WebAuditContext
 )]
-pub async fn update_retention_settings(config: RetentionConfig) -> Result<(), ServerFnError> {
+pub async fn update_retention_settings(config: RetentionConfig) -> Result<(), ApiError> {
     ensure_server_claim(&auth, ClaimLevel::Edit)?;
 
     // Log audit event for settings change
@@ -51,7 +50,7 @@ pub async fn update_retention_settings(config: RetentionConfig) -> Result<(), Se
 
     server_core::retention::set_retention_config(&config)
         .await
-        .map_err(|e| ServerFnError::new(e.to_string()))
+        .map_err(ApiError::internal)
 }
 
 // --------------------------------
@@ -63,11 +62,9 @@ pub async fn update_retention_settings(config: RetentionConfig) -> Result<(), Se
     "/api/admin/database/stats",
     auth: WebAuthSession
 )]
-pub async fn get_database_stats() -> Result<DatabaseStats, ServerFnError> {
+pub async fn get_database_stats() -> Result<DatabaseStats, ApiError> {
     ensure_server_claim(&auth, ClaimLevel::View)?;
-    server_core::retention::get_database_stats()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))
+    server_core::retention::get_database_stats().await.map_err(ApiError::internal)
 }
 
 // --------------------------------
@@ -80,12 +77,10 @@ pub async fn get_database_stats() -> Result<DatabaseStats, ServerFnError> {
     auth: WebAuthSession,
     audit: WebAuditContext
 )]
-pub async fn run_cleanup() -> Result<RetentionResult, ServerFnError> {
+pub async fn run_cleanup() -> Result<RetentionResult, ApiError> {
     ensure_server_claim(&auth, ClaimLevel::Delete)?;
 
-    let result = server_core::retention::run_retention_cleanup()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let result = server_core::retention::run_retention_cleanup().await.map_err(ApiError::internal)?;
 
     // Log audit event for admin-triggered cleanup
     if result.total_deleted() > 0 {
@@ -116,15 +111,13 @@ pub async fn run_cleanup() -> Result<RetentionResult, ServerFnError> {
 // On large databases (>1GB), this will cause API timeouts and block all other writes.
 // Risk: High Availability impact. Fix: Only allow running this via background task or
 // return 202 Accepted immediately.
-pub async fn vacuum_all_databases() -> Result<Vec<VacuumResult>, ServerFnError> {
+pub async fn vacuum_all_databases() -> Result<Vec<VacuumResult>, ApiError> {
     use rb_types::audit::EventType;
     use server_core::audit::log_event_from_context_best_effort;
 
     ensure_server_claim(&auth, ClaimLevel::Delete)?;
 
-    let result = server_core::retention::vacuum_all_databases()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let result = server_core::retention::vacuum_all_databases().await.map_err(ApiError::internal)?;
 
     // Log audit events
     for res in &result {
@@ -162,22 +155,17 @@ pub struct ServerLogLevelResponse {
     "/api/admin/settings/log_level",
     auth: WebAuthSession
 )]
-pub async fn get_server_log_level() -> Result<ServerLogLevelResponse, ServerFnError> {
+pub async fn get_server_log_level() -> Result<ServerLogLevelResponse, ApiError> {
     ensure_server_claim(&auth, ClaimLevel::View)?;
 
-    let level = server_core::logging::get_server_log_level()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let level = server_core::logging::get_server_log_level().await.map_err(ApiError::internal)?;
 
     let overridden_by_env = matches!(
         std::env::var("RUST_LOG"),
         Ok(s) if !s.trim().is_empty()
     );
 
-    Ok(ServerLogLevelResponse {
-        level,
-        overridden_by_env,
-    })
+    Ok(ServerLogLevelResponse { level, overridden_by_env })
 }
 
 /// Update server log level
@@ -186,7 +174,7 @@ pub async fn get_server_log_level() -> Result<ServerLogLevelResponse, ServerFnEr
     auth: WebAuthSession,
     audit: WebAuditContext
 )]
-pub async fn update_server_log_level(level: String) -> Result<(), ServerFnError> {
+pub async fn update_server_log_level(level: String) -> Result<(), ApiError> {
     ensure_server_claim(&auth, ClaimLevel::Edit)?;
 
     // Log audit event
@@ -198,7 +186,5 @@ pub async fn update_server_log_level(level: String) -> Result<(), ServerFnError>
     )
     .await;
 
-    server_core::logging::set_server_log_level(&level)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))
+    server_core::logging::set_server_log_level(&level).await.map_err(ApiError::internal)
 }

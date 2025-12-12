@@ -13,6 +13,7 @@ use tracing::{debug, error, info, trace, warn};
 #[cfg(feature = "server")]
 type SharedRegistry = std::sync::Arc<SessionRegistry>;
 
+use crate::error::ApiError;
 #[cfg(feature = "server")]
 use crate::server::auth::guards::{WebAuthSession, ensure_claim};
 
@@ -51,22 +52,18 @@ impl Drop for CleanupGuard {
     headers: HeaderMap
 )]
 #[allow(unused_variables)]
-pub async fn ssh_web_events(
-    client_id: String,
-    scope: Option<String>,
-    options: WebSocketOptions,
-) -> Result<SessionEventsSocket, ServerFnError> {
+pub async fn ssh_web_events(client_id: String, scope: Option<String>, options: WebSocketOptions) -> Result<SessionEventsSocket, ApiError> {
     #[cfg(feature = "server")]
     {
         use crate::server::auth::ensure_authenticated;
 
-        let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
+        let user = ensure_authenticated(&auth)?;
         let registry_inner = registry.0.clone();
         let user_id = user.id;
         let include_all = scope.as_deref() == Some("all");
 
         if include_all {
-            ensure_claim(&auth, &ClaimType::Server(ClaimLevel::View)).map_err(|e| ServerFnError::new(e.to_string()))?;
+            ensure_claim(&auth, &ClaimType::Server(ClaimLevel::View))?;
         }
         // client_id is passed as argument
 
@@ -236,6 +233,6 @@ pub async fn ssh_web_events(
     }
     #[cfg(not(feature = "server"))]
     {
-        Err(ServerFnError::new("Server only"))
+        Err(ApiError::internal("Server only"))
     }
 }

@@ -5,25 +5,24 @@ use rb_types::{
     auth::ClaimType, users::{CreateUserRequest, UpdateUserRequest, UserGroupInfo}
 };
 
+use crate::error::ApiError;
 #[cfg(feature = "server")]
 use crate::server::audit::WebAuditContext;
 #[cfg(feature = "server")]
 use crate::server::auth::guards::{WebAuthSession, ensure_claim};
 
 #[cfg(feature = "server")]
-fn ensure_user_claim(auth: &WebAuthSession, level: ClaimLevel) -> Result<(), ServerFnError> {
-    ensure_claim(auth, &ClaimType::Users(level)).map_err(|e| ServerFnError::new(e.to_string()))
+fn ensure_user_claim(auth: &WebAuthSession, level: ClaimLevel) -> Result<(), ApiError> {
+    ensure_claim(auth, &ClaimType::Users(level))
 }
 
 #[get(
     "/api/users",
     auth: WebAuthSession
 )]
-pub async fn list_users() -> Result<Vec<UserGroupInfo<'static>>, ServerFnError> {
+pub async fn list_users() -> Result<Vec<UserGroupInfo<'static>>, ApiError> {
     ensure_user_claim(&auth, ClaimLevel::View)?;
-    server_core::list_users_overview()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))
+    server_core::list_users_overview().await.map_err(ApiError::internal)
 }
 
 #[post(
@@ -31,13 +30,11 @@ pub async fn list_users() -> Result<Vec<UserGroupInfo<'static>>, ServerFnError> 
     auth: WebAuthSession,
     audit: WebAuditContext
 )]
-pub async fn create_user(req: CreateUserRequest) -> Result<(), ServerFnError> {
+pub async fn create_user(req: CreateUserRequest) -> Result<(), ApiError> {
     ensure_user_claim(&auth, ClaimLevel::Create)?;
     use server_core::add_user;
 
-    add_user(&audit.0, &req.username, &req.password)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))
+    add_user(&audit.0, &req.username, &req.password).await.map_err(ApiError::internal)
 }
 
 #[delete(
@@ -45,11 +42,11 @@ pub async fn create_user(req: CreateUserRequest) -> Result<(), ServerFnError> {
     auth: WebAuthSession,
     audit: WebAuditContext
 )]
-pub async fn delete_user(id: i64) -> Result<(), ServerFnError> {
+pub async fn delete_user(id: i64) -> Result<(), ApiError> {
     ensure_user_claim(&auth, ClaimLevel::Delete)?;
     use server_core::remove_user_by_id;
 
-    remove_user_by_id(&audit.0, id).await.map_err(|e| ServerFnError::new(e.to_string()))
+    remove_user_by_id(&audit.0, id).await.map_err(ApiError::internal)
 }
 
 #[put(
@@ -57,13 +54,13 @@ pub async fn delete_user(id: i64) -> Result<(), ServerFnError> {
     auth: WebAuthSession,
     audit: WebAuditContext
 )]
-pub async fn update_user(id: i64, req: UpdateUserRequest) -> Result<(), ServerFnError> {
+pub async fn update_user(id: i64, req: UpdateUserRequest) -> Result<(), ApiError> {
     ensure_user_claim(&auth, ClaimLevel::Edit)?;
 
     if let Some(password) = req.password {
         server_core::update_user_password_by_id(&audit.0, id, &password)
             .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
+            .map_err(ApiError::internal)?;
     }
 
     Ok(())
@@ -73,11 +70,9 @@ pub async fn update_user(id: i64, req: UpdateUserRequest) -> Result<(), ServerFn
     "/api/users/{id}/claims",
     auth: WebAuthSession
 )]
-pub async fn get_user_claims(id: i64) -> Result<Vec<ClaimType<'static>>, ServerFnError> {
+pub async fn get_user_claims(id: i64) -> Result<Vec<ClaimType<'static>>, ApiError> {
     ensure_user_claim(&auth, ClaimLevel::View)?;
-    server_core::get_user_claims_by_id(id)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))
+    server_core::get_user_claims_by_id(id).await.map_err(ApiError::internal)
 }
 
 #[post(
@@ -85,11 +80,11 @@ pub async fn get_user_claims(id: i64) -> Result<Vec<ClaimType<'static>>, ServerF
     auth: WebAuthSession,
     audit: WebAuditContext
 )]
-pub async fn add_user_claim(id: i64, claim: ClaimType<'static>) -> Result<(), ServerFnError> {
+pub async fn add_user_claim(id: i64, claim: ClaimType<'static>) -> Result<(), ApiError> {
     ensure_user_claim(&auth, ClaimLevel::Edit)?;
     server_core::add_claim_to_user_by_id(&audit.0, id, &claim)
         .await
-        .map_err(|e| ServerFnError::new(e.to_string()))
+        .map_err(ApiError::internal)
 }
 
 /// Remove a claim from a user
@@ -99,9 +94,9 @@ pub async fn add_user_claim(id: i64, claim: ClaimType<'static>) -> Result<(), Se
     auth: WebAuthSession,
     audit: WebAuditContext
 )]
-pub async fn remove_user_claim(id: i64, claim: ClaimType<'static>) -> Result<(), ServerFnError> {
+pub async fn remove_user_claim(id: i64, claim: ClaimType<'static>) -> Result<(), ApiError> {
     ensure_user_claim(&auth, ClaimLevel::Edit)?;
     server_core::remove_claim_from_user_by_id(&audit.0, id, &claim)
         .await
-        .map_err(|e| ServerFnError::new(e.to_string()))
+        .map_err(ApiError::internal)
 }

@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 use once_cell::sync::OnceCell;
 use tracing::level_filters::LevelFilter;
-use tracing_subscriber::{reload, EnvFilter, Registry};
+use tracing_subscriber::{EnvFilter, Registry, reload};
 
 static RELOAD: OnceCell<reload::Handle<EnvFilter, Registry>> = OnceCell::new();
 static BASE_FILTER: OnceCell<String> = OnceCell::new();
@@ -16,11 +16,7 @@ const LEVELS: [LevelFilter; 5] = [
     LevelFilter::TRACE,
 ];
 
-pub fn set_reload_handle(
-    handle: reload::Handle<EnvFilter, Registry>,
-    initial: LevelFilter,
-    base_filter: String,
-) {
+pub fn set_reload_handle(handle: reload::Handle<EnvFilter, Registry>, initial: LevelFilter, base_filter: String) {
     let _ = RELOAD.set(handle);
     let _ = BASE_FILTER.set(base_filter);
     let idx = level_to_idx(initial);

@@ -12,6 +12,8 @@ pub use guards::*;
 use rb_types::auth::{AuthDecision, AuthUserInfo, LoginRequest, LoginResponse};
 pub use types::*;
 
+use crate::error::ApiError;
+
 pub mod oidc;
 pub mod oidc_link;
 pub mod oidc_unlink;
@@ -21,7 +23,7 @@ pub mod oidc_unlink;
     session: axum_session::Session<server_core::sessions::web::WebSessionManager>,
     connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>
 )]
-pub async fn login(request: LoginRequest) -> Result<LoginResponse<'static>> {
+pub async fn login(request: LoginRequest) -> Result<LoginResponse<'static>, ApiError> {
     // Touch the session to ensure it exists before we mutate auth state (avoids axum_session warnings)
     let session_id = session.get_session_id().to_string();
     let ip_address = connect_info.0.ip().to_string();
@@ -33,18 +35,13 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse<'static>> {
             // Get user ID and claims
 
             let user_id = server_core::api::get_user_id_by_name(&request.username)
-                .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?
-                .ok_or_else(|| anyhow::anyhow!("User not found"))?;
+                .await?
+                .ok_or(ApiError::Unauthorized)?;
 
-            let claims = server_core::api::get_user_claims_by_id(user_id)
-                .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let claims = server_core::api::get_user_claims_by_id(user_id).await?;
 
             // Fetch latest OIDC profile info if available
-            let oidc_profile = server_core::api::get_latest_oidc_profile(user_id)
-                .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let oidc_profile = server_core::api::get_latest_oidc_profile(user_id).await?;
 
             let (name, picture) = oidc_profile.map(|p| (p.name, p.picture)).unwrap_or((None, None));
 
@@ -116,7 +113,7 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse<'static>> {
                 Some(session_id),
             )
             .await;
-            Err(anyhow::anyhow!("Authentication error: {}", e).into())
+            Err(ApiError::internal(e))
         }
     }
 }
@@ -127,7 +124,7 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse<'static>> {
     session: axum_session::Session<server_core::sessions::web::WebSessionManager>,
     connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>
 )]
-pub async fn logout() -> Result<()> {
+pub async fn logout() -> Result<(), ApiError> {
     // Touch session so backing store entry exists before logout_user mutates it.
     if auth.is_authenticated() {
         if let Some(user) = auth.current_user.clone() {
@@ -153,7 +150,7 @@ pub async fn logout() -> Result<()> {
 }
 
 #[get("/api/auth/current-user", auth: WebAuthSession)]
-pub async fn get_current_user() -> Result<Option<AuthUserInfo<'static>>> {
+pub async fn get_current_user() -> Result<Option<AuthUserInfo<'static>>, ApiError> {
     if auth.is_authenticated() {
         if let Some(user) = auth.current_user {
             Ok(Some(AuthUserInfo {

@@ -4,7 +4,7 @@ use dioxus::prelude::*;
 use rb_types::{auth::ClaimType, users::RoleInfo};
 
 use crate::{
-    app::api::roles::{add_role_claim, remove_role_claim}, components::{Modal, use_toast}
+    app::api::roles::{add_role_claim, remove_role_claim}, components::{Modal, use_toast}, error::ApiError
 };
 
 /// Role Claims Management Modal
@@ -15,7 +15,7 @@ pub fn EditRoleClaimsModal(
     claims_role_name: Signal<String>,
     role_claims: Signal<Vec<ClaimType<'static>>>,
     role_selected_claim_to_add: Signal<String>,
-    roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>,
+    roles: Resource<Result<Vec<RoleInfo<'static>>, ApiError>>,
 ) -> Element {
     let is_super_admin = claims_role_name() == "Super Admin";
     let role_id_val = claims_role_id();

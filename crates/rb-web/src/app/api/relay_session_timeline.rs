@@ -2,13 +2,12 @@
 //!
 //! Provides endpoints for fetching session timeline data for visualization.
 
-#[cfg(feature = "server")]
-use dioxus::prelude::ServerFnError;
 use dioxus::prelude::*;
 #[cfg(feature = "server")]
 use rb_types::auth::{ClaimLevel, ClaimType};
 use serde::{Deserialize, Serialize};
 
+use crate::error::ApiError;
 #[cfg(feature = "server")]
 use crate::server::auth::guards::{WebAuthSession, ensure_claim};
 
@@ -50,20 +49,23 @@ pub struct RelaySessionTimelineData {
 // ==== API Endpoint ====
 
 #[cfg(feature = "server")]
-fn ensure_audit_claim(auth: &WebAuthSession, level: ClaimLevel) -> Result<(), ServerFnError> {
-    ensure_claim(auth, &ClaimType::Server(level)).map_err(|e| ServerFnError::new(e.to_string()))
+fn ensure_audit_claim(auth: &WebAuthSession, level: ClaimLevel) -> Result<(), ApiError> {
+    ensure_claim(auth, &ClaimType::Server(level))
 }
 
 /// Get timeline data for a specific session
 #[post("/api/audit/relay_session/{session_id}/timeline", auth: WebAuthSession)]
-pub async fn get_relay_session_timeline(session_id: String) -> Result<RelaySessionTimelineData> {
+pub async fn get_relay_session_timeline(session_id: String) -> Result<RelaySessionTimelineData, ApiError> {
     ensure_audit_claim(&auth, ClaimLevel::View)?;
 
     // 1. Get session info from recorded sessions
     let session_record = server_core::api::get_session_summary(&session_id)
         .await
-        .map_err(|e| ServerFnError::new(format!("Session lookup failed: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Session not found"))?;
+        .map_err(|e| ApiError::internal(format!("Session lookup failed: {}", e)))?
+        .ok_or_else(|| ApiError::NotFound {
+            kind: "Session".to_string(),
+            identifier: session_id.clone(),
+        })?;
 
     let session_info = SessionInfo {
         session_id: session_record.id.clone(),
@@ -80,7 +82,7 @@ pub async fn get_relay_session_timeline(session_id: String) -> Result<RelaySessi
     // 2. Query connection IDs that participated in this relay session
     let connection_ids = server_core::api::get_session_participant_connection_ids(&session_id)
         .await
-        .map_err(|e| ServerFnError::new(format!("Failed to get participants: {}", e)))?;
+        .map_err(|e| ApiError::internal(format!("Failed to get participants: {}", e)))?;
 
     // 3. Query events for all connection IDs
     let mut all_events: Vec<rb_types::audit::AuditEvent> = Vec::new();

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "server")]
 use tracing::info;
 
+use crate::error::ApiError;
 #[cfg(feature = "server")]
 use crate::server::auth::guards::WebAuthSession;
 
@@ -19,15 +20,15 @@ pub struct OidcLinkStatus {
     "/api/auth/oidc/link_status",
     auth: WebAuthSession,
 )]
-pub async fn get_oidc_link_status() -> Result<OidcLinkStatus, ServerFnError> {
+pub async fn get_oidc_link_status() -> Result<OidcLinkStatus, ApiError> {
     let user_id = match auth.current_user.as_ref() {
         Some(user) => user.id,
-        None => return Err(ServerFnError::new("Not authenticated")),
+        None => return Err(ApiError::Unauthorized),
     };
 
     let result = server_core::api::get_oidc_link_for_user(user_id)
         .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
+        .map_err(ApiError::internal)?;
 
     Ok(match result {
         Some(link) => OidcLinkStatus {
@@ -52,10 +53,10 @@ pub async fn get_oidc_link_status() -> Result<OidcLinkStatus, ServerFnError> {
     session: axum_session::Session<server_core::sessions::web::WebSessionManager>,
     connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>
 )]
-pub async fn unlink_oidc() -> Result<(), ServerFnError> {
+pub async fn unlink_oidc() -> Result<(), ApiError> {
     let user = match auth.current_user.as_ref() {
         Some(user) => user,
-        None => return Err(ServerFnError::new("Not authenticated")),
+        None => return Err(ApiError::Unauthorized),
     };
 
     let session_id = session.get_session_id().to_string();
@@ -64,7 +65,7 @@ pub async fn unlink_oidc() -> Result<(), ServerFnError> {
     let ctx = rb_types::audit::AuditContext::web(user.id, user.username.clone(), ip_address, session_id, None);
     let result = server_core::api::delete_oidc_link_for_user(&ctx, user.id)
         .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
+        .map_err(ApiError::internal)?;
 
     if result > 0 {
         info!(user_id = %user.id, "oidc account unlinked via server function");
@@ -72,7 +73,7 @@ pub async fn unlink_oidc() -> Result<(), ServerFnError> {
         auth.cache_clear_user(user.id);
         Ok(())
     } else {
-        Err(ServerFnError::new("No OIDC link found"))
+        Err(ApiError::not_found("oidc link", user.id.to_string()))
     }
 }
 
@@ -81,17 +82,17 @@ pub async fn unlink_oidc() -> Result<(), ServerFnError> {
     "/api/users/{user_id}/oidc_status",
     auth: WebAuthSession,
 )]
-pub async fn get_user_oidc_status(user_id: i64) -> Result<OidcLinkStatus, ServerFnError> {
+pub async fn get_user_oidc_status(user_id: i64) -> Result<OidcLinkStatus, ApiError> {
     use rb_types::auth::{ClaimLevel, ClaimType};
 
     use crate::server::auth::guards::ensure_claim;
 
     // Require users:view permission
-    ensure_claim(&auth, &ClaimType::Users(ClaimLevel::View)).map_err(|e| ServerFnError::new(e.to_string()))?;
+    ensure_claim(&auth, &ClaimType::Users(ClaimLevel::View))?;
 
     let result = server_core::api::get_oidc_link_for_user(user_id)
         .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
+        .map_err(ApiError::internal)?;
 
     Ok(match result {
         Some(link) => OidcLinkStatus {
@@ -116,13 +117,13 @@ pub async fn get_user_oidc_status(user_id: i64) -> Result<OidcLinkStatus, Server
     session: axum_session::Session<server_core::sessions::web::WebSessionManager>,
     connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>
 )]
-pub async fn unlink_user_oidc(user_id: i64) -> Result<(), ServerFnError> {
+pub async fn unlink_user_oidc(user_id: i64) -> Result<(), ApiError> {
     use rb_types::auth::{ClaimLevel, ClaimType};
 
     use crate::server::auth::guards::ensure_claim;
 
     // Require users:manage permission
-    ensure_claim(&auth, &ClaimType::Users(ClaimLevel::Edit)).map_err(|e| ServerFnError::new(e.to_string()))?;
+    ensure_claim(&auth, &ClaimType::Users(ClaimLevel::Edit))?;
 
     let admin_user = auth.current_user.as_ref().unwrap();
     let session_id = session.get_session_id().to_string();
@@ -131,7 +132,7 @@ pub async fn unlink_user_oidc(user_id: i64) -> Result<(), ServerFnError> {
     let ctx = rb_types::audit::AuditContext::web(admin_user.id, admin_user.username.clone(), ip_address, session_id, None);
     let result = server_core::api::delete_oidc_link_for_user(&ctx, user_id)
         .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
+        .map_err(ApiError::internal)?;
 
     if result > 0 {
         info!(
@@ -147,6 +148,6 @@ pub async fn unlink_user_oidc(user_id: i64) -> Result<(), ServerFnError> {
         }
         Ok(())
     } else {
-        Err(ServerFnError::new("No OIDC link found"))
+        Err(ApiError::not_found("oidc link", user_id.to_string()))
     }
 }

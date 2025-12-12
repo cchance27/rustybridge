@@ -4,6 +4,7 @@
 use dioxus::prelude::*;
 use rb_types::auth::{AuthUserInfo, LoginRequest, LoginResponse};
 
+use crate::error::ApiError;
 #[cfg(feature = "server")]
 use crate::server::auth::WebAuthSession;
 
@@ -13,7 +14,7 @@ use crate::server::auth::WebAuthSession;
     session: axum_session::Session<server_core::sessions::web::WebSessionManager>,
     connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>
 )]
-pub async fn login(request: LoginRequest) -> Result<LoginResponse<'static>> {
+pub async fn login(request: LoginRequest) -> Result<LoginResponse<'static>, ApiError> {
     use rb_types::auth::AuthDecision;
     use server_core::auth::authenticate_password;
 
@@ -28,18 +29,13 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse<'static>> {
 
             use rb_types::auth::AuthUserInfo;
             let user_id = server_core::get_user_id_by_name(&request.username)
-                .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?
-                .ok_or_else(|| anyhow::anyhow!("User not found"))?;
+                .await?
+                .ok_or(ApiError::Unauthorized)?;
 
-            let claims = server_core::get_user_claims_by_id(user_id)
-                .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let claims = server_core::get_user_claims_by_id(user_id).await?;
 
             // Fetch latest OIDC profile info if available
-            let oidc_profile = server_core::api::get_latest_oidc_profile(user_id)
-                .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let oidc_profile = server_core::api::get_latest_oidc_profile(user_id).await?;
 
             let (name, picture) = oidc_profile.map(|p| (p.name, p.picture)).unwrap_or((None, None));
 
@@ -111,7 +107,7 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse<'static>> {
                 Some(session_id),
             )
             .await;
-            Err(anyhow::anyhow!("Authentication error: {}", e).into())
+            Err(ApiError::Unauthorized)
         }
     }
 }
@@ -120,7 +116,7 @@ pub async fn login(request: LoginRequest) -> Result<LoginResponse<'static>> {
     "/api/auth/logout",
     auth: WebAuthSession,
 )]
-pub async fn logout() -> Result<()> {
+pub async fn logout() -> Result<(), ApiError> {
     if auth.is_authenticated() {
         auth.logout_user();
     }
@@ -129,7 +125,7 @@ pub async fn logout() -> Result<()> {
 }
 
 #[get("/api/auth/current-user", auth: WebAuthSession)]
-pub async fn get_current_user() -> Result<Option<AuthUserInfo<'static>>> {
+pub async fn get_current_user() -> Result<Option<AuthUserInfo<'static>>, ApiError> {
     if auth.is_authenticated() {
         if let Some(user) = auth.current_user {
             Ok(Some(AuthUserInfo {

@@ -84,10 +84,10 @@ pub fn set_master_key_for_test(key: &[u8]) {
 fn load_master_key() -> ServerResult<SecretVec<u8>> {
     #[cfg(test)]
     {
-        if let Ok(lock) = TEST_MASTER_KEY.read() {
-            if let Some(key) = lock.as_ref() {
-                return Ok(SecretVec::new(Box::new(key.clone())));
-            }
+        if let Ok(lock) = TEST_MASTER_KEY.read()
+            && let Some(key) = lock.as_ref()
+        {
+            return Ok(SecretVec::new(Box::new(key.clone())));
         }
     }
 

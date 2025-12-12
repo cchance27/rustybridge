@@ -1,21 +1,20 @@
 use dioxus::prelude::*;
 use rb_types::ssh::SshKey;
 
+use crate::error::ApiError;
 #[cfg(feature = "server")]
-use crate::server::audit::WebAuditContext;
-#[cfg(feature = "server")]
-use crate::server::auth::guards::{WebAuthSession, ensure_authenticated};
+use crate::server::{
+    audit::WebAuditContext, auth::guards::{WebAuthSession, ensure_authenticated}
+};
 
 #[get(
     "/api/my/ssh_keys",
     auth: WebAuthSession
 )]
-pub async fn get_my_ssh_keys() -> Result<Vec<SshKey>, ServerFnError> {
-    let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
+pub async fn get_my_ssh_keys() -> Result<Vec<SshKey>, ApiError> {
+    let user = ensure_authenticated(&auth)?;
 
-    let keys = server_core::list_user_public_keys_by_id(user.id)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let keys = server_core::list_user_public_keys_by_id(user.id).await?;
 
     Ok(keys
         .into_iter()
@@ -33,12 +32,10 @@ pub async fn get_my_ssh_keys() -> Result<Vec<SshKey>, ServerFnError> {
     auth: WebAuthSession,
     audit: WebAuditContext
 )]
-pub async fn add_my_ssh_key(public_key: String, comment: Option<String>) -> Result<(), ServerFnError> {
-    let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
+pub async fn add_my_ssh_key(public_key: String, comment: Option<String>) -> Result<(), ApiError> {
+    let user = ensure_authenticated(&auth)?;
 
-    server_core::add_user_public_key_by_id(&audit.0, user.id, &public_key, comment.as_deref())
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    server_core::add_user_public_key_by_id(&audit.0, user.id, &public_key, comment.as_deref()).await?;
 
     Ok(())
 }
@@ -48,21 +45,19 @@ pub async fn add_my_ssh_key(public_key: String, comment: Option<String>) -> Resu
     auth: WebAuthSession,
     audit: WebAuditContext
 )]
-pub async fn delete_my_ssh_key(key_id: i64) -> Result<(), ServerFnError> {
-    let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
+pub async fn delete_my_ssh_key(key_id: i64) -> Result<(), ApiError> {
+    let user = ensure_authenticated(&auth)?;
 
     // Verify ownership
-    let keys = server_core::list_user_public_keys_by_id(user.id)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let keys = server_core::list_user_public_keys_by_id(user.id).await?;
 
     if !keys.iter().any(|(id, _, _, _)| *id == key_id) {
-        return Err(ServerFnError::new("Key not found or access denied"));
+        return Err(ApiError::Forbidden {
+            message: "Key not found or access denied".to_string(),
+        });
     }
 
-    server_core::delete_user_public_key_by_id(&audit.0, key_id)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    server_core::delete_user_public_key_by_id(&audit.0, key_id).await?;
 
     Ok(())
 }

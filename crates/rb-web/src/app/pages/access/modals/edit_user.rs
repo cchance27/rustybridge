@@ -8,7 +8,7 @@ use rb_types::{
 use crate::{
     app::api::{
         groups::{add_member_to_group, remove_member_from_group}, roles::{assign_role_to_user, revoke_role_from_user}, users::*
-    }, components::{Modal, use_toast}
+    }, components::{Modal, use_toast}, error::ApiError
 };
 
 /// Edit User Modal with password, roles, groups, and claims management
@@ -17,9 +17,9 @@ pub fn EditUserModal(
     open: Signal<bool>,
     user_id: Signal<Option<i64>>,
     username: Signal<Option<String>>,
-    roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>,
-    groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>,
-    users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>,
+    roles: Resource<Result<Vec<RoleInfo<'static>>, ApiError>>,
+    groups: Resource<Result<Vec<GroupInfo<'static>>, ApiError>>,
+    users: Resource<Result<Vec<UserGroupInfo<'static>>, ApiError>>,
 ) -> Element {
     let Some(username_str) = username() else {
         return rsx!();

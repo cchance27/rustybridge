@@ -4,12 +4,12 @@ use dioxus::prelude::*;
 use rb_types::users::{CreateUserRequest, UserGroupInfo};
 
 use crate::{
-    app::api::users::create_user, components::{Modal, use_toast}
+    app::api::users::create_user, components::{Modal, use_toast}, error::ApiError
 };
 
 /// Self-contained Add User Modal
 #[component]
-pub fn AddUserModal(open: Signal<bool>, users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>) -> Element {
+pub fn AddUserModal(open: Signal<bool>, users: Resource<Result<Vec<UserGroupInfo<'static>>, ApiError>>) -> Element {
     let mut username = use_signal(String::new);
     let mut password = use_signal(String::new);
     let mut validation_errors = use_signal(HashMap::<String, String>::new);

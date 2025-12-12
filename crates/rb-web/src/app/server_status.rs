@@ -66,7 +66,7 @@ pub fn ServerStatusProvider(children: Element) -> Element {
 fn ServerStatusMonitor(state: Signal<ConnectionState>) -> Element {
     use dioxus::fullstack::WebSocketOptions;
 
-    use crate::app::api::ws::session_events::ssh_web_events;
+    use crate::{app::api::ws::session_events::ssh_web_events, error::ApiError};
 
     let toast = use_toast();
 
@@ -107,7 +107,7 @@ fn ServerStatusMonitor(state: Signal<ConnectionState>) -> Element {
                     loop {
                         match ssh_web_events("status-monitor".to_string(), None, WebSocketOptions::new()).await {
                             Ok(socket) => {
-                                ws.set(Ok::<_, dioxus::fullstack::ServerFnError>(socket));
+                                ws.set(Ok::<_, ApiError>(socket));
                                 // We'll wait for the next Ok from `recv` before marking Connected.
                                 break;
                             }

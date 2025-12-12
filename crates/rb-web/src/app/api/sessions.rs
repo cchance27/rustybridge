@@ -5,6 +5,7 @@ use server_core::sessions::SessionRegistry;
 #[cfg(feature = "server")]
 type SharedRegistry = std::sync::Arc<SessionRegistry>;
 
+use crate::error::ApiError;
 #[cfg(feature = "server")]
 use crate::server::auth::guards::{WebAuthSession, ensure_authenticated, ensure_claim};
 
@@ -13,11 +14,11 @@ use crate::server::auth::guards::{WebAuthSession, ensure_authenticated, ensure_c
     auth: WebAuthSession,
     registry: axum::Extension<SharedRegistry>
 )]
-pub async fn list_all_sessions() -> Result<Vec<AdminSessionSummary>, ServerFnError> {
-    // Require server:view claim to list all sessions
-
+pub async fn list_all_sessions() -> Result<Vec<AdminSessionSummary>, ApiError> {
     use rb_types::auth::{ClaimLevel, ClaimType};
-    ensure_claim(&auth, &ClaimType::Server(ClaimLevel::View)).map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    // Require server:view claim to list all sessions
+    ensure_claim(&auth, &ClaimType::Server(ClaimLevel::View))?;
 
     let sessions = registry.0.list_all_sessions().await;
     let mut summaries = Vec::new();
@@ -68,8 +69,8 @@ pub async fn list_all_sessions() -> Result<Vec<AdminSessionSummary>, ServerFnErr
     auth: WebAuthSession,
     registry: axum::Extension<SharedRegistry>
 )]
-pub async fn list_my_sessions() -> Result<Vec<UserSessionSummary>, ServerFnError> {
-    let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
+pub async fn list_my_sessions() -> Result<Vec<UserSessionSummary>, ApiError> {
+    let user = ensure_authenticated(&auth)?;
 
     let sessions = registry.0.list_sessions_for_user(user.id).await;
     let web_sessions = registry.0.list_web_sessions_for_user(user.id).await;
@@ -113,8 +114,8 @@ pub async fn list_my_sessions() -> Result<Vec<UserSessionSummary>, ServerFnError
     audit: crate::server::audit::WebAuditContext,
     registry: axum::Extension<SharedRegistry>
 )]
-pub async fn close_session(user_id: i64, relay_id: i64, session_number: u32) -> Result<(), ServerFnError> {
-    let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
+pub async fn close_session(user_id: i64, relay_id: i64, session_number: u32) -> Result<(), ApiError> {
+    let user = ensure_authenticated(&auth)?;
 
     // Check if user is closing their own session or has AttachAny claim, for now we're using this
     // claim as super high level claim, but we should likely have more granular claims.
@@ -122,7 +123,7 @@ pub async fn close_session(user_id: i64, relay_id: i64, session_number: u32) -> 
     if user.id != user_id {
         use rb_types::auth::ATTACH_ANY_CLAIM;
 
-        ensure_claim(&auth, &ATTACH_ANY_CLAIM).map_err(|e| ServerFnError::new(e.to_string()))?;
+        ensure_claim(&auth, &ATTACH_ANY_CLAIM)?;
     }
 
     if let Some(session) = registry.0.get_session(user_id, relay_id, session_number).await {
@@ -151,7 +152,10 @@ pub async fn close_session(user_id: i64, relay_id: i64, session_number: u32) -> 
         session.close().await;
         registry.0.remove_session(user_id, relay_id, session_number).await;
     } else {
-        return Err(ServerFnError::new("Session not found"));
+        return Err(ApiError::NotFound {
+            kind: "Session".to_string(),
+            identifier: session_number.to_string(),
+        });
     }
 
     Ok(())
@@ -164,20 +168,21 @@ pub async fn close_session(user_id: i64, relay_id: i64, session_number: u32) -> 
     auth: WebAuthSession,
     registry: axum::Extension<SharedRegistry>
 )]
-pub async fn attach_to_session(session_user_id: i64, relay_id: i64, session_number: u32) -> Result<String, ServerFnError> {
-    let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
+pub async fn attach_to_session(session_user_id: i64, relay_id: i64, session_number: u32) -> Result<String, ApiError> {
+    let user = ensure_authenticated(&auth)?;
 
     // Check permissions using centralized helper
-    crate::server::auth::guards::check_session_attach_access(&auth, session_user_id, relay_id)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    crate::server::auth::guards::check_session_attach_access(&auth, session_user_id, relay_id).await?;
 
     // Ensure the session exists and matches the relay/user
     let session = registry
         .0
         .get_session(session_user_id, relay_id, session_number)
         .await
-        .ok_or_else(|| ServerFnError::new("Session not found"))?;
+        .ok_or_else(|| ApiError::NotFound {
+            kind: "Session".to_string(),
+            identifier: session_number.to_string(),
+        })?;
 
     let mut url = format!(
         "/api/ws/ssh_connection/{}?session_number={}",

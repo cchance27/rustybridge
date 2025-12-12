@@ -20,27 +20,9 @@ use tracing::{error, info, warn};
 #[cfg(feature = "server")]
 type SharedRegistry = std::sync::Arc<SessionRegistry>;
 
+use crate::error::ApiError;
 #[cfg(feature = "server")]
 use crate::server::auth::guards::{WebAuthSession, ensure_authenticated};
-
-#[derive(Debug)]
-pub enum SshAccessError {
-    Unauthorized,
-    RelayNotFound,
-    RelayAccessDenied,
-    Internal,
-}
-
-impl From<SshAccessError> for ServerFnError {
-    fn from(err: SshAccessError) -> Self {
-        ServerFnError::new(match err {
-            SshAccessError::Unauthorized => "Unauthorized".to_string(),
-            SshAccessError::RelayNotFound => "Relay not found".to_string(),
-            SshAccessError::RelayAccessDenied => "Relay access denied".to_string(),
-            SshAccessError::Internal => "Internal error".to_string(),
-        })
-    }
-}
 
 #[derive(Serialize, Deserialize)]
 struct SshStatusResponse {
@@ -49,31 +31,24 @@ struct SshStatusResponse {
 }
 
 #[cfg(feature = "server")]
-async fn ensure_relay_websocket_permissions(relay_name: &str, auth: &WebAuthSession) -> Result<(String, i64, i64), SshAccessError> {
-    let user = ensure_authenticated(auth).map_err(|err| {
-        warn!(relay = %relay_name, error = %err, "unauthenticated ssh websocket attempt");
-        SshAccessError::Unauthorized
+async fn ensure_relay_websocket_permissions(relay_name: &str, auth: &WebAuthSession) -> Result<(String, i64, i64), ApiError> {
+    let user = ensure_authenticated(auth)?;
+
+    let relay = server_core::api::fetch_relay_by_name(relay_name).await?.ok_or_else(|| {
+        warn!(relay = %relay_name, "relay host not found");
+        ApiError::NotFound {
+            kind: "Relay".to_string(),
+            identifier: relay_name.to_string(),
+        }
     })?;
 
-    let relay = server_core::api::fetch_relay_by_name(relay_name)
-        .await
-        .map_err(|err| {
-            error!(relay = %relay_name, error = %err, "failed to fetch relay host");
-            SshAccessError::Internal
-        })?
-        .ok_or_else(|| {
-            warn!(relay = %relay_name, "relay host not found");
-            SshAccessError::RelayNotFound
-        })?;
-
-    let has_access = server_core::api::user_has_relay_access(user.id, relay.id).await.map_err(|err| {
-        error!(user = %user.username, relay = %relay_name, error = %err, "failed to check relay acl");
-        SshAccessError::Internal
-    })?;
+    let has_access = server_core::api::user_has_relay_access(user.id, relay.id).await?;
 
     if !has_access {
         warn!(user = %user.username, relay = %relay_name, "relay acl denied for user");
-        return Err(SshAccessError::RelayAccessDenied);
+        return Err(ApiError::Forbidden {
+            message: "Relay access denied".to_string(),
+        });
     }
 
     Ok((user.username.clone(), user.id, relay.id))
@@ -119,31 +94,33 @@ pub async fn ssh_terminal_ws(
     session_number: Option<u32>,
     target_user_id: Option<i64>,
     options: WebSocketOptions,
-) -> Result<SshWebSocket, ServerFnError> {
+) -> Result<SshWebSocket, ApiError> {
     // Extract state and auth
-    let user = ensure_authenticated(&auth).map_err(|e| ServerFnError::new(e.to_string()))?;
+    let user = ensure_authenticated(&auth)?;
     let authenticated_user_id = user.id;
 
     // Resolve relay
     let relay = server_core::api::fetch_relay_by_name(&relay_name)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?
-        .ok_or_else(|| ServerFnError::new("Relay not found"))?;
+        .await?
+        .ok_or_else(|| ApiError::NotFound {
+            kind: "Relay".to_string(),
+            identifier: relay_name.clone(),
+        })?;
 
     // Determine target user ID (default to self)
     let target_id = target_user_id.unwrap_or(user.id);
 
     // Check permissions using centralized helper
-    crate::server::auth::guards::check_session_attach_access(&auth, target_id, relay.id)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    crate::server::auth::guards::check_session_attach_access(&auth, target_id, relay.id).await?;
 
     let (effective_user_id, effective_username) = if user.id != target_id {
         // Admin attaching to another user
         let target_user = server_core::api::fetch_user_auth_record_by_id(target_id)
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?
-            .ok_or_else(|| ServerFnError::new("Target user not found"))?;
+            .await?
+            .ok_or_else(|| ApiError::NotFound {
+                kind: "User".to_string(),
+                identifier: target_id.to_string(),
+            })?;
         (target_id, target_user.username)
     } else {
         // Attaching to self (or admin to self)
@@ -264,7 +241,7 @@ pub async fn ssh_terminal_ws(
     "/api/ssh/{relay_name}/status", 
     auth: WebAuthSession
 )]
-pub async fn ssh_terminal_status(relay_name: String) -> Result<SshStatusResponse, ServerFnError> {
+pub async fn ssh_terminal_status(relay_name: String) -> Result<SshStatusResponse, ApiError> {
     let _ = ensure_relay_websocket_permissions(&relay_name, &auth).await?;
 
     Ok(SshStatusResponse {

@@ -9,15 +9,15 @@ use rb_types::{
 use crate::{
     app::{
         api::users::*, auth::oidc::{OidcLinkStatus, get_user_oidc_status, unlink_user_oidc}
-    }, components::{Protected, StructuredTooltip, Table, TableActions, TooltipSection, buttons::HoverSwapButton, icons, use_toast}, pages::access::modals::{ConfirmDeleteUserModal, EditUserModal, ManageUserGroupsModal, ManageUserRolesModal, UnlinkUserModal}
+    }, components::{Protected, StructuredTooltip, Table, TableActions, TooltipSection, buttons::HoverSwapButton, icons, use_toast}, error::ApiError, pages::access::modals::{ConfirmDeleteUserModal, EditUserModal, ManageUserGroupsModal, ManageUserRolesModal, UnlinkUserModal}
 };
 
 /// Main Users Section component
 #[component]
 pub fn UsersSection(
-    users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>,
-    roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>,
-    groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>,
+    users: Resource<Result<Vec<UserGroupInfo<'static>>, ApiError>>,
+    roles: Resource<Result<Vec<RoleInfo<'static>>, ApiError>>,
+    groups: Resource<Result<Vec<GroupInfo<'static>>, ApiError>>,
 ) -> Element {
     // Toast notification state
     let toast = use_toast();
@@ -396,7 +396,7 @@ fn OidcStatusCell(
     user_id: i64,
     username: String,
     oidc_refresh_trigger: Signal<u32>,
-    users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>,
+    users: Resource<Result<Vec<UserGroupInfo<'static>>, ApiError>>,
 ) -> Element {
     // Track per-user OIDC status; kept inside its own component to satisfy Dioxus hook ordering rules.
     let mut oidc_status = use_signal(|| None::<OidcLinkStatus>);

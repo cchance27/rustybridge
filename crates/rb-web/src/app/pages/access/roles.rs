@@ -7,15 +7,15 @@ use rb_types::{
 };
 
 use crate::{
-    app::api::roles::*, components::{Protected, StructuredTooltip, Table, TooltipSection, icons, use_toast}, pages::access::modals::{ConfirmDeleteRoleModal, EditRoleClaimsModal, ManageRoleGroupsModal, ManageRoleUsersModal}
+    app::api::roles::*, components::{Protected, StructuredTooltip, Table, TooltipSection, icons, use_toast}, error::ApiError, pages::access::modals::{ConfirmDeleteRoleModal, EditRoleClaimsModal, ManageRoleGroupsModal, ManageRoleUsersModal}
 };
 
 /// Main Roles Section component
 #[component]
 pub fn RolesSection(
-    roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>,
-    users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>,
-    groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>,
+    roles: Resource<Result<Vec<RoleInfo<'static>>, ApiError>>,
+    users: Resource<Result<Vec<UserGroupInfo<'static>>, ApiError>>,
+    groups: Resource<Result<Vec<GroupInfo<'static>>, ApiError>>,
 ) -> Element {
     // Toast notification state
     let toast = use_toast();

@@ -1,7 +1,3 @@
-#[cfg(feature = "server")]
-use anyhow::anyhow;
-#[cfg(feature = "server")]
-use dioxus::prelude::ServerFnError;
 use dioxus::{
     fullstack::{JsonEncoding, WebSocketOptions, Websocket}, prelude::*
 };
@@ -16,6 +12,7 @@ use tracing::{debug, error, info};
 #[cfg(feature = "server")]
 use vt100;
 
+use crate::error::ApiError;
 #[cfg(feature = "server")]
 use crate::server::auth::guards::{WebAuthSession, ensure_claim};
 
@@ -25,8 +22,8 @@ pub type SessionChunk = RecordedSessionChunk;
 pub type SessionSummary = RecordedSessionSummary;
 
 #[cfg(feature = "server")]
-fn ensure_audit_claim(auth: &WebAuthSession, level: ClaimLevel) -> Result<(), ServerFnError> {
-    ensure_claim(auth, &ClaimType::Server(level)).map_err(|e| ServerFnError::new(e.to_string()))
+fn ensure_audit_claim(auth: &WebAuthSession, level: ClaimLevel) -> Result<(), ApiError> {
+    ensure_claim(auth, &ClaimType::Server(level))
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -51,7 +48,7 @@ pub struct PagedSessions {
 
 /// List recorded sessions (admin view - all sessions)
 #[post("/api/audit/sessions", auth: WebAuthSession)]
-pub async fn list_sessions(query: ListSessionsQuery) -> Result<PagedSessions> {
+pub async fn list_sessions(query: ListSessionsQuery) -> Result<PagedSessions, ApiError> {
     ensure_audit_claim(&auth, ClaimLevel::View)?;
 
     let page = query.page.unwrap_or(1).max(1);
@@ -72,8 +69,7 @@ pub async fn list_sessions(query: ListSessionsQuery) -> Result<PagedSessions> {
         },
         true,
     )
-    .await
-    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    .await?;
 
     let sessions = result.records.into_iter().map(|s| s.to_recorded()).collect();
 
@@ -85,8 +81,8 @@ pub async fn list_sessions(query: ListSessionsQuery) -> Result<PagedSessions> {
 
 /// List recorded sessions for current user only (profile view)
 #[get("/api/audit/my-sessions", auth: WebAuthSession)]
-pub async fn list_my_sessions() -> Result<Vec<RecordedSession>> {
-    let user_id = auth.current_user.as_ref().ok_or_else(|| anyhow!("Not authenticated"))?.id;
+pub async fn list_my_sessions() -> Result<Vec<RecordedSession>, ApiError> {
+    let user_id = auth.current_user.as_ref().ok_or(ApiError::Unauthorized)?.id;
 
     let result = server_core::api::query_sessions(
         server_core::api::SessionQuery {
@@ -99,8 +95,7 @@ pub async fn list_my_sessions() -> Result<Vec<RecordedSession>> {
         },
         true,
     )
-    .await
-    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    .await?;
 
     Ok(result.records.into_iter().map(|s| s.to_recorded()).collect())
 }
@@ -131,7 +126,7 @@ pub struct PagedEvents {
 
 /// List audit events with filtering and pagination (admin only)
 #[post("/api/audit/events", auth: WebAuthSession)]
-pub async fn list_audit_events(query: ListEventsQuery) -> Result<PagedEvents> {
+pub async fn list_audit_events(query: ListEventsQuery) -> Result<PagedEvents, ApiError> {
     ensure_audit_claim(&auth, ClaimLevel::View)?;
 
     let page = query.page.unwrap_or(1).max(1);
@@ -172,30 +167,24 @@ pub async fn list_audit_events(query: ListEventsQuery) -> Result<PagedEvents> {
     }
 
     // Query events
-    let events = server_core::audit::query_events(filter.clone())
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let events = server_core::audit::query_events(filter.clone()).await?;
 
     // Count total for pagination (without limit/offset)
     let mut count_filter = filter.clone();
     count_filter.limit = None;
     count_filter.offset = None;
-    let total = server_core::audit::count_events(count_filter)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let total = server_core::audit::count_events(count_filter).await?;
 
     Ok(PagedEvents { events, total })
 }
 
 /// Get audit events for a specific session (for timeline view)
 #[get("/api/audit/sessions/:id/audit-events", auth: WebAuthSession)]
-pub async fn get_session_audit_events(id: String) -> Result<Vec<AuditEvent>> {
+pub async fn get_session_audit_events(id: String) -> Result<Vec<AuditEvent>, ApiError> {
     let summary = load_session_summary(&id).await?;
     authorize_session_view(&auth, &summary).await?;
 
-    let events = server_core::audit::query_events_by_session(id, Some(500))
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let events = server_core::audit::query_events_by_session(id, Some(500)).await?;
 
     Ok(events)
 }
@@ -226,7 +215,7 @@ pub struct GroupSummaryWithCount {
 
 /// Get event group summaries with true counts
 #[post("/api/audit/events/groups", auth: WebAuthSession)]
-pub async fn get_event_groups(query: GroupSummaryQuery) -> Result<Vec<GroupSummaryWithCount>> {
+pub async fn get_event_groups(query: GroupSummaryQuery) -> Result<Vec<GroupSummaryWithCount>, ApiError> {
     ensure_audit_claim(&auth, ClaimLevel::View)?;
 
     let mut filter = EventFilter::new();
@@ -244,9 +233,7 @@ pub async fn get_event_groups(query: GroupSummaryQuery) -> Result<Vec<GroupSumma
         filter.end_time = Some(end);
     }
 
-    let groups = server_core::audit::query_event_groups(&query.group_by, filter, query.limit)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let groups = server_core::audit::query_event_groups(&query.group_by, filter, query.limit).await?;
 
     let results: Vec<GroupSummaryWithCount> = groups
         .into_iter()
@@ -330,7 +317,7 @@ pub struct StreamEventsResponse {
 
 /// Stream audit events with cursor-based pagination and grouping
 #[post("/api/audit/events/stream", auth: WebAuthSession)]
-pub async fn stream_audit_events(query: StreamEventsQuery) -> Result<StreamEventsResponse> {
+pub async fn stream_audit_events(query: StreamEventsQuery) -> Result<StreamEventsResponse, ApiError> {
     ensure_audit_claim(&auth, ClaimLevel::View)?;
 
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
@@ -380,7 +367,7 @@ pub async fn stream_audit_events(query: StreamEventsQuery) -> Result<StreamEvent
     // Query events (ordered by timestamp DESC by default)
     let mut events = server_core::audit::query_events(filter.clone()).await.map_err(|e| {
         error!(error = %e, "stream_audit_events query error");
-        ServerFnError::new(e.to_string())
+        ApiError::internal(e)
     })?;
 
     debug!(count = events.len(), "stream_audit_events: got events");
@@ -491,38 +478,35 @@ pub struct SessionReplayResponse {
 }
 
 #[cfg(feature = "server")]
-async fn load_session_summary(id: &str) -> Result<RecordedSession> {
-    let summary = server_core::api::get_session_summary(id)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?
-        .ok_or_else(|| ServerFnError::new("Session not found"))?;
+async fn load_session_summary(id: &str) -> Result<RecordedSession, ApiError> {
+    let summary = server_core::api::get_session_summary(id).await?.ok_or_else(|| ApiError::NotFound {
+        kind: "Session".to_string(),
+        identifier: id.to_string(),
+    })?;
     Ok(summary.to_recorded())
 }
 
 #[cfg(feature = "server")]
-async fn authorize_session_view(auth: &WebAuthSession, summary: &RecordedSession) -> Result<(), ServerFnError> {
-    let current_user_id = auth
-        .current_user
-        .as_ref()
-        .ok_or_else(|| ServerFnError::new("Not authenticated"))?
-        .id;
+async fn authorize_session_view(auth: &WebAuthSession, summary: &RecordedSession) -> Result<(), ApiError> {
+    let current_user_id = auth.current_user.as_ref().ok_or(ApiError::Unauthorized)?.id;
     let has_admin_claim = ensure_audit_claim(auth, ClaimLevel::View).is_ok();
 
     if has_admin_claim || summary.user_id == current_user_id {
         Ok(())
     } else {
-        Err(ServerFnError::new("Forbidden: You can only view your own sessions"))
+        Err(ApiError::Forbidden {
+            message: "You can only view your own sessions".to_string(),
+        })
     }
 }
 
 #[cfg(feature = "server")]
-pub async fn replay_session_internal(id: String, auth: WebAuthSession) -> Result<SessionReplayResponse> {
+pub async fn replay_session_internal(id: String, auth: WebAuthSession) -> Result<SessionReplayResponse, ApiError> {
     let summary = load_session_summary(&id).await?;
     authorize_session_view(&auth, &summary).await?;
 
     let chunks: Vec<SessionChunk> = server_core::api::fetch_session_chunks(&id)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?
+        .await?
         .into_iter()
         .map(RecordedSessionChunk::from)
         .collect();
@@ -532,13 +516,13 @@ pub async fn replay_session_internal(id: String, auth: WebAuthSession) -> Result
 
 /// Get session chunks for replay
 #[get("/api/audit/sessions/:id/replay", auth: WebAuthSession)]
-pub async fn replay_session(id: String) -> Result<SessionReplayResponse> {
+pub async fn replay_session(id: String) -> Result<SessionReplayResponse, ApiError> {
     replay_session_internal(id, auth).await
 }
 
 /// Lightweight metadata endpoint (no chunk payload) for the session player
 #[get("/api/audit/sessions/:id/meta", auth: WebAuthSession)]
-pub async fn session_summary(id: String) -> Result<SessionSummary> {
+pub async fn session_summary(id: String) -> Result<SessionSummary, ApiError> {
     let summary = load_session_summary(&id).await?;
     authorize_session_view(&auth, &summary).await?;
     Ok(summary)
@@ -601,7 +585,7 @@ fn build_snapshot_from_chunks(
         }
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(&ch.data)
-            .map_err(|e| anyhow!("snapshot decode failed: {e}"))?;
+            .map_err(|e| ApiError::internal(format!("snapshot decode failed: {e}")))?;
         vt.process(&decoded);
         last_ts = ch.timestamp;
     }
@@ -626,14 +610,14 @@ fn build_snapshot_from_chunks(
 pub async fn session_stream_ws(
     id: String,
     options: WebSocketOptions,
-) -> Result<Websocket<SessionStreamClient, SessionStreamServer, JsonEncoding>> {
+) -> Result<Websocket<SessionStreamClient, SessionStreamServer, JsonEncoding>, ApiError> {
     let summary = load_session_summary(&id).await?;
     authorize_session_view(&auth, &summary).await?;
 
     // Preload chunks once; streaming slices them to respect byte budgets.
     let all_chunks: Vec<SessionChunk> = server_core::api::fetch_session_chunks(&id)
         .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?
+        .map_err(ApiError::from)?
         .into_iter()
         .map(RecordedSessionChunk::from)
         .collect();
@@ -751,7 +735,7 @@ pub async fn session_stream_ws(
 
 /// Get all input events for a session (for timeline/sidebar)
 #[get("/api/audit/sessions/:id/events", auth: WebAuthSession)]
-pub async fn get_session_events(id: String) -> Result<Vec<SessionChunk>> {
+pub async fn get_session_events(id: String) -> Result<Vec<SessionChunk>, ApiError> {
     let summary = load_session_summary(&id).await?;
     authorize_session_view(&auth, &summary).await?;
 

@@ -4,12 +4,12 @@ use dioxus::prelude::*;
 use rb_types::users::GroupInfo;
 
 use crate::{
-    app::api::groups::create_group, components::{Modal, use_toast}
+    app::api::groups::create_group, components::{Modal, use_toast}, error::ApiError
 };
 
 /// Self-contained Add Group Modal
 #[component]
-pub fn AddGroupModal(open: Signal<bool>, groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>) -> Element {
+pub fn AddGroupModal(open: Signal<bool>, groups: Resource<Result<Vec<GroupInfo<'static>>, ApiError>>) -> Element {
     let mut group_name = use_signal(String::new);
     let mut validation_errors = use_signal(HashMap::<String, String>::new);
     let toast = use_toast();

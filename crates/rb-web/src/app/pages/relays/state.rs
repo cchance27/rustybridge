@@ -1,18 +1,18 @@
 use std::collections::HashMap;
 
-use dioxus::{CapturedError, prelude::*};
+use dioxus::prelude::*;
 use rb_types::{
     credentials::CredentialInfo, relay::{HostkeyReview, RelayHostInfo}, validation::ValidationError
 };
 
-use crate::app::api::relays::*;
+use crate::{app::api::relays::*, error::ApiError};
 
 /// Centralized state management for the Relays page
 #[derive(Clone, Copy, PartialEq)]
 pub struct RelayState {
     // Relay data and resources
-    pub relays: Resource<Result<Vec<RelayHostInfo>, CapturedError>>,
-    pub credentials: Resource<Result<Vec<CredentialInfo>, CapturedError>>,
+    pub relays: Resource<Result<Vec<RelayHostInfo>, ApiError>>,
+    pub credentials: Resource<Result<Vec<CredentialInfo>, ApiError>>,
 
     // Assign credential modal state
     pub assign_modal_open: Signal<bool>,

@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 use rb_types::users::{GroupInfo, UserGroupInfo};
 
 use crate::{
-    app::api::groups::{add_member_to_group, remove_member_from_group}, components::{Modal, use_toast}
+    app::api::groups::{add_member_to_group, remove_member_from_group}, components::{Modal, use_toast}, error::ApiError
 };
 
 /// User Groups Management Modal
@@ -14,8 +14,8 @@ pub fn ManageUserGroupsModal(
     user_groups: Signal<Vec<String>>,
     available_groups: Signal<Vec<String>>,
     selected_group_to_add: Signal<String>,
-    users: Resource<Result<Vec<UserGroupInfo<'static>>, ServerFnError>>,
-    groups: Resource<Result<Vec<GroupInfo<'static>>, ServerFnError>>,
+    users: Resource<Result<Vec<UserGroupInfo<'static>>, ApiError>>,
+    groups: Resource<Result<Vec<GroupInfo<'static>>, ApiError>>,
 ) -> Element {
     let toast = use_toast();
     let add_group_handler = move |_| {

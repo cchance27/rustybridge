@@ -10,7 +10,9 @@ use rb_types::{
 use russh::{ChannelMsg, client};
 use secrecy::ExposeSecret;
 use ssh_core::{crypto::default_preferred, forwarding::ForwardingManager, session::run_shell};
-use tokio::sync::{broadcast, mpsc::{self, UnboundedReceiver, UnboundedSender}};
+use tokio::sync::{
+    broadcast, mpsc::{self, UnboundedReceiver, UnboundedSender}
+};
 use tracing::{info, warn};
 
 use super::{auth::authenticate_relay_session, credential::fetch_and_resolve_credential, handler::SharedRelayHandler};

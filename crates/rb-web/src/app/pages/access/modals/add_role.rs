@@ -4,12 +4,12 @@ use dioxus::prelude::*;
 use rb_types::users::RoleInfo;
 
 use crate::{
-    app::api::roles::create_role, components::{Modal, use_toast}
+    app::api::roles::create_role, components::{Modal, use_toast}, error::ApiError
 };
 
 /// Self-contained Add Role Modal
 #[component]
-pub fn AddRoleModal(open: Signal<bool>, roles: Resource<Result<Vec<RoleInfo<'static>>, ServerFnError>>) -> Element {
+pub fn AddRoleModal(open: Signal<bool>, roles: Resource<Result<Vec<RoleInfo<'static>>, ApiError>>) -> Element {
     let mut role_name = use_signal(String::new);
     let mut role_description = use_signal(String::new);
     let mut validation_errors = use_signal(HashMap::<String, String>::new);
