@@ -6,23 +6,27 @@ use axum::Router;
 use dioxus::prelude::*;
 use tracing::{info, warn};
 
-/// Start the Dioxus fullstack web server with Axum integration.
+/// Create the configured Axum router with all middleware layers.
+///
+/// This function sets up:
+/// - Session layer (SQLite-backed cookie sessions)
+/// - Auth session layer (user authentication)
+/// - OIDC routes (login, callback, linking)
+/// - Audit export routes
+/// - ServerContext and SessionRegistry extensions
+///
+/// Used by both `run_web_server()` (production via rb-cli) and `dioxus::serve`
+/// (development via dx serve).
 #[cfg(feature = "server")]
-pub async fn run_web_server(
-    config: rb_types::config::WebServerConfig,
+pub async fn create_app_router(
     app: fn() -> Element,
     registry: std::sync::Arc<server_core::sessions::SessionRegistry>,
-) -> anyhow::Result<()> {
+    secure_cookies: bool,
+) -> anyhow::Result<Router> {
     use axum_session::{SameSite, SessionLayer, SessionStore};
     use axum_session_auth::AuthSessionLayer;
 
     use crate::{app::api, server::auth::WebUser};
-
-    if config.tls.is_some() {
-        warn!("native TLS requested but not yet implemented; serving HTTP");
-    }
-
-    let addr = format!("{}:{}", config.bind, config.port);
 
     // Initialize DB for session store
     let db_handle = server_core::api::server_db_handle().await?;
@@ -41,7 +45,7 @@ pub async fn run_web_server(
         .with_table_name("sessions")
         .with_cookie_same_site(SameSite::Lax)
         .with_http_only(true)
-        .with_secure(config.tls.is_some())
+        .with_secure(secure_cookies)
         .with_cookie_path("/");
 
     let session_manager = server_core::sessions::web::create_web_session_manager(&db_handle);
@@ -71,7 +75,30 @@ pub async fn run_web_server(
         .layer(axum::Extension(registry))
         .layer(axum::Extension(server_ctx))
         .layer(auth_layer)
-        .layer(session_layer)
+        .layer(session_layer);
+
+    Ok(router)
+}
+
+/// Start the Dioxus fullstack web server with Axum integration.
+///
+/// This is the production entry point used by rb-cli when running with --web.
+/// For development via `dx serve`, the app uses `dioxus::serve` with `create_app_router`.
+#[cfg(feature = "server")]
+pub async fn run_web_server(
+    config: rb_types::config::WebServerConfig,
+    app: fn() -> Element,
+    registry: std::sync::Arc<server_core::sessions::SessionRegistry>,
+) -> anyhow::Result<()> {
+    if config.tls.is_some() {
+        warn!("native TLS requested but not yet implemented; serving HTTP");
+    }
+
+    let addr = format!("{}:{}", config.bind, config.port);
+    let secure_cookies = config.tls.is_some();
+
+    let router = create_app_router(app, registry, secure_cookies)
+        .await?
         .into_make_service_with_connect_info::<std::net::SocketAddr>();
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
