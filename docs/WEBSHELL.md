@@ -223,7 +223,7 @@ Check Server side code with `cargo check -p rb-web --features server`
 
 **Files to Create/Modify**:
 - Created: `crates/rb-web/src/app/api/ws/session_events.rs` - Session events WebSocket endpoint
-- Created: `crates/rb-web/src/app/api/ws/mod.rs` - WebSocket module structure
+- Created: `crates/rb-web/src/app/api/ws.rs` - WebSocket module structure
 - Modified: [crates/server-core/src/sessions.rs](../crates/server-core/src/sessions.rs) - Add event broadcast and session summary
 - Modified: [crates/rb-web/src/app/session/provider.rs](../crates/rb-web/src/app/session/provider.rs) - Subscribe to events and handle all session lifecycle
 - Modified: [crates/rb-web/src/app/api/ws/ssh.rs](../crates/rb-web/src/app/api/ws/ssh.rs) - Renamed from ssh_websocket.rs and updated imports
@@ -515,7 +515,7 @@ Check Server side code with `cargo check -p rb-web --features server`
 - ✅ Server claims properly enforced via RBAC system
 
 **Files Created**:
-- ✅ `crates/rb-web/src/app/pages/server/mod.rs` - Server admin module
+- ✅ `crates/rb-web/src/app/pages/server.rs` - Server admin module
 - ✅ `crates/rb-web/src/app/pages/server/sessions.rs` - Admin sessions page
 - ✅ `crates/rb-web/src/app/pages/profile/sessions.rs` - User sessions page
 - ✅ `crates/rb-web/src/app/api/sessions.rs` - Session management API

@@ -94,7 +94,7 @@ Emitted from `server-core/src/handler/auth.rs`:
 
 ### User Management
 
-Emitted from `server-core/src/user/mod.rs` and `server-core/src/api.rs`:
+Emitted from `server-core/src/user.rs` and `server-core/src/api.rs`:
 
 - `UserCreated { username }`
 - `UserDeleted { username, user_id }`
@@ -108,7 +108,7 @@ Emitted from `server-core/src/user/mod.rs` and `server-core/src/api.rs`:
 
 ### Group Management
 
-Emitted from `server-core/src/group/mod.rs`:
+Emitted from `server-core/src/group.rs`:
 
 - `GroupCreated { name }`
 - `GroupDeleted { name, group_id }`
@@ -146,7 +146,7 @@ Hostkey capture/refresh events are emitted from both the SSH/TUI path and the we
 
 ### Credentials
 
-Emitted from `server-core/src/credential/mod.rs`:
+Emitted from `server-core/src/credential.rs`:
 
 - `CredentialCreated { name, kind }`
 - `CredentialUpdated { name, cred_id, kind }`
@@ -210,7 +210,7 @@ Some are wired (e.g., migrations); others can be hooked into startup/shutdown fl
 
 ### Web (rb-web)
 
-- `crates/rb-web/src/server/audit/mod.rs` defines `WebAuditContext` – an Axum extractor that:
+- `crates/rb-web/src/server/audit.rs` defines `WebAuditContext` – an Axum extractor that:
   - Pulls the authenticated `WebAuthSession`.
   - Extracts client IP from `ConnectInfo<SocketAddr>`.
   - Uses the session store ID as `session_id`.

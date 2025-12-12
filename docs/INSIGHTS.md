@@ -81,7 +81,7 @@ Data structures currently allow combinations of data that should be impossible.
 
 ### 1. Widespread SQL Bypasses
 - **Issue:** `server-core` extensively uses raw `sqlx` queries directly, completely bypassing the `state-store` abstraction layer. This creates tight coupling between `server-core` and the database schema, making schema evolution difficult and business logic harder to test.
-    - **Example Locations:** `ssh_server/mod.rs` (FIXME comment acknowledges this), `relay_host/management.rs`, `relay_host/options.rs`, `relay/connection.rs`, `user/mod.rs`, `tui/mod.rs`, `credential/mod.rs`, `handler/relay.rs`.
+    - **Example Locations:** `ssh_server.rs` (FIXME comment acknowledges this), `relay_host/management.rs`, `relay_host/options.rs`, `relay/connection.rs`, `user.rs`, `tui.rs`, `credential.rs`, `handler/relay.rs`.
     - **Action Required:** All database access logic *must* be encapsulated within the `state-store` crate. `server-core` should only interact with `state-store`'s public API.
 
 ### 2. Types Requiring Relocation to `rb-types`
@@ -107,7 +107,7 @@ Data structures currently allow combinations of data that should be impossible.
 - **Action Required:** Consolidate this logic into a shared module within `ssh-core` or, if `ssh-core` is meant for fundamental primitives, create a new `ssh-client-utils` crate.
 
 ### 2. Duplicated Host Key Verification Logic
-- **Issue:** The core logic for connecting to an SSH server as a client to fetch and verify its host key is duplicated across `client-core/src/hostkeys.rs`, `server-core/src/relay_host/management.rs`, and `server-core/src/tui/mod.rs`.
+- **Issue:** The core logic for connecting to an SSH server as a client to fetch and verify its host key is duplicated across `client-core/src/hostkeys.rs`, `server-core/src/relay_host/management.rs`, and `server-core/src/tui.rs`.
 - **Action Required:** Centralize the core logic of establishing a connection, capturing the public key, and comparing fingerprints into `ssh-core`. The user interaction and storage aspects can remain local to the respective crates.
 
 ### 3. Public Key Utilities

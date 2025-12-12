@@ -23,7 +23,7 @@ This document outlines the required rules and conventions for the `rustybridge` 
 *   **Toolchain**: Always use `cargo +nightly fmt`. Nightly is required due to our specific configuration settings.
 
 ## 3. Module Structure
-*   **Folder Style**: Prefer folder-style modules (e.g., `anchor/mod.rs`) over file-style modules (e.g., `anchor.rs`). This supports future expansion without renaming files later.
+*   **Module Style**: Prefer file-style modules (e.g., `anchor.rs` and `anchor/`) over folder-style modules (e.g., `anchor/mod.rs`). This is the modern Rust convention and keeps the file tree cleaner, Nested modules should result in `anchor.rs` and `anchor/submodule.rs`.
 
 ## 4. Data Access
 *   **State Store**: The `state-store` crate should encompass *all* database access functions. No direct DB queries should exist in consumer crates.
