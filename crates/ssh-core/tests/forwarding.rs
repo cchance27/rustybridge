@@ -1,3 +1,9 @@
+//! Integration tests for SSH port forwarding functionality.
+//!
+//! These tests verify local TCP forwarding, SOCKS proxy handling, remote forwarding,
+//! and the bidirectional stream proxying. Requires network access to bind sockets.
+//!
+//! Feature gated behind `forwarding-tests` to avoid running in normal test suites.
 #![cfg(feature = "forwarding-tests")]
 
 use std::{
@@ -8,8 +14,11 @@ use std::{
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use ssh_core::forwarding::{
-    DynamicSocksForward, ForwardSession, ForwardStream, ForwardingConfig, ForwardingManager, LocalTcpForward, RemoteForwardChannel, RemoteRegistrar, RemoteTcpForward, RemoteUnixForward
+#[cfg(unix)]
+use rb_types::ssh::RemoteUnixForward;
+use rb_types::ssh::{DynamicSocksForward, ForwardingConfig, LocalTcpForward, RemoteTcpForward};
+use ssh_core::{
+    SshCoreError, SshResult, forwarding::{ForwardSession, ForwardStream, ForwardingManager, RemoteForwardChannel, RemoteRegistrar}
 };
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt}, net::{TcpListener as TokioTcpListener, TcpStream}, sync::mpsc, time::{Duration, sleep}
@@ -482,7 +491,7 @@ impl ForwardSession for MockForwardSession {
         target_port: u16,
         origin_host: String,
         origin_port: u16,
-    ) -> Result<ForwardStream> {
+    ) -> SshResult<ForwardStream> {
         self.ops
             .lock()
             .unwrap()
@@ -492,19 +501,19 @@ impl ForwardSession for MockForwardSession {
         Ok(Box::new(client))
     }
 
-    async fn cancel_tcpip_forwarding(&self, _bind_address: String, _port: u32) -> Result<()> {
+    async fn cancel_tcpip_forwarding(&self, _bind_address: String, _port: u32) -> SshResult<()> {
         Ok(())
     }
 
     #[cfg(unix)]
-    async fn open_direct_streamlocal(&self, _remote_socket: std::path::PathBuf) -> Result<ForwardStream> {
+    async fn open_direct_streamlocal(&self, _remote_socket: std::path::PathBuf) -> SshResult<ForwardStream> {
         let (client, server) = io::duplex(1024);
         self.streams.send(server).unwrap();
         Ok(Box::new(client))
     }
 
     #[cfg(unix)]
-    async fn cancel_streamlocal_forwarding(&self, _remote_socket: String) -> Result<()> {
+    async fn cancel_streamlocal_forwarding(&self, _remote_socket: String) -> SshResult<()> {
         Ok(())
     }
 }
@@ -529,7 +538,7 @@ impl MockRegistrar {
 
 #[async_trait]
 impl RemoteRegistrar for MockRegistrar {
-    async fn request_tcpip_forward(&mut self, bind_address: String, bind_port: u16) -> Result<u32> {
+    async fn request_tcpip_forward(&mut self, bind_address: String, bind_port: u16) -> SshResult<u32> {
         let assigned = bind_port as u32 + 200;
         self.addresses.lock().unwrap().push(bind_address);
         self.ports.lock().unwrap().push_back(assigned);
@@ -537,7 +546,7 @@ impl RemoteRegistrar for MockRegistrar {
     }
 
     #[cfg(unix)]
-    async fn request_streamlocal_forward(&mut self, _remote_socket: String) -> Result<()> {
+    async fn request_streamlocal_forward(&mut self, _remote_socket: String) -> SshResult<()> {
         Ok(())
     }
 }
@@ -605,29 +614,29 @@ impl ForwardSession for ShutdownMockSession {
         _target_port: u16,
         _origin_host: String,
         _origin_port: u16,
-    ) -> Result<ForwardStream> {
-        Err(anyhow!("not used"))
+    ) -> SshResult<ForwardStream> {
+        Err(SshCoreError::Other("not used".into()))
     }
 
     #[cfg(unix)]
-    async fn open_direct_streamlocal(&self, _remote_socket: PathBuf) -> Result<ForwardStream> {
-        Err(anyhow!("not used"))
+    async fn open_direct_streamlocal(&self, _remote_socket: PathBuf) -> SshResult<ForwardStream> {
+        Err(SshCoreError::Other("not used".into()))
     }
 
-    async fn cancel_tcpip_forwarding(&self, bind_address: String, port: u32) -> Result<()> {
+    async fn cancel_tcpip_forwarding(&self, bind_address: String, port: u32) -> SshResult<()> {
         self.tcp_calls.lock().unwrap().push((bind_address, port));
         if self.fail_tcp {
-            Err(anyhow!("tcp cancel failure"))
+            Err(SshCoreError::Other("tcp cancel failure".into()))
         } else {
             Ok(())
         }
     }
 
     #[cfg(unix)]
-    async fn cancel_streamlocal_forwarding(&self, remote_socket: String) -> Result<()> {
+    async fn cancel_streamlocal_forwarding(&self, remote_socket: String) -> SshResult<()> {
         self.stream_calls.lock().unwrap().push(remote_socket.clone());
         if self.fail_stream {
-            Err(anyhow!("streamlocal cancel failure"))
+            Err(SshCoreError::Other("streamlocal cancel failure".into()))
         } else {
             Ok(())
         }
@@ -642,7 +651,7 @@ impl RemoteForwardChannel for MockRemoteChannel {
         self.stream.take().expect("stream available")
     }
 
-    async fn close(self) -> Result<()> {
+    async fn close(self) -> SshResult<()> {
         self.closed.store(true, Ordering::SeqCst);
         Ok(())
     }

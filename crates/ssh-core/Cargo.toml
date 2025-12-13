@@ -32,3 +32,4 @@ rb-types = { path = "../rb-types", features = ["clap"] }
 
 [dev-dependencies]
 rand.workspace = true
+anyhow.workspace = true

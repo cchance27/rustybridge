@@ -20,6 +20,7 @@ pub mod events;
 pub mod retention;
 
 #[cfg(test)]
+#[path = "audit_tests.rs"]
 mod tests;
 
 static AUDIT_MIGRATOR: Migrator = sqlx::migrate!("./migrations/audit");

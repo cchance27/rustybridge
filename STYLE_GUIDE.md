@@ -65,8 +65,53 @@ This document outlines the required rules and conventions for the `rustybridge` 
     *   Smart use of macros
 
 ## 14. Testing
-*   **Location**: Tests should be placed in a dedicated `tests/` folder at the crate root, adjacent to `src/`.
-*   **Avoid**: Do not use inline `#[cfg(test)] mod tests` for integration or unit tests that can be separated. Do not use separate test files mixed into `src`.
+
+### Unit Tests (Sibling Files)
+Unit tests that need access to private/internal items should be placed in sibling `_tests.rs` files:
+
+```
+src/
+├── my_module.rs
+└── my_module_tests.rs
+```
+
+Include the test file in the source module:
+```rust
+#[cfg(test)]
+#[path = "my_module_tests.rs"]
+mod tests;
+```
+
+**When to use:** Testing private functions, internal state, or implementation details.
+
+### Integration Tests (`tests/` Directory)
+Integration tests that only use the public API should be placed in the `tests/` directory at the crate root:
+
+```
+crate_root/
+├── src/
+└── tests/
+    └── feature_test.rs
+```
+
+**When to use:** Testing the crate's public API as an external consumer would.
+
+### Test Utilities
+Shared test utilities (fixtures, mocks, helpers) should be placed in `src/test_support.rs` and exported conditionally:
+
+```rust
+#[cfg(feature = "test-support")]
+pub mod test_support;
+```
+
+### Naming Conventions
+- Unit test files: `<module>_tests.rs`
+- Integration test files: `<feature>_test.rs` or `<feature>.rs`
+- Test functions: `test_<what_is_being_tested>()`
+
+### What NOT to Do
+- **Avoid**: Inline `#[cfg(test)] mod tests { ... }` blocks in source files
+- **Avoid**: Test files mixed into `src/` without the `_tests.rs` suffix
 
 ## 15. Audit Logging
 *   **Requirement**: All server-side events, state changes, and sensitive actions must trigger audit events.

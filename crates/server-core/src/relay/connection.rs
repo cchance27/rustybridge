@@ -490,3 +490,7 @@ pub async fn connect_to_relay_local(relay_name: &str, base_username: &str) -> Re
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "connection_tests.rs"]
+mod tests;
