@@ -10,19 +10,18 @@ doctest = false
 forwarding-tests = []
 
 [dependencies]
+rb-types = { path = "../rb-types", features = ["secrecy", "clap"] }
+rpassword.workspace = true
 russh.workspace = true
+secrecy.workspace = true
 sqlx.workspace = true
 ssh-core = { path = "../ssh-core" }
 state-store = { path = "../state-store" }
-rb-types = { path = "../rb-types", features = ["secrecy", "clap"] }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-ssh-key.workspace = true
-rpassword.workspace = true
-secrecy.workspace = true
 
 [dev-dependencies]
-async-trait.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

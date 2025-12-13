@@ -6,23 +6,38 @@ edition.workspace = true
 [lib]
 doctest = false
 
+[[bin]]
+name = "rb"
+path = "src/bin/rb.rs"
+required-features = ["rb"]
+
+[[bin]]
+name = "rb-server"
+path = "src/bin/rb-server.rs"
+required-features = ["rb-server"]
+
+# FIXME: This is hacky workaround but requires rb to have --features rb and rb-server to have --features rb-server
+# We need to do this until we move rb-cli and rb-server to their own crates and they can have their own dependencies.
+[features]
+default = []
+rb = ["dep:client-core"]
+rb-server = ["dep:server-core", "dep:rb-web", "rb-web/server"]
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-client-core = { path = "../client-core" }
+client-core = { path = "../client-core", optional = true }
+crossterm.workspace = true
+ratatui.workspace = true
+rb-types = { path = "../rb-types", features = ["secrecy"] }
+rb-web = { path = "../rb-web", features = ["server"], optional = true }
 rpassword.workspace = true
+secrecy.workspace = true
+server-core = { path = "../server-core", optional = true }
 ssh-core = { path = "../ssh-core" }
 tokio.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
-whoami.workspace = true
-server-core = { path = "../server-core" }
-secrecy.workspace = true
-tui-core.workspace = true
-ratatui.workspace = true
-crossterm.workspace = true
-rb-types = { path = "../rb-types" }
-rb-web = { path = "../rb-web", features = ["server"] }
 tracing-panic.workspace = true
-
-[dev-dependencies]
+tracing-subscriber.workspace = true
+tui-core.workspace = true
+whoami.workspace = true

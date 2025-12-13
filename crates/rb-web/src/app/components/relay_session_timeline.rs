@@ -63,7 +63,10 @@ pub fn RelaySessionTimeline(session_id: String) -> Element {
         let mut timeline_resource = timeline_resource;
         async move {
             loop {
+                #[cfg(feature = "web")]
                 gloo_timers::future::TimeoutFuture::new(5000).await;
+                #[cfg(feature = "server")]
+                tokio::time::sleep(tokio::time::Duration::from_millis(5000)).await;
                 if auto_refresh() {
                     let should_refresh = if let Some(Ok(data)) = &*timeline_resource.read() {
                         data.session_info.status == "Active"

@@ -10,7 +10,6 @@ use chacha20poly1305::{
     Key, XChaCha20Poly1305, XNonce, aead::{Aead, KeyInit, OsRng}
 };
 use hkdf::Hkdf;
-use once_cell::sync::Lazy;
 use rand::{Rng, RngCore};
 use rb_types::credentials::EncryptedBlob;
 use secrecy::{ExposeSecret, SecretBox};
@@ -29,9 +28,9 @@ const SALT_FILE_ENV: &str = "RB_SERVER_SECRETS_SALT_FILE";
 const ENC_PREFIX_V1: &str = "enc:v1:";
 const ENC_PREFIX_V2: &str = "enc:v2:";
 
-use std::sync::RwLock;
+use std::sync::{LazyLock, RwLock};
 
-static MASTER_KEY_CACHE: Lazy<RwLock<Option<ServerResult<SecretVec<u8>>>>> = Lazy::new(|| RwLock::new(None));
+static MASTER_KEY_CACHE: LazyLock<RwLock<Option<ServerResult<SecretVec<u8>>>>> = LazyLock::new(|| RwLock::new(None));
 
 fn get_master_key() -> ServerResult<SecretVec<u8>> {
     {

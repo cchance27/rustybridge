@@ -1,13 +1,13 @@
 [workspace]
 members = [
-    "crates/rb-cli",
     "crates/client-core",
+    "crates/rb-cli",
+    "crates/rb-types",
+    "crates/rb-web",
     "crates/server-core",
     "crates/ssh-core",
     "crates/state-store",
     "crates/tui-core",
-    "crates/rb-web",
-    "crates/rb-types",
 ]
 resolver = "2"
 
@@ -16,21 +16,77 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
-anyhow = "1"
-thiserror = "2"
-tempfile = "3"
-tokio = { version = "1", features = [
-    "rt-multi-thread",
+anyhow = { version = "1", default-features = false, features = ["std"] }
+argon2 = { version = "0.5", default-features = false, features = ["std"] }
+async-trait = "0.1"
+axum = { version = "0.8.7", default-features = false, features = [
     "macros",
-    "io-std",
-    "io-util",
-    "net",
+    "json",
+    "ws",
 ] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-crossterm = "0.29.0"
-signal-hook = "0.3"
-rustix = { version = "1.1.2", default-features = false, features = ["termios"] }
+axum_session = { version = "0.17", default-features = false }
+axum_session_auth = { version = "0.17", default-features = false }
+axum_session_sqlx = { version = "0.6", default-features = false, features = [
+    "sqlite",
+] }
+base64 = { version = "0.22", default-features = false, features = ["std"] }
+cbc = { version = "0.1", default-features = false }
+chacha20poly1305 = { version = "0.10", default-features = false, features = [
+    "std",
+] }
+chrono = { version = "0.4", default-features = false, features = [
+    "std",
+    "serde",
+    "now",
+    "clock",
+    "wasmbind",
+] }
+clap = { version = "4.5.53", default-features = false, features = [
+    "std",
+    "derive",
+] }
+console_error_panic_hook = "0.1"
+crossterm = { version = "0.29.0", default-features = false, features = [
+    "events",
+] }
+des = { version = "0.8", default-features = false }
+dioxus = { version = "0.7.1", features = ["fullstack", "router"] }
+dirs = "6.0.0"
+futures = { version = "0.3", default-features = false, features = [
+    "std",
+    "async-await",
+] }
+gloo-events = "0.2"
+gloo-timers = { version = "0.3", default-features = false, features = [
+    "futures",
+] }
+hex = { version = "0.4", default-features = false, features = ["std"] }
+hkdf = { version = "0.12", default-features = false, features = ["std"] }
+js-sys = { version = "0.3", default-features = false, features = ["std"] }
+libc = { version = "0.2", default-features = false } # we can remove this if we get to clean up our get-pid code
+md5 = { version = "0.8.0", default-features = false }
+openidconnect = { version = "4", default-features = false, features = [
+    "reqwest",
+] }
+password-hash = { version = "0.5", default-features = false, features = [
+    "std",
+] }
+rand = { version = "0.8.0", default-features = false, features = [
+    "std",
+    "std_rng",
+] }
+rand_core = { version = "0.9.3", default-features = false, features = [
+    "os_rng",
+] }
+ratatui = { version = "0.29.0", default-features = false, features = [
+    "crossterm",
+] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
+rpassword = "7"
+rsa = { version = "0.9.9", default-features = false }
 russh = { version = "0.54.6", default-features = false, features = [
     "aws-lc-rs",
     "rsa",
@@ -38,12 +94,15 @@ russh = { version = "0.54.6", default-features = false, features = [
     "des",
     "flate2",
 ] }
-async-trait = "0.1"
-clap = { version = "4.5.53", features = ["derive"] }
-rpassword = "7"
-whoami = "1"
-rand_core = { version = "0.9.3", features = ["os_rng"] }
-ratatui = "0.29.0"
+rustix = { version = "1.1.2", default-features = false, features = ["termios"] }
+secrecy = { version = "0.10", default-features = false, features = ["serde"] }
+serde = { version = "1", default-features = false, features = [
+    "std",
+    "derive",
+] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+sha2 = { version = "0.10", default-features = false, features = ["std"] }
+signal-hook = { version = "0.3", default-features = false }
 sqlx = { version = "0.8.6", default-features = false, features = [
     "chrono",
     "macros",
@@ -51,36 +110,77 @@ sqlx = { version = "0.8.6", default-features = false, features = [
     "sqlite",
     "migrate",
 ] }
-dirs = "6.0.0"
-url = "2.5"
-ssh-key = "0.6"
-rsa = { version = "0.9.9", default-features = false }
-des = "0.8"
-cbc = "0.1"
-md5 = "0.8.0"
-hex = "0.4"
-base64 = "0.22"
-once_cell = "1"
-libc = "0.2" # we can remove this if we get to clean up our get-pid code
-argon2 = "0.5"
-password-hash = { version = "0.5", features = ["std"] }
-rand = "0.8.0"
-chacha20poly1305 = { version = "0.10", features = ["std"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-secrecy = { version = "0.10", features = ["serde"] }
-hkdf = "0.12"
-sha2 = "0.10"
-tui-core = { path = "crates/tui-core" }
-dioxus = { version = "0.7.1", features = ["fullstack", "router"] }
-axum = { version = "0.8.7", features = ["macros", "json", "ws"] }
-tower = "0.5.2"
-tower-http = { version = "0.6.6", features = ["fs", "set-header"] }
-unicode-width = "0.1"
-reqwest = { version = "0.12", features = ["json"] }
-openidconnect = { version = "3", features = ["reqwest"] }
-chrono = { version = "0.4", features = ["serde"] }
+ssh-encoding = { version = "0.2", default-features = false, features = [
+    "alloc",
+    "std",
+] }
+ssh-key = { version = "0.6", default-features = false, features = [
+    "alloc",
+    "std",
+] }
+strum = { version = "0.27", default-features = false, features = [
+    "std",
+    "derive",
+] }
+strum_macros = "0.27"
+tempfile = "3"
+thiserror = { version = "2", default-features = false, features = ["std"] }
+tokio = { version = "1", default-features = false, features = [
+    "rt-multi-thread",
+    "macros",
+    "io-std",
+    "io-util",
+    "net",
+] }
+tower = { version = "0.5.2", default-features = false }
+tower-http = { version = "0.6.6", default-features = false, features = [
+    "fs",
+    "set-header",
+] }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-panic = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+    "std",
+    "env-filter",
+    "fmt",
+] }
+tracing-web = "0.1"
+tui-core = { path = "crates/tui-core" }
+unicode-width = { version = "0.2", default-features = false }
+url = { version = "2.5", default-features = false }
+uuid = { version = "1", default-features = false, features = [
+    "std",
+    "v4",
+    "v7",
+    "serde",
+] }
+vt100 = { version = "0.15", default-features = false }
+wasm-bindgen = { version = "0.2", default-features = false, features = ["std"] }
+web-sys = { version = "0.3", default-features = false, features = [
+    "Storage",
+    "Window",
+    "DomRect",
+    "Element",
+    "HtmlElement",
+    "CustomEvent",
+    "MouseEvent",
+] }
+whoami = "1"
+zstd = { version = "0.13", default-features = false }
+
+# We can optimize this when we get closer to production, for now lets just match to reduce rebuilds.
+[profile.release.package."*"]
+opt-level = 3
+debug = false
+debug-assertions = false
+overflow-checks = false
+incremental = false
+codegen-units = 16
+
+[profile.dev]
+opt-level = 0
+debug = 1
+incremental = true
 
 [profile.dev.package.sqlx-macros]
 opt-level = 3
@@ -97,17 +197,3 @@ debug-assertions = false
 overflow-checks = false
 incremental = false
 codegen-units = 16
-
-# We can optimize this when we get closer to production, for now lets just match to reduce rebuilds.
-[profile.release.package."*"]
-opt-level = 3
-debug = false
-debug-assertions = false
-overflow-checks = false
-incremental = false
-codegen-units = 16
-
-[profile.dev]
-opt-level = 0
-debug = 1
-incremental = true

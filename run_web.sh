@@ -16,8 +16,8 @@ tailwindcss -i ./crates/rb-web/tailwind.css -o ./crates/rb-web/assets/tailwind.c
 # check for --release flag
 if [ "$1" != "--release" ]; then
     dx bundle --platform web --release --package rb-web --out-dir target/debug
-    cargo run -p rb-cli --bin rb-server -- --web
+    cargo run -p rb-cli --bin rb-server --features rb-server -- --web
 else
     dx bundle --platform web --release --package rb-web --out-dir target/release
-    cargo run -p rb-cli --bin rb-server --release -- --web
+    cargo run -p rb-cli --bin rb-server --release --features rb-server -- --web
 fi

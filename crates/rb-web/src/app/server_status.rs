@@ -1,7 +1,4 @@
-use std::time::Duration;
-
 use dioxus::{fullstack::use_websocket, prelude::*};
-use gloo_timers::future::sleep;
 use tracing::debug;
 
 use crate::app::{auth::hooks::use_auth, components::use_toast};
@@ -113,7 +110,11 @@ fn ServerStatusMonitor(state: Signal<ConnectionState>) -> Element {
                             }
                             Err(_) => {
                                 state.set(ConnectionState::Disconnected);
-                                sleep(Duration::from_secs(delay_secs)).await;
+                                // FIXME: We do this in a few places to use tokio on server and gloo on web, we should refactor to a hook or helper or something.
+                                #[cfg(feature = "server")]
+                                tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;
+                                #[cfg(feature = "web")]
+                                gloo_timers::future::TimeoutFuture::new(delay_secs as u32 * 1000).await;
                                 delay_secs = (delay_secs.saturating_mul(2)).min(60);
                             }
                         }

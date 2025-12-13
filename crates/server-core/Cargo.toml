@@ -7,46 +7,40 @@ edition.workspace = true
 doctest = false
 
 [dependencies]
+argon2.workspace = true
+async-trait.workspace = true
+axum_session.workspace = true
+axum_session_sqlx.workspace = true
+base64.workspace = true
+chacha20poly1305.workspace = true
+chrono.workspace = true
+futures.workspace = true
+hkdf.workspace = true
+openidconnect = { workspace = true, features = ["reqwest"] }
+password-hash.workspace = true
+rand.workspace = true
+rand_core.workspace = true
 ratatui.workspace = true
-russh.workspace = true
-state-store = { path = "../state-store", features = ["server"] }
-ssh-core = { path = "../ssh-core" }
 rb-types = { path = "../rb-types", features = ["sqlx"] }
+reqwest.workspace = true
+russh.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+ssh-core = { path = "../ssh-core" }
+ssh-encoding.workspace = true
+ssh-key.workspace = true
+state-store = { path = "../state-store", features = ["server"] }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-argon2.workspace = true
-password-hash.workspace = true
-sqlx.workspace = true
-rand_core.workspace = true
-rand.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-chacha20poly1305.workspace = true
-base64.workspace = true
-secrecy.workspace = true
-once_cell.workspace = true
-hkdf.workspace = true
-sha2.workspace = true
 tui-core.workspace = true
-futures = "0.3"
-async-trait.workspace = true
-axum_session = "0.17"
-axum_session_sqlx = { version = "0.6", features = ["sqlite"] }
-openidconnect = { workspace = true, features = ["reqwest"] }
-ssh-key.workspace = true
-ssh-encoding = "0.2"
-reqwest.workspace = true
-chrono = { version = "0.4.42", features = ["serde"] }
-uuid = { version = "1.18.1", features = ["v4", "v7", "serde"] }
-zstd = "0.13"
+uuid.workspace = true
+zstd.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
-sqlx = { version = "0.8.6", features = [
-    "chrono",
-    "macros",
-    "runtime-tokio",
-    "sqlite",
-] }
+sqlx.workspace = true
 state-store = { path = "../state-store", features = ["test-support", "server"] }

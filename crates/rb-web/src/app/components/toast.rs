@@ -1,7 +1,4 @@
-use std::time::Duration;
-
 use dioxus::prelude::*;
-use gloo_timers::future::sleep;
 use uuid::Uuid;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -31,9 +28,9 @@ impl ToastContext {
         Self { toasts }
     }
 
-    pub fn add(&self, message: String, toast_type: ToastType, duration: Option<u64>) {
+    pub fn add(&self, message: String, toast_type: ToastType, duration_ms: Option<u64>) {
         let id = Uuid::new_v4().to_string();
-        let duration = duration.unwrap_or(5000); // Default 5s
+        let duration_ms = duration_ms.unwrap_or(5000); // Default 5s
         let mut toasts = self.toasts; // Copy the Signal
 
         {
@@ -56,13 +53,16 @@ impl ToastContext {
                 message,
                 toast_type,
                 count: 1,
-                duration,
+                duration: duration_ms,
             });
         }
 
         // Spawn removal task
         spawn(async move {
-            sleep(Duration::from_millis(duration)).await;
+            #[cfg(feature = "server")]
+            tokio::time::sleep(tokio::time::Duration::from_millis(duration_ms)).await;
+            #[cfg(feature = "web")]
+            gloo_timers::future::TimeoutFuture::new(duration_ms as u32).await;
             toasts.write().retain(|t| t.id != id);
         });
     }

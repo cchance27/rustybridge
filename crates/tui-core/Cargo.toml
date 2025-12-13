@@ -8,14 +8,8 @@ doctest = false
 
 [dependencies]
 ratatui.workspace = true
+rb-types = { path = "../rb-types" }
+thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-thiserror.workspace = true
-crossterm = "0.29.0"
-async-trait.workspace = true
-anyhow.workspace = true
 unicode-width.workspace = true
-rb-types = { path = "../rb-types" }
-
-[dev-dependencies]
-anyhow.workspace = true

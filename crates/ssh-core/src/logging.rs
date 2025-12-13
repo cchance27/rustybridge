@@ -1,11 +1,12 @@
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{
+    OnceLock, atomic::{AtomicI32, Ordering}
+};
 
-use once_cell::sync::OnceCell;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{EnvFilter, Registry, reload};
 
-static RELOAD: OnceCell<reload::Handle<EnvFilter, Registry>> = OnceCell::new();
-static BASE_FILTER: OnceCell<String> = OnceCell::new();
+static RELOAD: OnceLock<reload::Handle<EnvFilter, Registry>> = OnceLock::new();
+static BASE_FILTER: OnceLock<String> = OnceLock::new();
 static CURRENT_IDX: AtomicI32 = AtomicI32::new(2); // 0=error,1=warn,2=info,3=debug,4=trace
 
 const LEVELS: [LevelFilter; 5] = [

@@ -15,16 +15,19 @@ pub enum ServerError {
     Oidc(String),
 
     #[error("OIDC discovery error: {0}")]
-    OidcDiscovery(#[from] openidconnect::DiscoveryError<openidconnect::reqwest::Error<reqwest::Error>>),
+    OidcDiscovery(#[from] openidconnect::DiscoveryError<openidconnect::HttpClientError<reqwest::Error>>),
 
     #[error("OIDC configuration error: {0}")]
     OidcConfig(#[from] openidconnect::ConfigurationError),
 
     #[error("OIDC request error: {0}")]
-    OidcRequest(#[from] openidconnect::reqwest::Error<reqwest::Error>),
+    OidcRequest(#[from] openidconnect::HttpClientError<reqwest::Error>),
 
     #[error("OIDC url parse error: {0}")]
     OidcUrlParse(#[from] openidconnect::url::ParseError),
+
+    #[error("HTTP client error: {0}")]
+    HttpClient(#[from] reqwest::Error),
 
     #[error("SSH Key error: {0}")]
     SshKey(#[from] ssh_key::Error),

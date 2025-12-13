@@ -43,8 +43,8 @@ pub async fn oidc_link_start(Query(query): Query<LinkStartQuery>, auth: WebAuthS
     link_config.redirect_url = format!("{}/link", config.redirect_url);
 
     match create_client(&link_config).await {
-        Ok(client) => {
-            let (auth_url, csrf_token, nonce, pkce_verifier) = generate_auth_url(&client);
+        Ok(bundle) => {
+            let (auth_url, csrf_token, nonce, pkce_verifier) = generate_auth_url(&bundle.client);
 
             // Store CSRF token, nonce, and PKCE verifier in session for validation
             auth.session.set("oidc_link_csrf_token", csrf_token.secret().clone());
@@ -129,13 +129,15 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
     let mut link_config = config.clone();
     link_config.redirect_url = format!("{}/link", config.redirect_url);
 
-    let client = match create_client(&link_config).await {
+    let bundle = match create_client(&link_config).await {
         Ok(c) => c,
         Err(e) => {
             error!(error = %e, "failed to create oidc client");
             return Redirect::to("/oidc/error?error=oidc_client_failed").into_response();
         }
     };
+    let client = bundle.client;
+    let http_client = bundle.http_client;
 
     // Exchange code for token with PKCE verifier if available
     let pkce_used = pkce_verifier.is_some();
@@ -144,7 +146,7 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
         token_request = token_request.set_pkce_verifier(verifier);
     }
 
-    let token_response = match token_request.request_async(openidconnect::reqwest::async_http_client).await {
+    let token_response = match token_request.request_async(&http_client).await {
         Ok(res) => res,
         Err(e) => {
             error!(error = %e, "failed to exchange code");
