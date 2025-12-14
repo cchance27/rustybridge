@@ -19,6 +19,7 @@ web = [
     "gloo-timers",
     "gloo-events",
     "wasm-bindgen",
+    "wasm-bindgen-futures",
     "js-sys",
 ]
 server = [
@@ -73,4 +74,5 @@ url = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["js"] }
 vt100 = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
 web-sys = { workspace = true, optional = true }

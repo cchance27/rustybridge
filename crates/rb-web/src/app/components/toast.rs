@@ -29,7 +29,7 @@ impl ToastContext {
     }
 
     pub fn add(&self, message: String, toast_type: ToastType, duration_ms: Option<u64>) {
-        let id = Uuid::new_v4().to_string();
+        let id = Uuid::now_v7().to_string();
         let duration_ms = duration_ms.unwrap_or(5000); // Default 5s
         let mut toasts = self.toasts; // Copy the Signal
 

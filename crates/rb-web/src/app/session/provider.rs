@@ -8,6 +8,8 @@ use tracing::{debug, error, warn};
 use crate::app::{
     auth::hooks::use_auth, session::types::{Session, SessionStatus, WindowGeometry}, storage::{BrowserStorage, StorageType}
 };
+#[cfg(feature = "web")]
+use crate::bindings::focus_terminal;
 
 const MAX_SESSIONS: usize = 4;
 
@@ -83,7 +85,7 @@ pub fn use_session_provider() -> SessionContext {
             debug!(client_id = %existing_id, "reusing existing client id");
             existing_id
         } else {
-            let new_id = uuid::Uuid::new_v4().to_string();
+            let new_id = uuid::Uuid::now_v7().to_string();
             let _ = storage.set("rb-client-id", &new_id);
             debug!(client_id = %new_id, "generated new client id");
             new_id
@@ -636,7 +638,7 @@ impl SessionContext {
             warn!(max_sessions = MAX_SESSIONS, "session cap reached");
             #[cfg(feature = "web")]
             if let Some(toast) = self.toast() {
-                toast.warning("Maximum 4 concurrent SSH sessions allowed");
+                toast.warning(&format!("Maximum {MAX_SESSIONS} concurrent SSH sessions allowed"));
             }
             return;
         }
@@ -664,7 +666,7 @@ impl SessionContext {
             spawn(async move {
                 // Wait for terminal to mount and init
                 gloo_timers::future::TimeoutFuture::new(300).await;
-                let _ = dioxus::document::eval(&format!("if (window.focusTerminal) window.focusTerminal('{}')", term_id)).await;
+                focus_terminal(&term_id);
             });
         }
     }
@@ -743,7 +745,7 @@ impl SessionContext {
                 spawn(async move {
                     // Wait for terminal to mount and init
                     gloo_timers::future::TimeoutFuture::new(300).await;
-                    let _ = dioxus::document::eval(&format!("if (window.focusTerminal) window.focusTerminal('{}')", term_id)).await;
+                    focus_terminal(&term_id);
                 });
             }
         }
@@ -785,15 +787,18 @@ impl SessionContext {
                 // The Terminal component stores its socket in a signal, but we don't have direct access
                 // So we'll use a global event that the Terminal can listen for
                 let term_id = format!("term-{}", id_owned);
-                let _ = dioxus::document::eval(&format!(
-                    r#"
-                    window.dispatchEvent(new CustomEvent('terminal-close-requested', {{
-                        detail: {{ termId: '{}' }}
-                    }}));
-                    "#,
-                    term_id
-                ))
-                .await;
+
+                let window = web_sys::window().unwrap();
+                let event_init = web_sys::CustomEventInit::new();
+
+                // Create detail object
+                let detail = js_sys::Object::new();
+                let _ = js_sys::Reflect::set(&detail, &"termId".into(), &term_id.into());
+                event_init.set_detail(&detail);
+
+                if let Ok(event) = web_sys::CustomEvent::new_with_event_init_dict("terminal-close-requested", &event_init) {
+                    let _ = window.dispatch_event(&event);
+                }
 
                 // Small delay to let the message send
                 gloo_timers::future::TimeoutFuture::new(100).await;
@@ -852,6 +857,9 @@ impl SessionContext {
                 );
             }
         }
+
+        // Recalculate z-indexes after restore so it comes to top
+        self.recalculate_z_indexes();
     }
 
     pub fn focus(&self, id: &str) {

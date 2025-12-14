@@ -1,8 +1,6 @@
-use axum::{
-    extract::Query, response::{IntoResponse, Redirect}
-};
+use axum::response::Redirect;
+use dioxus::prelude::*;
 use openidconnect::{AuthorizationCode, TokenResponse};
-use serde::Deserialize;
 use server_core::{
     api as sc_api, auth::oidc::{create_client, generate_auth_url}
 };
@@ -11,30 +9,19 @@ use url::Url;
 
 use crate::server::auth::WebAuthSession;
 
-#[derive(Deserialize)]
-pub struct LinkCallbackQuery {
-    code: String,
-    state: String,
-}
-
-#[derive(Deserialize)]
-pub struct LinkStartQuery {
-    return_to: Option<String>,
-}
-
 /// Initiate OIDC linking flow for already-authenticated user
-#[cfg(feature = "server")]
-pub async fn oidc_link_start(Query(query): Query<LinkStartQuery>, auth: WebAuthSession) -> impl IntoResponse {
+#[get("/api/auth/oidc/link?return_to", auth: WebAuthSession)]
+pub async fn oidc_link_start(return_to: Option<String>) -> Result<Redirect> {
     // Ensure user is authenticated
     if !auth.is_authenticated() {
-        return Redirect::to("/login?error=not_authenticated").into_response();
+        return Ok(Redirect::to("/login?error=not_authenticated"));
     }
 
     let config = match super::oidc::get_oidc_config().await {
         Some(c) => c,
         None => {
             error!("oidc configuration missing");
-            return Redirect::to("/oidc/error?error=oidc_not_configured").into_response();
+            return Ok(Redirect::to("/oidc/error?error=oidc_not_configured"));
         }
     };
 
@@ -52,42 +39,42 @@ pub async fn oidc_link_start(Query(query): Query<LinkStartQuery>, auth: WebAuthS
             auth.session.set("oidc_link_pkce_verifier", pkce_verifier.secret().clone());
 
             // Store validated return URL from query param, default to "/"
-            let return_url = sanitize_return_to(query.return_to.as_deref());
+            let return_url = sanitize_return_to(return_to.as_deref());
             auth.session.set("oidc_link_return_url", return_url);
 
-            Redirect::to(&auth_url).into_response()
+            Ok(Redirect::to(&auth_url))
         }
         Err(e) => {
             error!(error = %e, "failed to create oidc client");
-            Redirect::to("/oidc/error?error=oidc_setup_failed").into_response()
+            Ok(Redirect::to("/oidc/error?error=oidc_setup_failed"))
         }
     }
 }
 
 /// Handle OIDC callback for linking flow
-#[cfg(feature = "server")]
-pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: WebAuthSession) -> impl IntoResponse {
+#[get("/api/auth/oidc/callback/link?code&state", auth: WebAuthSession)]
+pub async fn oidc_link_callback(code: String, state: String) -> Result<Redirect> {
     // Ensure user is authenticated
     let user_id = match auth.current_user.as_ref() {
         Some(user) => user.id,
         None => {
-            return Redirect::to("/login?error=not_authenticated").into_response();
+            return Ok(Redirect::to("/login?error=not_authenticated"));
         }
     };
 
     // Validate CSRF token (state parameter)
     let stored_csrf: Option<String> = auth.session.get("oidc_link_csrf_token");
     match stored_csrf {
-        Some(stored) if stored == query.state => {
+        Some(stored) if stored == state => {
             auth.session.remove("oidc_link_csrf_token");
         }
         Some(_) => {
             error!("csrf token mismatch in link flow");
-            return Redirect::to("/oidc/error?error=csrf_mismatch").into_response();
+            return Ok(Redirect::to("/oidc/error?error=csrf_mismatch"));
         }
         None => {
             error!("no csrf token in session for link flow");
-            return Redirect::to("/oidc/error?error=no_csrf_token").into_response();
+            return Ok(Redirect::to("/oidc/error?error=no_csrf_token"));
         }
     }
 
@@ -100,7 +87,7 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
         }
         None => {
             error!("no nonce in session for link flow");
-            return Redirect::to("/oidc/error?error=no_nonce").into_response();
+            return Ok(Redirect::to("/oidc/error?error=no_nonce"));
         }
     };
 
@@ -122,7 +109,7 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
         Some(c) => c,
         None => {
             error!("oidc configuration missing");
-            return Redirect::to("/oidc/error?error=oidc_not_configured").into_response();
+            return Ok(Redirect::to("/oidc/error?error=oidc_not_configured"));
         }
     };
 
@@ -133,7 +120,7 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
         Ok(c) => c,
         Err(e) => {
             error!(error = %e, "failed to create oidc client");
-            return Redirect::to("/oidc/error?error=oidc_client_failed").into_response();
+            return Ok(Redirect::to("/oidc/error?error=oidc_client_failed"));
         }
     };
     let client = bundle.client;
@@ -141,7 +128,7 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
 
     // Exchange code for token with PKCE verifier if available
     let pkce_used = pkce_verifier.is_some();
-    let mut token_request = client.exchange_code(AuthorizationCode::new(query.code.clone()));
+    let mut token_request = client.exchange_code(AuthorizationCode::new(code.clone()));
     if let Some(verifier) = pkce_verifier {
         token_request = token_request.set_pkce_verifier(verifier);
     }
@@ -150,7 +137,7 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
         Ok(res) => res,
         Err(e) => {
             error!(error = %e, "failed to exchange code");
-            return Redirect::to("/oidc/error?error=token_exchange_failed").into_response();
+            return Ok(Redirect::to("/oidc/error?error=token_exchange_failed"));
         }
     };
 
@@ -159,7 +146,7 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
         Some(t) => t,
         None => {
             error!("no id token returned");
-            return Redirect::to("/oidc/error?error=no_id_token").into_response();
+            return Ok(Redirect::to("/oidc/error?error=no_id_token"));
         }
     };
 
@@ -168,7 +155,7 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
         Ok(c) => c,
         Err(e) => {
             error!(error = %e, "failed to validate id token in link flow");
-            return Redirect::to("/oidc/error?error=invalid_token").into_response();
+            return Ok(Redirect::to("/oidc/error?error=invalid_token"));
         }
     };
 
@@ -186,7 +173,7 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
                 subject = %subject,
                 "oidc account already linked to different user"
             );
-            return Redirect::to("/oidc/error?error=already_linked").into_response();
+            return Ok(Redirect::to("/oidc/error?error=already_linked"));
         }
         Ok(Some(_)) => {
             // Already linked to this user, just update profile
@@ -198,14 +185,14 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
         }
         Err(e) => {
             error!(error = %e, "database error checking oidc link");
-            return Redirect::to("/oidc/error?error=database_error").into_response();
+            return Ok(Redirect::to("/oidc/error?error=database_error"));
         }
     }
 
     // Insert or update the link
     if let Err(e) = sc_api::upsert_oidc_link(user_id, &config.issuer_url, &subject, &email, &_name, &_picture).await {
         error!(error = %e, "failed to link oidc account");
-        return Redirect::to("/oidc/error?error=link_failed").into_response();
+        return Ok(Redirect::to("/oidc/error?error=link_failed"));
     }
 
     // Bust auth cache so new profile/name take effect next request
@@ -227,7 +214,7 @@ pub async fn oidc_link_callback(Query(query): Query<LinkCallbackQuery>, auth: We
         .unwrap_or_else(|| "/".to_string());
     auth.session.remove("oidc_link_return_url");
 
-    Redirect::to(&format!("{}?success=oidc_linked", return_url)).into_response()
+    Ok(Redirect::to(&format!("{}?success=oidc_linked", return_url)))
 }
 
 fn sanitize_return_to(raw: Option<&str>) -> String {

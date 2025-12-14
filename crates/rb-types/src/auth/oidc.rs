@@ -7,9 +7,3 @@ pub struct OidcConfig {
     pub client_secret: String,
     pub redirect_url: String,
 }
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct LoginQuery {
-    pub error: Option<String>,
-    pub ssh_code: Option<String>,
-}

@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod app_root;
+pub mod bindings;
 pub mod error;
 
 // Server module is only compiled for server builds

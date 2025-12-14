@@ -1,13 +1,11 @@
 use std::net::SocketAddr;
 
-use axum::{
-    extract::{ConnectInfo, Query}, http::HeaderMap, response::{IntoResponse, Redirect}
-};
+use axum::{extract::ConnectInfo, http::HeaderMap, response::Redirect};
+use dioxus::prelude::*;
 use openidconnect::{AuthorizationCode, TokenResponse};
 use rb_types::{
-    audit::{AuthMethod, EventType}, auth::oidc::{LoginQuery, OidcConfig}
+    audit::{AuthMethod, EventType}, auth::oidc::OidcConfig
 };
-use serde::Deserialize;
 use server_core::{
     api as sc_api, auth::oidc::{create_client, generate_auth_url}
 };
@@ -15,24 +13,18 @@ use tracing::{error, info, warn};
 
 use crate::server::auth::WebAuthSession;
 
-#[derive(Deserialize)]
-pub struct AuthRequest {
-    code: String,
-    state: String,
-}
-
 #[cfg(feature = "server")]
 pub(super) async fn get_oidc_config() -> Option<OidcConfig> {
     sc_api::get_oidc_config().await.ok().flatten()
 }
 
-#[cfg(feature = "server")]
-pub async fn oidc_login(Query(query): Query<LoginQuery>, auth: WebAuthSession) -> impl IntoResponse {
+#[get("/api/auth/oidc/login?ssh_code", auth: WebAuthSession)]
+pub async fn oidc_login(ssh_code: Option<String>) -> Result<Redirect> {
     let config = match get_oidc_config().await {
         Some(c) => c,
         None => {
             error!("oidc configuration missing");
-            return Redirect::to("/oidc/error?error=oidc_not_configured").into_response();
+            return Ok(Redirect::to("/oidc/error?error=oidc_not_configured"));
         }
     };
 
@@ -51,7 +43,7 @@ pub async fn oidc_login(Query(query): Query<LoginQuery>, auth: WebAuthSession) -
             auth.session.set("oidc_nonce", nonce.secret().clone());
             auth.session.set("oidc_pkce_verifier", pkce_verifier.secret().clone());
 
-            if let Some(code) = query.ssh_code {
+            if let Some(code) = ssh_code {
                 // Store SSH code associated with this OIDC flow
                 auth.session.set("oidc_ssh_code", code.clone());
                 info!(code = %code, "initiating oidc for ssh session");
@@ -61,22 +53,17 @@ pub async fn oidc_login(Query(query): Query<LoginQuery>, auth: WebAuthSession) -
             auth.session.update();
 
             info!("oidc login state stored; redirecting to provider");
-            Redirect::to(&auth_url).into_response()
+            Ok(Redirect::to(&auth_url))
         }
         Err(e) => {
             error!(error = %e, "failed to create oidc client");
-            Redirect::to("/oidc/error?error=oidc_setup_failed").into_response()
+            Ok(Redirect::to("/oidc/error?error=oidc_setup_failed"))
         }
     }
 }
 
-#[cfg(feature = "server")]
-pub async fn oidc_callback(
-    Query(query): Query<AuthRequest>,
-    auth: WebAuthSession,
-    headers: HeaderMap,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-) -> impl IntoResponse {
+#[get("/api/auth/oidc/callback?code&state", auth: WebAuthSession, headers: HeaderMap, ConnectInfo(addr): ConnectInfo<SocketAddr>)]
+pub async fn oidc_callback(code: String, state: String) -> Result<Redirect> {
     info!("oidc callback received");
 
     let ip_address = headers
@@ -92,7 +79,7 @@ pub async fn oidc_callback(
     let stored_csrf: Option<String> = auth.session.get("oidc_csrf_token");
 
     match stored_csrf {
-        Some(stored) if stored == query.state => {
+        Some(stored) if stored == state => {
             // Valid CSRF token, continue
             auth.session.remove("oidc_csrf_token");
         }
@@ -105,12 +92,12 @@ pub async fn oidc_callback(
                 "CSRF token mismatch".to_string(),
             )
             .await;
-            return Redirect::to("/oidc/error?error=csrf_mismatch").into_response();
+            return Ok(Redirect::to("/oidc/error?error=csrf_mismatch"));
         }
         None if auth.is_authenticated() => {
             // User already has an authenticated session; this is likely a replayed or stale callback after a restart.
             warn!("oidc callback missing csrf token but user is already authenticated; ignoring callback");
-            return Redirect::to("/").into_response();
+            return Ok(Redirect::to("/"));
         }
         None => {
             error!("no csrf token in session");
@@ -121,7 +108,7 @@ pub async fn oidc_callback(
                 "No CSRF token in session".to_string(),
             )
             .await;
-            return Redirect::to("/oidc/error?error=no_csrf_token").into_response();
+            return Ok(Redirect::to("/oidc/error?error=no_csrf_token"));
         }
     }
 
@@ -141,7 +128,7 @@ pub async fn oidc_callback(
                 "No nonce in session".to_string(),
             )
             .await;
-            return Redirect::to("/oidc/error?error=no_nonce").into_response();
+            return Ok(Redirect::to("/oidc/error?error=no_nonce"));
         }
     };
 
@@ -163,7 +150,7 @@ pub async fn oidc_callback(
         Some(c) => c,
         None => {
             error!("oidc configuration missing");
-            return Redirect::to("/oidc/error?error=oidc_not_configured").into_response();
+            return Ok(Redirect::to("/oidc/error?error=oidc_not_configured"));
         }
     };
 
@@ -171,7 +158,7 @@ pub async fn oidc_callback(
         Ok(c) => c,
         Err(e) => {
             error!(error = %e, "failed to create oidc client");
-            return Redirect::to("/oidc/error?error=oidc_client_failed").into_response();
+            return Ok(Redirect::to("/oidc/error?error=oidc_client_failed"));
         }
     };
     let client = bundle.client;
@@ -179,7 +166,7 @@ pub async fn oidc_callback(
 
     // Exchange code for token with PKCE verifier if available
     let pkce_used = pkce_verifier.is_some();
-    let mut token_request = client.exchange_code(AuthorizationCode::new(query.code.clone()));
+    let mut token_request = client.exchange_code(AuthorizationCode::new(code.clone()));
     if let Some(verifier) = pkce_verifier {
         token_request = token_request.set_pkce_verifier(verifier);
     }
@@ -195,7 +182,7 @@ pub async fn oidc_callback(
                 format!("Token exchange failed: {}", e),
             )
             .await;
-            return Redirect::to("/oidc/error?error=token_exchange_failed").into_response();
+            return Ok(Redirect::to("/oidc/error?error=token_exchange_failed"));
         }
     };
 
@@ -211,7 +198,7 @@ pub async fn oidc_callback(
                 "No ID token returned".to_string(),
             )
             .await;
-            return Redirect::to("/oidc/error?error=no_id_token").into_response();
+            return Ok(Redirect::to("/oidc/error?error=no_id_token"));
         }
     };
 
@@ -227,7 +214,7 @@ pub async fn oidc_callback(
                 format!("ID token validation failed: {}", e),
             )
             .await;
-            return Redirect::to("/oidc/error?error=invalid_token").into_response();
+            return Ok(Redirect::to("/oidc/error?error=invalid_token"));
         }
     };
 
@@ -263,11 +250,11 @@ pub async fn oidc_callback(
                 "No user account linked to this OIDC identity".to_string(),
             )
             .await;
-            return Redirect::to("/oidc/error?error=account_not_linked").into_response();
+            return Ok(Redirect::to("/oidc/error?error=account_not_linked"));
         }
         Err(e) => {
             error!(error = %e, "database error looking up oidc link");
-            return Redirect::to("/oidc/error?error=database_error").into_response();
+            return Ok(Redirect::to("/oidc/error?error=database_error"));
         }
     };
 
@@ -316,7 +303,7 @@ pub async fn oidc_callback(
                     "SSH OIDC authentication completed successfully"
                 );
                 // Redirect to SSH success page
-                return Redirect::to("/auth/ssh-success").into_response();
+                return Ok(Redirect::to("/auth/ssh-success"));
             }
             Err(e) => {
                 error!(
@@ -324,9 +311,9 @@ pub async fn oidc_callback(
                     error = %e,
                     "Failed to complete SSH auth session"
                 );
-                return Redirect::to("/oidc/error?error=ssh_auth_failed").into_response();
+                return Ok(Redirect::to("/oidc/error?error=ssh_auth_failed"));
             }
         }
     }
-    Redirect::to("/").into_response()
+    Ok(Redirect::to("/"))
 }

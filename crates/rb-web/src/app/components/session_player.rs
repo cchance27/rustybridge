@@ -34,34 +34,46 @@ fn format_bytes(bytes: i64) -> String {
 use wasm_bindgen::{JsCast, JsValue};
 
 #[cfg(feature = "web")]
-fn init_terminal(terminal_id: &str, term_size: Option<(u16, u16)>) -> Result<(), JsValue> {
-    let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
-    let init_fn = js_sys::Reflect::get(&window, &JsValue::from_str("initRustyBridgeTerminal"))?;
-    let func = init_fn.dyn_into::<js_sys::Function>()?;
+use crate::bindings::{init_rusty_bridge_terminal, write_to_terminal};
 
-    // Create options object
-    let options = js_sys::Object::new();
-    // If we have a recorded terminal size, prefer that and disable fit
-    if let Some((cols, rows)) = term_size {
-        js_sys::Reflect::set(&options, &JsValue::from_str("cols"), &JsValue::from_f64(cols as f64))?;
-        js_sys::Reflect::set(&options, &JsValue::from_str("rows"), &JsValue::from_f64(rows as f64))?;
-        js_sys::Reflect::set(&options, &JsValue::from_str("fit"), &JsValue::from_bool(false))?;
-    } else {
-        js_sys::Reflect::set(&options, &JsValue::from_str("fit"), &JsValue::from_bool(true))?;
+#[cfg(feature = "web")]
+async fn init_terminal(terminal_id: &str, term_size: Option<(u16, u16)>) -> Result<(), JsValue> {
+    #[derive(serde::Serialize)]
+    struct Options {
+        cols: Option<u16>,
+        rows: Option<u16>,
+        fit: bool,
+        web_links: bool,
+        webgl: bool,
     }
-    js_sys::Reflect::set(&options, &JsValue::from_str("web_links"), &JsValue::from_bool(false))?;
-    js_sys::Reflect::set(&options, &JsValue::from_str("webgl"), &JsValue::from_bool(false))?;
 
-    func.call2(&JsValue::NULL, &JsValue::from_str(terminal_id), &options)?;
+    let options = if let Some((cols, rows)) = term_size {
+        Options {
+            cols: Some(cols),
+            rows: Some(rows),
+            fit: false,
+            web_links: false,
+            webgl: false,
+        }
+    } else {
+        Options {
+            cols: None,
+            rows: None,
+            fit: true,
+            web_links: false,
+            webgl: false,
+        }
+    };
+
+    let options_json = serde_json::to_string(&options).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let options = js_sys::JSON::parse(&options_json)?;
+    init_rusty_bridge_terminal(terminal_id, &options).await?;
     Ok(())
 }
 
 #[cfg(feature = "web")]
-fn write_to_terminal(terminal_id: &str, data: &str) -> Result<(), JsValue> {
-    let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
-    let write_fn = js_sys::Reflect::get(&window, &JsValue::from_str("writeToTerminal"))?;
-    let func = write_fn.dyn_into::<js_sys::Function>()?;
-    func.call2(&JsValue::NULL, &JsValue::from_str(terminal_id), &JsValue::from_str(data))?;
+fn write_to_term_shim(terminal_id: &str, data: &str) -> Result<(), JsValue> {
+    write_to_terminal(terminal_id, data.as_bytes());
     Ok(())
 }
 
@@ -392,13 +404,13 @@ pub fn SessionPlayer(session_id: String) -> Element {
                         #[cfg(feature = "web")]
                         {
                             let _ = clear_terminal("replay-terminal");
-                            let _ = write_to_terminal("replay-terminal", &snap.screen_buffer);
+                            let _ = write_to_term_shim("replay-terminal", &snap.screen_buffer);
                             // vt100::Screen reports cursor position as 0-based (row, col),
                             // while ANSI CUP expects 1-based coordinates. Adjust both.
                             let cursor_row = snap.cursor_row.saturating_add(1);
                             let cursor_col = snap.cursor_col.saturating_add(1);
                             let cursor_move = format!("\x1b[{};{}H", cursor_row, cursor_col);
-                            let _ = write_to_terminal("replay-terminal", &cursor_move);
+                            let _ = write_to_term_shim("replay-terminal", &cursor_move);
 
                             // Reset playback tracking so the chunk at the new seek position
                             // is processed again by the playback loop.
@@ -542,7 +554,7 @@ pub fn SessionPlayer(session_id: String) -> Element {
                         if let Some(window) = web_sys::window() {
                             if let Some(document) = window.document() {
                                 if document.get_element_by_id("replay-terminal").is_some() {
-                                    match init_terminal("replay-terminal", term_size) {
+                                    match init_terminal("replay-terminal", term_size).await {
                                         Ok(()) => {
                                             terminal_initialized.set(true);
                                             return; // Success - exit the retry loop
@@ -708,7 +720,7 @@ pub fn SessionPlayer(session_id: String) -> Element {
                                     if *byte_offset > last_offset && *byte_offset <= decoded.len() {
                                         let segment = &decoded[last_offset..*byte_offset];
                                         let segment_text = String::from_utf8_lossy(segment);
-                                        let _ = write_to_terminal("replay-terminal", &segment_text);
+                                        let _ = write_to_term_shim("replay-terminal", &segment_text);
 
                                         // Wait for the delay at this marker
                                         let scaled_delay = ((*delay_ms as f64) / current_speed).max(1.0) as u32;
@@ -727,7 +739,7 @@ pub fn SessionPlayer(session_id: String) -> Element {
                                 if last_offset < decoded.len() {
                                     let remaining = &decoded[last_offset..];
                                     let remaining_text = String::from_utf8_lossy(remaining);
-                                    let _ = write_to_terminal("replay-terminal", &remaining_text);
+                                    let _ = write_to_term_shim("replay-terminal", &remaining_text);
                                 }
 
                                 // Wait for any remaining inter-chunk delay (idle time)
@@ -771,7 +783,7 @@ pub fn SessionPlayer(session_id: String) -> Element {
                         }
                     }
                     // No markers, write entire chunk at once
-                    let _ = write_to_terminal("replay-terminal", &text);
+                    let _ = write_to_term_shim("replay-terminal", &text);
                 }
             }
 
@@ -922,7 +934,11 @@ pub fn SessionPlayer(session_id: String) -> Element {
                             // Go back in browser history
                             #[cfg(feature = "web")]
                             {
-                                let _ = dioxus::document::eval(r#"window.history.back();"#);
+                                if let Some(window) = web_sys::window() {
+                                    if let Ok(history) = window.history() {
+                                        let _ = history.back();
+                                    }
+                                }
                             }
                             #[cfg(not(feature = "web"))]
                             {
@@ -936,7 +952,7 @@ pub fn SessionPlayer(session_id: String) -> Element {
                 }
             }
 
-                // Session info & Metadata
+            // Session info & Metadata
             if let Some(Ok(response)) = session_meta.read().as_ref() {
                 if let Some((start_time, _end_time, duration_ms)) = session_info() {
                 div { class: "flex flex-col gap-2 mt-2",

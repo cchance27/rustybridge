@@ -6,6 +6,9 @@ use crate::app::auth::hooks::use_auth;
 pub fn AvatarDropDown() -> Element {
     let auth = use_auth();
     let navigator = use_navigator();
+    let return_to = use_route::<crate::Routes>().to_string();
+    let oidc_link_href = format!("/api/auth/oidc/link?return_to={return_to}");
+    let oidc_link_href_onclick = oidc_link_href.clone();
 
     let user = auth.read().user.clone();
     let username = user.as_ref().map(|u| u.username.clone()).unwrap_or_else(|| "User".to_string());
@@ -63,30 +66,22 @@ pub fn AvatarDropDown() -> Element {
                 // Only show "Link OIDC Account" if not already linked
                 {
                     match oidc_status.read().as_ref() {
-                        Some(Some(status)) if !status.is_linked => rsx! {
-                            li {
-                                a {
-                                    onclick: move |evt| {
-                                        evt.prevent_default();
-                                        #[cfg(target_arch = "wasm32")]
-                                        {
-                                            // Use JavaScript to get current path and navigate
-                                            let _ = document::eval(r#"
-                                                const currentPath = window.location.pathname;
-                                                window.location.href = `/api/auth/oidc/link?return_to=${currentPath}`;
-                                            "#);
-                                        }
-                                        #[cfg(not(target_arch = "wasm32"))]
-                                        {
-                                            // Fallback for SSR - just go to link endpoint
-                                            let _ = document::eval("window.location.href = '/api/auth/oidc/link';");
-                                        }
-                                    },
-                                    "Link OIDC Account"
-                                }
-                            }
-                        },
-                        _ => rsx! {}
+	                        Some(Some(status)) if !status.is_linked => rsx! {
+	                            li {
+	                                a {
+	                                    onclick: move |evt| {
+	                                        // Force a full page navigation to server function routes.
+	                                        // Our `/:..route` catch-all means `/api/*` will otherwise be treated
+	                                        // as an internal route and end up on NotFound until a hard refresh.
+	                                        evt.prevent_default();
+	                                        let _ = navigator.push(NavigationTarget::<String>::External(oidc_link_href_onclick.clone()));
+	                                    },
+	                                    href: "{oidc_link_href}",
+	                                    "Link OIDC Account"
+	                                }
+	                            }
+	                        },
+	                        _ => rsx! {}
                     }
                 }
 

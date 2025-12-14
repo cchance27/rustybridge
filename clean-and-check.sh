@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
 cargo sort --workspace
+cargo +nightly fmt
+cargo clippy --fix --allow-dirty --allow-staged --message-format=short
 
 # Check for unused dependencies in rb-web (wasm target)
 cargo +nightly udeps -p rb-web --features web --no-default-features --target wasm32-unknown-unknown --quiet

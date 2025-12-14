@@ -11,6 +11,7 @@ use crate::{
 pub fn LoginPage() -> Element {
     let auth = use_auth();
     let navigator = use_navigator();
+    let oidc_login_href_onclick = "/api/auth/oidc/login".to_string();
 
     let mut username = use_signal(String::new);
     let mut password = use_signal(String::new);
@@ -151,6 +152,10 @@ pub fn LoginPage() -> Element {
                                 a {
                                     href: "/api/auth/oidc/login",
                                     class: "btn btn-outline btn-primary w-full gap-2",
+                                    onclick: move |evt| {
+                                        evt.prevent_default();
+                                        let _ = navigator.push(NavigationTarget::<String>::External(oidc_login_href_onclick.clone()));
+                                    },
                                     // Simple OIDC icon (user-circle)
                                     // TODO: Replace with provider icon if available in database or name if available
                                     // TODO: Multiple provider support with logo and icons.

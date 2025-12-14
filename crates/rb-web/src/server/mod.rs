@@ -59,14 +59,7 @@ pub async fn create_app_router(
 
     // Create router with custom WebSocket route for SSH terminal
     let router = Router::new()
-        // TODO: Move OIDC routes to standard dioxus [get] handlers
-        .route("/api/auth/oidc/login", axum::routing::get(auth::oidc::oidc_login))
-        .route("/api/auth/oidc/callback", axum::routing::get(auth::oidc::oidc_callback))
-        .route("/api/auth/oidc/link", axum::routing::get(auth::oidc_link::oidc_link_start))
-        .route(
-            "/api/auth/oidc/callback/link",
-            axum::routing::get(auth::oidc_link::oidc_link_callback),
-        )
+        // We're using a fixed axum route for export, we should see if we can bring this into dioxus server #[get]
         .route(
             "/api/audit/sessions/{id}/export/{export_type}",
             axum::routing::get(api::audit::export_session),

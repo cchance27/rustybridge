@@ -1,5 +1,7 @@
 use dioxus::prelude::*;
 #[cfg(feature = "web")]
+use futures::{StreamExt, channel::mpsc};
+#[cfg(feature = "web")]
 use gloo_events::EventListener;
 #[cfg(feature = "web")]
 use js_sys::Reflect;
@@ -7,7 +9,14 @@ use serde::Serialize;
 #[cfg(feature = "web")]
 use tracing::{debug, error, warn};
 #[cfg(feature = "web")]
+use wasm_bindgen::prelude::*;
+#[cfg(feature = "web")]
 use web_sys::wasm_bindgen::{JsCast, JsValue};
+
+#[cfg(feature = "web")]
+use crate::bindings::{
+    get_terminal_dimensions, init_rusty_bridge_terminal, setup_terminal_input, setup_terminal_resize, write_to_terminal
+};
 
 #[derive(Clone, Props, PartialEq, Serialize)]
 pub struct TerminalProps {
@@ -88,34 +97,25 @@ pub fn Terminal(props: TerminalProps) -> Element {
                     let terminal_id = id.clone();
                     let options_json = opts_json.clone();
 
-                    // Serialize terminal_id to JSON to prevent XSS
-                    let terminal_id_json = serde_json::to_string(&terminal_id).unwrap_or_else(|_| "\"\"".to_string());
-                    debug!(terminal_id = %terminal_id_json, "terminal script starting");
                     spawn(async move {
-                        let script = format!(
-                            r#"
-                    (async () => {{
-                        const termId = {terminal_id_json};
-                        console.log("Terminal script started for " + termId);
-                        try {{
-                            if (!window.initRustyBridgeTerminal) {{
-                                console.error("Terminal init failed for " + termId + ": xterm-init.js not loaded");
-                                dioxus.send(false);
-                            }}
-                            await window.initRustyBridgeTerminal(termId, {options_json});
-                            dioxus.send(true);
-                        }} catch (e) {{
-                            console.error("Terminal init failed for " + termId + ":", e);
-                            dioxus.send(false);
-                        }}
-                    }})();
-                    "#
-                        );
+                        debug!(terminal_id = %terminal_id, "terminal script starting");
+                        let options = match js_sys::JSON::parse(&options_json) {
+                            Ok(options) => options,
+                            Err(err) => {
+                                error!(terminal_id = %terminal_id, error = ?err, "terminal init: failed to parse options json");
+                                return;
+                            }
+                        };
 
-                        match dioxus::document::eval(&script).recv::<bool>().await {
-                            Ok(true) => debug!(terminal_id = %terminal_id, "terminal init success"),
-                            Ok(false) => error!(terminal_id = %terminal_id, "terminal init failed"),
-                            Err(e) => error!(terminal_id = %terminal_id, error = %e, "terminal init recv error"),
+                        match init_rusty_bridge_terminal(&terminal_id, &options).await {
+                            Ok(_) => {
+                                debug!(terminal_id = %terminal_id, "terminal init success");
+                                // We don't need to manually send dioxus.send(true) equivalent here
+                                // because the extern function returns a Promise that resolves.
+                            }
+                            Err(e) => {
+                                error!(terminal_id = %terminal_id, error = ?e, "terminal init failed");
+                            }
                         }
                     });
                 }
@@ -262,19 +262,35 @@ pub fn Terminal(props: TerminalProps) -> Element {
                                 connected.set(true);
 
                                 // Expose WebSocket to window object for close helper
+                                // window.terminalSockets[id] = { termId: id }
                                 let term_id = value.clone();
-                                spawn(async move {
-                                    let _ = dioxus::document::eval(&format!(
-                                        r#"
-                                        if (!window.terminalSockets) window.terminalSockets = {{}};
-                                        // Store a reference that can send messages
-                                        // We'll need to hook into the actual WS send later
-                                        window.terminalSockets['{}'] = {{ termId: '{}' }};
-                                        "#,
-                                        term_id, term_id
-                                    ))
-                                    .await;
-                                });
+                                if let Some(window) = web_sys::window() {
+                                    if let Ok(sockets) = Reflect::get(&window, &"terminalSockets".into()) {
+                                        let target = if sockets.is_undefined() {
+                                            let obj = js_sys::Object::new();
+                                            let _ = Reflect::set(&window, &"terminalSockets".into(), &obj);
+                                            obj
+                                        } else {
+                                            sockets.dyn_into::<js_sys::Object>().unwrap_or_else(|_| {
+                                                let obj = js_sys::Object::new();
+                                                let _ = Reflect::set(&window, &"terminalSockets".into(), &obj);
+                                                obj
+                                            })
+                                        };
+
+                                        let entry = js_sys::Object::new();
+                                        let _ = Reflect::set(&entry, &"termId".into(), &term_id.clone().into());
+                                        let _ = Reflect::set(&target, &term_id.into(), &entry);
+                                    } else {
+                                        // Initialize if getting failed (likely undefined)
+                                        let obj = js_sys::Object::new();
+                                        let _ = Reflect::set(&window, &"terminalSockets".into(), &obj);
+
+                                        let entry = js_sys::Object::new();
+                                        let _ = Reflect::set(&entry, &"termId".into(), &term_id.clone().into());
+                                        let _ = Reflect::set(&obj, &term_id.into(), &entry);
+                                    }
+                                }
                             }
                             Err(err) => {
                                 error!(error = %err, "terminal: websocket connect failed");
@@ -307,32 +323,26 @@ pub fn Terminal(props: TerminalProps) -> Element {
                             use rb_types::ssh::{SshClientMsg, SshControl};
 
                             // Get terminal dimensions from xterm
-                            let mut dims_eval = dioxus::document::eval(&format!(
-                                r#"
-                                if (window.getTerminalDimensions) {{
-                                    dioxus.send(window.getTerminalDimensions("{}"));
-                                }} else {{
-                                    dioxus.send(null);
-                                }}
-                                "#,
-                                term_id
-                            ));
+                            let dims_val = get_terminal_dimensions(&term_id);
 
-                            #[derive(serde::Deserialize)]
-                            struct Dims {
-                                cols: u32,
-                                rows: u32,
-                            }
+                            let (cols, rows) = if !dims_val.is_undefined() && !dims_val.is_null() {
+                                // Try to parse manually using Reflect
+                                let cols = Reflect::get(&dims_val, &"cols".into())
+                                    .ok()
+                                    .and_then(|v| v.as_f64())
+                                    .map(|v| v as u32)
+                                    .unwrap_or(80);
+                                let rows = Reflect::get(&dims_val, &"rows".into())
+                                    .ok()
+                                    .and_then(|v| v.as_f64())
+                                    .map(|v| v as u32)
+                                    .unwrap_or(24);
 
-                            let (cols, rows) = match dims_eval.recv::<Dims>().await {
-                                Ok(dims) => {
-                                    debug!(cols = dims.cols, rows = dims.rows, "terminal: got dimensions");
-                                    (dims.cols, dims.rows)
-                                }
-                                Err(_) => {
-                                    warn!("terminal: failed to get dimensions, using default 80x24");
-                                    (80, 24)
-                                }
+                                debug!(cols, rows, "terminal: got dimensions");
+                                (cols, rows)
+                            } else {
+                                warn!("terminal: failed to get dimensions, using default 80x24");
+                                (80, 24)
                             };
 
                             // Send minimize state FIRST if needed, so server knows
@@ -392,63 +402,62 @@ pub fn Terminal(props: TerminalProps) -> Element {
                 let terminal_id_input = terminal_id.clone();
 
                 spawn(async move {
-                    // Retry loop to ensure terminal is initialized before setting up input
-                    let mut eval = loop {
-                        let mut result = dioxus::document::eval(&format!(
-                            r#"
-                            console.log("Eval: Checking for setupTerminalInput...");
-                            if (window.setupTerminalInput) {{
-                                console.log("Eval: setupTerminalInput found, calling for {0}");
-                                try {{
-                                    let res = window.setupTerminalInput("{0}", (data) => {{
-                                        dioxus.send(data);
-                                    }});
-                                    console.log("Eval: setupTerminalInput returned", res);
-                                    dioxus.send(res);
-                                }} catch (e) {{
-                                    console.error("Eval: setupTerminalInput error", e);
-                                    dioxus.send(false);
-                                }}
-                            }} else {{
-                                console.log("Eval: setupTerminalInput NOT found");
-                                dioxus.send(false);
-                            }}
-                            "#,
-                            terminal_id_input
-                        ));
+                    // Create a channel to receive data from the closure
+                    let (tx, mut rx) = mpsc::unbounded();
 
-                        match result.recv::<bool>().await {
-                            Ok(val) => {
-                                debug!(success = val, "rust: input setup attempt result");
-                                if val {
-                                    break result;
-                                }
+                    // Create a valid closure that sends data to our channel
+                    let closure = Closure::wrap(Box::new(move |data: JsValue| {
+                        // Data is expected to be an array of bytes or Uint8Array
+                        // We need to convert JsValue to Vec<u8>
+                        let bytes: Vec<u8> = if data.is_instance_of::<js_sys::Uint8Array>() {
+                            js_sys::Uint8Array::from(data).to_vec()
+                        } else if data.is_instance_of::<js_sys::Array>() {
+                            let arr = js_sys::Array::from(&data);
+                            arr.iter().map(|v| v.as_f64().unwrap_or(0.0) as u8).collect()
+                        } else {
+                            Vec::new()
+                        };
+
+                        if !bytes.is_empty() {
+                            let _ = tx.unbounded_send(bytes);
+                        }
+                    }) as Box<dyn FnMut(JsValue)>);
+
+                    // Retry loop to ensure terminal is initialized before setting up input
+                    loop {
+                        debug!("rust: attempting setupTerminalInput");
+                        // We pass the closure by reference. The closure must live as long as the callback is used.
+                        match setup_terminal_input(&terminal_id_input, &closure) {
+                            Ok(true) => {
+                                debug!("rust: input setup successful");
+                                break;
                             }
-                            Err(e) => {
-                                warn!(error = %e, "rust: input setup recv error");
+                            _ => {
+                                // Not ready or failed
                             }
                         }
 
                         // Wait a bit before retrying
                         gloo_timers::future::TimeoutFuture::new(500).await;
-                    };
+                    }
 
-                    debug!("rust: input setup successful, starting receive loop");
+                    debug!("rust: input setup done, starting receive loop");
 
-                    // Loop to read from terminal input and send to WebSocket
-                    while let Ok(json_val) = eval.recv().await {
-                        // data is Array<number> (bytes)
-                        if let Ok(bytes) = serde_json::from_value::<Vec<u8>>(json_val) {
-                            use rb_types::ssh::SshClientMsg;
+                    // Loop to read from channel and send to WebSocket
+                    // The closure is kept alive by being in this async block's scope
+                    // while we await on rx.
+                    while let Some(bytes) = rx.next().await {
+                        use rb_types::ssh::SshClientMsg;
+                        let msg = SshClientMsg { cmd: None, data: bytes };
 
-                            let msg = SshClientMsg { cmd: None, data: bytes };
-
-                            if let Err(err) = socket_tx.send(msg).await {
-                                error!(error = %err, "websocket send error");
-                                break;
-                            }
+                        if let Err(err) = socket_tx.send(msg).await {
+                            error!(error = %err, "websocket send error");
+                            break;
                         }
                     }
+
+                    // Explicitly keep closure alive until loop ends
+                    drop(closure);
                 });
 
                 // Ensure the terminal instance is created before we start processing
@@ -456,31 +465,27 @@ pub fn Terminal(props: TerminalProps) -> Element {
                 // Otherwise, writeToTerminal would run before window.terminals[terminalId]
                 // exists and the replay would be lost.
                 loop {
-                    let mut ready_eval = dioxus::document::eval(&format!(
-                        r#"
-                        (function() {{
-                            if (window.terminals && window.terminals["{0}"]) {{
-                                dioxus.send(true);
-                            }} else {{
-                                dioxus.send(false);
-                            }}
-                        }})();
-                        "#,
-                        terminal_id
-                    ));
-
-                    match ready_eval.recv::<bool>().await {
-                        Ok(true) => {
-                            debug!(terminal_id = %terminal_id, "terminal: instance ready");
-                            break;
-                        }
-                        Ok(false) => {}
-                        Err(e) => {
-                            warn!(terminal_id = %terminal_id, error = %e, "terminal: readiness check error");
+                    // Check if window.terminals[terminal_id] exists using web-sys/js-sys
+                    let mut ready = false;
+                    if let Some(window) = web_sys::window() {
+                        if let Ok(terminals) = js_sys::Reflect::get(&window, &"terminals".into()) {
+                            if !terminals.is_undefined() && !terminals.is_null() {
+                                if let Ok(term) = js_sys::Reflect::get(&terminals, &terminal_id.clone().into()) {
+                                    if !term.is_undefined() && !term.is_null() {
+                                        ready = true;
+                                    }
+                                }
+                            }
                         }
                     }
 
-                    gloo_timers::future::TimeoutFuture::new(200).await;
+                    if ready {
+                        debug!(terminal_id = %terminal_id, "terminal: instance ready");
+                        break;
+                    }
+
+                    // Wait before retrying
+                    gloo_timers::future::TimeoutFuture::new(100).await;
                 }
 
                 let mut session_number_set = false;
@@ -512,25 +517,22 @@ pub fn Terminal(props: TerminalProps) -> Element {
                                     handler.call(());
                                 }
 
-                                let _ = dioxus::document::eval(
-                                    r#"
-                                    window.dispatchEvent(new CustomEvent('ssh-connection-closed', {
-                                        detail: 'ssh-eof'
-                                    }));
-                                    "#,
-                                )
-                                .await;
+                                if let Some(window) = web_sys::window() {
+                                    let event_init = web_sys::CustomEventInit::new();
+                                    event_init.set_detail(&JsValue::from_str("ssh-eof"));
+                                    if let Ok(event) = web_sys::CustomEvent::new_with_event_init_dict("ssh-connection-closed", &event_init)
+                                    {
+                                        let _ = window.dispatch_event(&event);
+                                    }
+                                }
 
                                 break;
                             }
 
                             let data = msg.data;
                             if !data.is_empty() {
-                                // Always send raw bytes to xterm as Uint8Array to avoid
-                                // any Rust-side text conversion affecting escape sequences.
-                                let json_data = serde_json::to_string(&data).unwrap_or_else(|_| "[]".to_string());
-                                let script = format!("window.writeToTerminal(\"{}\", new Uint8Array({}));", terminal_id, json_data);
-                                let _ = dioxus::document::eval(&script).await;
+                                // Pass raw bytes to xterm
+                                write_to_terminal(&terminal_id, &data);
                             }
                         }
                         Err(e) => {
@@ -545,14 +547,13 @@ pub fn Terminal(props: TerminalProps) -> Element {
                                 handler.call(());
                             }
 
-                            let _ = dioxus::document::eval(
-                                r#"
-                                window.dispatchEvent(new CustomEvent('ssh-connection-closed', {
-                                    detail: 'ssh-websocket-closed'
-                                }));
-                                "#,
-                            )
-                            .await;
+                            if let Some(window) = web_sys::window() {
+                                let event_init = web_sys::CustomEventInit::new();
+                                event_init.set_detail(&JsValue::from_str("ssh-websocket-closed"));
+                                if let Ok(event) = web_sys::CustomEvent::new_with_event_init_dict("ssh-connection-closed", &event_init) {
+                                    let _ = window.dispatch_event(&event);
+                                }
+                            }
 
                             break;
                         }
@@ -580,67 +581,55 @@ pub fn Terminal(props: TerminalProps) -> Element {
                 let terminal_id_resize = terminal_id.clone();
 
                 spawn(async move {
-                    let mut eval = loop {
-                        let mut result = dioxus::document::eval(&format!(
-                            r#"
-                            if (window.setupTerminalResize) {{
-                                try {{
-                                    let res = window.setupTerminalResize("{0}", (data) => {{
-                                        dioxus.send(data);
-                                    }});
-                                    dioxus.send(res);
-                                }} catch (e) {{
-                                    console.error("Eval: setupTerminalResize error", e);
-                                    dioxus.send(false);
-                                }}
-                            }} else {{
-                                dioxus.send(false);
-                            }}
-                            "#,
-                            terminal_id_resize
-                        ));
+                    // Create a channel to receive resize data from the closure
+                    let (tx, mut rx) = mpsc::unbounded();
 
-                        match result.recv::<bool>().await {
+                    // Closure to handle resize callbacks from JS
+                    let closure = Closure::wrap(Box::new(move |data: JsValue| {
+                        // Data is {cols: number, rows: number}
+                        let cols = Reflect::get(&data, &"cols".into())
+                            .ok()
+                            .and_then(|v| v.as_f64())
+                            .map(|v| v as u32)
+                            .unwrap_or(80);
+                        let rows = Reflect::get(&data, &"rows".into())
+                            .ok()
+                            .and_then(|v| v.as_f64())
+                            .map(|v| v as u32)
+                            .unwrap_or(24);
+
+                        let _ = tx.unbounded_send((cols, rows));
+                    }) as Box<dyn FnMut(JsValue)>);
+
+                    // Retry loop setup
+                    loop {
+                        match setup_terminal_resize(&terminal_id_resize, &closure) {
                             Ok(true) => {
-                                debug!(terminal_id = %terminal_id_resize, "rust: resize setup successful");
-                                break result;
-                            }
-                            Ok(false) => {
-                                // Retry if not ready
-                            }
-                            Err(e) => {
-                                warn!(error = %e, "rust: resize setup recv error");
-                            }
-                        }
-                        gloo_timers::future::TimeoutFuture::new(500).await;
-                    };
-
-                    while let Ok(json_val) = eval.recv().await {
-                        #[derive(serde::Deserialize)]
-                        struct ResizeData {
-                            cols: u32,
-                            rows: u32,
-                        }
-
-                        if let Ok(resize) = serde_json::from_value::<ResizeData>(json_val) {
-                            use rb_types::ssh::{SshClientMsg, SshControl};
-
-                            debug!(cols = resize.cols, rows = resize.rows, "rust: sending resize");
-
-                            let msg = SshClientMsg {
-                                cmd: Some(SshControl::Resize {
-                                    cols: resize.cols,
-                                    rows: resize.rows,
-                                }),
-                                data: Vec::new(),
-                            };
-
-                            if let Err(err) = socket_tx.send(msg).await {
-                                error!(error = %err, "websocket send error (resize)");
+                                debug!("rust: resize setup successful");
                                 break;
                             }
+                            _ => {}
+                        }
+                        gloo_timers::future::TimeoutFuture::new(500).await;
+                    }
+
+                    while let Some((cols, rows)) = rx.next().await {
+                        use rb_types::ssh::{SshClientMsg, SshControl};
+
+                        debug!(cols, rows, "rust: sending resize");
+
+                        let msg = SshClientMsg {
+                            cmd: Some(SshControl::Resize { cols, rows }),
+                            data: Vec::new(),
+                        };
+
+                        if let Err(err) = socket_tx.send(msg).await {
+                            error!(error = %err, "websocket send error (resize)");
+                            break;
                         }
                     }
+
+                    drop(closure);
                 });
             });
         });

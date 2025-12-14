@@ -1,6 +1,6 @@
 mod claims;
 
-pub use claims::{ClaimLevel, ClaimType, ATTACH_ANY_CLAIM, ATTACH_ANY_STR};
+pub use claims::{ATTACH_ANY_CLAIM, ATTACH_ANY_STR, ClaimLevel, ClaimType};
 use serde::{Deserialize, Serialize};
 pub mod oidc;
 pub mod ssh;

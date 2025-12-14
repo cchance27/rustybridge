@@ -54,7 +54,7 @@ pub struct Session {
 impl Session {
     pub fn new(relay_name: String) -> Self {
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: uuid::Uuid::now_v7().to_string(),
             title: format!("SSH: {}", relay_name), // Initial title, can be updated later
             relay_name,
             relay_id: None, // Will be set when session_number is received

@@ -100,8 +100,9 @@ where
                                 }
                                 EscapeAction::Suspend => {
                                     #[cfg(unix)]
-                                    unsafe {
-                                        libc::kill(libc::getpid(), libc::SIGSTOP);
+                                    {
+                                        use rustix::process::{kill_process, getpid, Signal};
+                                        let _ = kill_process(getpid(), Signal::STOP);
                                     }
                                     #[cfg(not(unix))]
                                     {

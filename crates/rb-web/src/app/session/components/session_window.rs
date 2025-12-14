@@ -3,6 +3,8 @@ use dioxus::prelude::*;
 use crate::app::{
     components::Terminal, session::provider::{ResizeDirection, use_session}
 };
+#[cfg(feature = "web")]
+use crate::bindings::{fit_terminal, focus_terminal};
 
 #[component]
 pub fn SessionWindow(session_id: String) -> Element {
@@ -120,7 +122,7 @@ pub fn SessionWindow(session_id: String) -> Element {
                         {
                             let term_id = format!("term-{}", session_id);
                             spawn(async move {
-                                let _ = dioxus::document::eval(&format!("if (window.focusTerminal) window.focusTerminal('{}')", term_id)).await;
+                                focus_terminal(&term_id);
                             });
                         }
                     }
@@ -134,7 +136,7 @@ pub fn SessionWindow(session_id: String) -> Element {
                         {
                             let term_id = format!("term-{}", session_id);
                             spawn(async move {
-                                let _ = dioxus::document::eval(&format!("if (window.focusTerminal) window.focusTerminal('{}')", term_id)).await;
+                                focus_terminal(&term_id);
                             });
                         }
                     }
@@ -250,7 +252,7 @@ pub fn SessionWindow(session_id: String) -> Element {
                         {
                             let term_id = format!("term-{}", session_id_header);
                             spawn(async move {
-                                let _ = dioxus::document::eval(&format!("window.focusTerminal('{}')", term_id)).await;
+                                focus_terminal(&term_id);
                             });
                         }
                     },
@@ -303,8 +305,8 @@ pub fn SessionWindow(session_id: String) -> Element {
                                     spawn(async move {
                                         // Wait for transition/render
                                         gloo_timers::future::TimeoutFuture::new(50).await;
-                                        let _ = dioxus::document::eval(&format!("if (window.fitTerminal) window.fitTerminal('{}')", term_id)).await;
-                                        let _ = dioxus::document::eval(&format!("if (window.focusTerminal) window.focusTerminal('{}')", term_id)).await;
+                                        fit_terminal(&term_id);
+                                        focus_terminal(&term_id);
                                     });
                                 }
                             },

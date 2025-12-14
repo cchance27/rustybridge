@@ -1,4 +1,6 @@
 use dioxus::prelude::*;
+#[cfg(feature = "web")]
+use wasm_bindgen::JsCast;
 
 use crate::app::api::relay_list::list_user_relays;
 
@@ -52,9 +54,15 @@ pub fn RelayDrawer(on_select: EventHandler<String>, children: Element) -> Elemen
                                                                 #[cfg(feature = "web")]
                                                                 {
                                                                     spawn(async move {
-                                                                        let _ = dioxus::document::eval(
-                                                                            r#"document.getElementById('relay-drawer').checked = false"#
-                                                                        ).await;
+                                                                        if let Some(window) = web_sys::window() {
+                                                                            if let Some(document) = window.document() {
+                                                                                if let Some(element) = document.get_element_by_id("relay-drawer") {
+                                                                                    if let Ok(input) = element.dyn_into::<web_sys::HtmlInputElement>() {
+                                                                                        input.set_checked(false);
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
                                                                     });
                                                                 }
                                                             },

@@ -1,5 +1,7 @@
 use dioxus::prelude::*;
 use tracing::debug;
+#[cfg(feature = "web")]
+use wasm_bindgen::JsValue;
 
 use super::session_window::SessionWindow;
 #[cfg(feature = "web")]
@@ -7,6 +9,9 @@ use crate::app::components::use_toast;
 use crate::app::{
     api::relay_list::list_user_relays, auth::hooks::use_auth, session::provider::use_session, storage::{BrowserStorage, StorageType}
 };
+#[cfg(feature = "web")]
+use crate::bindings::{fit_terminal, focus_terminal};
+
 #[derive(Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 enum DrawerState {
     Closed,
@@ -49,32 +54,38 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
     use_effect(move || {
         #[cfg(feature = "web")]
         {
-            spawn(async move {
-                let mut eval = dioxus::document::eval(
-                    r#"
-                    window.addEventListener('rb-toast-notification', (event) => {
-                        console.log('received rb-toast-notification event', event.detail);
-                        const detail = event.detail;
-                        dioxus.send({
-                            message: detail.message,
-                            type: detail.type || 'info'
-                        });
-                    });
-                    "#,
-                );
+            use gloo_events::EventListener;
+            use wasm_bindgen::JsCast;
 
-                while let Ok(notification) = eval.recv::<serde_json::Value>().await {
-                    if let Some(message) = notification.get("message").and_then(|v| v.as_str()) {
-                        let type_str = notification.get("type").and_then(|v| v.as_str()).unwrap_or("info");
-                        match type_str {
-                            "success" => toast.success(message),
-                            "error" => toast.error(message),
-                            "warning" => toast.warning(message),
-                            _ => toast.info(message),
+            let toast = toast.clone();
+            let window = web_sys::window().unwrap();
+
+            let listener = EventListener::new(&window, "rb-toast-notification", move |event| {
+                if let Some(event) = event.dyn_ref::<web_sys::CustomEvent>() {
+                    let detail = event.detail();
+                    let message_key = JsValue::from_str("message");
+                    let type_key = JsValue::from_str("type");
+
+                    if let Ok(message) = js_sys::Reflect::get(&detail, &message_key) {
+                        if let Some(msg) = message.as_string() {
+                            let type_str = js_sys::Reflect::get(&detail, &type_key)
+                                .ok()
+                                .and_then(|v| v.as_string())
+                                .unwrap_or_else(|| "info".to_string());
+
+                            match type_str.as_str() {
+                                "success" => toast.success(&msg),
+                                "error" => toast.error(&msg),
+                                "warning" => toast.warning(&msg),
+                                _ => toast.info(&msg),
+                            }
                         }
                     }
                 }
             });
+
+            // Keep the listener alive
+            listener.forget();
         }
     });
 
@@ -86,21 +97,17 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
     use_effect(move || {
         #[cfg(feature = "web")]
         {
+            use gloo_events::EventListener;
             let session = session;
-            spawn(async move {
-                let mut eval = dioxus::document::eval(
-                    r#"
-                    document.addEventListener('mouseup', () => {
-                        dioxus.send(true);
-                    });
-                "#,
-                );
 
-                while let Ok(_) = eval.recv::<bool>().await {
+            let window = web_sys::window().unwrap();
+            if let Some(document) = window.document() {
+                let listener = EventListener::new(&document, "mouseup", move |_| {
                     session.end_drag();
                     session.end_resize();
-                }
-            });
+                });
+                listener.forget();
+            }
         }
     });
 
@@ -217,8 +224,8 @@ pub fn SessionGlobalChrome(children: Element) -> Element {
                                                                 let term_id = format!("term-{}", id);
                                                                 spawn(async move {
                                                                     gloo_timers::future::TimeoutFuture::new(50).await;
-                                                                    let _ = dioxus::document::eval(&format!("if (window.fitTerminal) window.fitTerminal('{}')", term_id)).await;
-                                                                    let _ = dioxus::document::eval(&format!("if (window.focusTerminal) window.focusTerminal('{}')", term_id)).await;
+                                                                    fit_terminal(&term_id);
+                                                                    focus_terminal(&term_id);
                                                                 });
                                                             }
                                                         } else {

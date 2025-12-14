@@ -2,6 +2,8 @@ use dioxus::prelude::*;
 use tracing::debug;
 
 use crate::app::session::provider::use_session;
+#[cfg(feature = "web")]
+use crate::bindings::{fit_terminal, focus_terminal};
 
 #[component]
 pub fn SessionDock() -> Element {
@@ -57,8 +59,8 @@ pub fn SessionDock() -> Element {
                                                 spawn(async move {
                                                     // Wait for visibility transition
                                                     gloo_timers::future::TimeoutFuture::new(50).await;
-                                                    let _ = dioxus::document::eval(&format!("if (window.fitTerminal) window.fitTerminal('{}')", term_id)).await;
-                                                    let _ = dioxus::document::eval(&format!("if (window.focusTerminal) window.focusTerminal('{}')", term_id)).await;
+                                                    fit_terminal(&term_id);
+                                                    focus_terminal(&term_id);
                                                 });
                                             }
                                         } else {
