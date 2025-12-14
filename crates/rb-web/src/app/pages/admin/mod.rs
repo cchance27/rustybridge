@@ -7,3 +7,5 @@ pub use audit_events::*;
 pub use relay_session_timeline::*;
 pub use server_settings::*;
 pub use session_history::*;
+pub mod tasks;
+pub use tasks::*;

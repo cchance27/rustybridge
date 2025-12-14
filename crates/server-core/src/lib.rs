@@ -26,6 +26,7 @@ pub mod role;
 pub mod session_recorder;
 pub mod sessions;
 
+pub mod scheduler;
 pub mod ssh_server;
 pub mod startup_cleanup;
 pub mod tui;

@@ -13,5 +13,6 @@ pub mod net;
 pub mod relay;
 pub mod ssh;
 pub mod state;
+pub mod tasks;
 pub mod users;
 pub mod validation;

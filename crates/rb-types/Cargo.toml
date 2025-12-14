@@ -16,6 +16,7 @@ ssh-key = ["dep:ssh-key"]
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, optional = true }
+derive_more = { workspace = true }
 openidconnect = { workspace = true, optional = true }
 secrecy = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
@@ -25,6 +26,7 @@ sqlx = { workspace = true, default-features = false, features = [
 ], optional = true }
 ssh-key = { workspace = true, optional = true }
 strum.workspace = true
+thiserror = { workspace = true }
 uuid.workspace = true
 
 [dev-dependencies]

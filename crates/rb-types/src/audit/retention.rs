@@ -86,7 +86,7 @@ pub struct TableRowCounts {
 }
 
 /// Configuration for periodic database vacuum/checkpoint operations.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct VacuumConfig {
     /// Enable vacuum for audit database (default: false)
     #[serde(default = "default_false")]
@@ -94,31 +94,14 @@ pub struct VacuumConfig {
     /// Enable vacuum for server database (default: false)
     #[serde(default = "default_false")]
     pub enabled_server_db: bool,
-    /// Vacuum interval in seconds (minimum 5 minutes)
-    #[serde(default = "default_vacuum_interval")]
-    pub interval_secs: u64,
 }
 
 fn default_false() -> bool {
     false
 }
 
-pub fn default_vacuum_interval() -> u64 {
-    86400 * 7 // 7 days
-}
-
-impl Default for VacuumConfig {
-    fn default() -> Self {
-        Self {
-            enabled_audit_db: false,
-            enabled_server_db: false,
-            interval_secs: default_vacuum_interval(),
-        }
-    }
-}
-
 /// Retention configuration with two policy groups.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct RetentionConfig {
     /// Policy for all session data (relay_sessions + chunks + participants + client_sessions + session events)
     /// Cleanup cascades: deleting a relay_session deletes all related data
@@ -127,27 +110,9 @@ pub struct RetentionConfig {
     /// Policy for orphan system_events (not tied to any session)
     #[serde(default)]
     pub orphan_events: RetentionPolicy,
-    /// Cleanup interval in seconds (how often the background task runs)
-    #[serde(default = "default_cleanup_interval")]
-    pub cleanup_interval_secs: u64,
     /// Vacuum/checkpoint configuration
     #[serde(default)]
     pub vacuum: VacuumConfig,
-}
-
-pub fn default_cleanup_interval() -> u64 {
-    3600 // 1 hour
-}
-
-impl Default for RetentionConfig {
-    fn default() -> Self {
-        Self {
-            sessions: RetentionPolicy::default(),
-            orphan_events: RetentionPolicy::default(),
-            cleanup_interval_secs: default_cleanup_interval(),
-            vacuum: VacuumConfig::default(),
-        }
-    }
 }
 
 /// Result of a retention cleanup run.

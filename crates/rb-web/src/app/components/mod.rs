@@ -18,6 +18,7 @@ mod structured_tooltip;
 mod table;
 
 mod grouped_events;
+mod page_refresh;
 mod relay_session_timeline;
 mod terminal;
 mod theme_toggle;
@@ -35,6 +36,7 @@ pub use layout::*;
 pub use modal::*;
 pub use multi_fab::*;
 pub use navbar::*;
+pub use page_refresh::*;
 pub use relay_access_form::*;
 pub use relay_drawer::RelayDrawer;
 pub use relay_session_timeline::RelaySessionTimeline;

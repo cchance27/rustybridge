@@ -16,7 +16,7 @@ use crate::{
         RelaysPage,
         ServerPage,
         SshSuccessPage,
-        admin::{AuditEvents, RelaySessionTimelinePage, ServerSettings, SessionHistory},
+        admin::{AuditEvents, RelaySessionTimelinePage, ScheduledTasks, ServerSettings, SessionHistory},
     },
 };
 use dioxus::prelude::*;
@@ -94,6 +94,8 @@ pub enum Routes {
     AuditEvents {},
     #[route("/admin/settings")]
     ServerSettings {},
+    #[route("/admin/tasks")]
+    ScheduledTasks {},
     #[route("/admin/sessions/:session_id/replay")]
     SessionPlayer { session_id: String },
     #[route("/admin/sessions/:session_id/timeline")]

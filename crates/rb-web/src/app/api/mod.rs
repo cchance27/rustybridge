@@ -14,5 +14,6 @@ pub mod roles;
 pub mod sessions;
 pub mod settings;
 pub mod ssh_keys;
+pub mod tasks;
 pub mod users;
 pub mod ws;

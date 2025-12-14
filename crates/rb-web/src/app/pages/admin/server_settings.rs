@@ -162,6 +162,7 @@ pub fn ServerSettings() -> Element {
                     div { class: "divider mt-8" }
                     DatabaseStatsSection {
                         stats: stats().and_then(|r| r.ok()),
+                        config: config(),
                         on_cleanup: move || {
                             let toast = toast;
                             spawn(async move {
@@ -228,96 +229,44 @@ fn RetentionSection(config: RetentionConfig, on_change: EventHandler<RetentionCo
                 "Configure how long audit data is retained. Leave fields empty to disable a limit."
             }
 
-            // Scheduled tasks configuration - two matching boxes
-            div { class: "grid gap-4 grid-cols-1 xl:grid-cols-2 mb-6",
-                // Cleanup task configuration
-                div { class: "p-4 bg-base-300 rounded-lg",
-                    h3 { class: "font-medium mb-4", "Cleanup Task" }
-                    p { class: "text-sm opacity-70 mb-4", "Deletes old sessions and events based on retention policies" }
+            // Vacuum task configuration
+            div { class: "p-4 bg-base-300 rounded-lg",
+                h3 { class: "font-medium mb-4", "Vacuum Task" }
+                p { class: "text-sm opacity-70 mb-4", "Checkpoints WAL and compacts databases to reclaim disk space (causes db-lock, use caution)" }
 
-                    div { class: "flex items-center gap-4",
-                        label { class: "label", "Interval (seconds)" }
+                // Enable checkboxes
+                div { class: "flex gap-4",
+                    label { class: "label cursor-pointer gap-2",
                         input {
-                            r#type: "number",
-                            class: "input input-bordered input-sm w-32",
-                            min: "30",
-                            value: "{config.cleanup_interval_secs}",
-                            oninput: {
+                            r#type: "checkbox",
+                            class: "checkbox checkbox-sm",
+                            checked: config.vacuum.enabled_audit_db,
+                            onchange: {
                                 let config = config.clone();
-                                move |evt| {
-                                    if let Ok(val) = evt.value().parse::<u64>() {
-                                        let mut new_config = config.clone();
-                                        new_config.cleanup_interval_secs = val.max(30);
-                                        on_change.call(new_config);
-                                    }
+                                move |evt: FormEvent| {
+                                    let mut new_config = config.clone();
+                                    new_config.vacuum.enabled_audit_db = evt.checked();
+                                    on_change.call(new_config);
                                 }
                             },
                         }
-                        span { class: "text-sm opacity-70", "Min: 30s, Default: 3600 (1h)" }
+                        span { class: "label-text", "Audit DB" }
                     }
-                }
-
-                // Vacuum task configuration
-                div { class: "p-4 bg-base-300 rounded-lg",
-                    h3 { class: "font-medium mb-4", "Vacuum Task" }
-                    p { class: "text-sm opacity-70 mb-4", "Checkpoints WAL and compacts databases to reclaim disk space (causes db-lock, use caution)" }
-
-                    // Enable checkboxes
-                    div { class: "flex gap-4 mb-4",
-                        label { class: "label cursor-pointer gap-2",
-                            input {
-                                r#type: "checkbox",
-                                class: "checkbox checkbox-sm",
-                                checked: config.vacuum.enabled_audit_db,
-                                onchange: {
-                                    let config = config.clone();
-                                    move |evt: FormEvent| {
-                                        let mut new_config = config.clone();
-                                        new_config.vacuum.enabled_audit_db = evt.checked();
-                                        on_change.call(new_config);
-                                    }
-                                },
-                            }
-                            span { class: "label-text", "Audit DB" }
-                        }
-                        label { class: "label cursor-pointer gap-2",
-                            input {
-                                r#type: "checkbox",
-                                class: "checkbox checkbox-sm",
-                                checked: config.vacuum.enabled_server_db,
-                                onchange: {
-                                    let config = config.clone();
-                                    move |evt: FormEvent| {
-                                        let mut new_config = config.clone();
-                                        new_config.vacuum.enabled_server_db = evt.checked();
-                                        on_change.call(new_config);
-                                    }
-                                },
-                            }
-                            span { class: "label-text", "Server DB" }
-                        }
-                    }
-
-                    // Interval input
-                    div { class: "flex items-center gap-4",
-                        label { class: "label", "Interval (seconds)" }
+                    label { class: "label cursor-pointer gap-2",
                         input {
-                            r#type: "number",
-                            class: "input input-bordered input-sm w-32",
-                            min: "300",
-                            value: "{config.vacuum.interval_secs}",
-                            oninput: {
+                            r#type: "checkbox",
+                            class: "checkbox checkbox-sm",
+                            checked: config.vacuum.enabled_server_db,
+                            onchange: {
                                 let config = config.clone();
-                                move |evt| {
-                                    if let Ok(val) = evt.value().parse::<u64>() {
-                                        let mut new_config = config.clone();
-                                        new_config.vacuum.interval_secs = val.max(300);
-                                        on_change.call(new_config);
-                                    }
+                                move |evt: FormEvent| {
+                                    let mut new_config = config.clone();
+                                    new_config.vacuum.enabled_server_db = evt.checked();
+                                    on_change.call(new_config);
                                 }
                             },
                         }
-                        span { class: "text-sm opacity-70", "Min: 300s (5m), Default: 86400 (24h)" }
+                        span { class: "label-text", "Server DB" }
                     }
                 }
             }
@@ -435,21 +384,41 @@ fn PolicyCard(
 
 /// Database statistics section with size breakdown
 #[component]
-fn DatabaseStatsSection(stats: Option<DatabaseStats>, on_cleanup: EventHandler<()>, on_vacuum: EventHandler<()>) -> Element {
+fn DatabaseStatsSection(
+    stats: Option<DatabaseStats>,
+    config: RetentionConfig,
+    on_cleanup: EventHandler<()>,
+    on_vacuum: EventHandler<()>,
+) -> Element {
+    // Check if any cleanup is enabled
+    let cleanup_enabled = config.sessions.enabled || config.orphan_events.enabled;
+    // Check if any vacuum is enabled
+    let vacuum_enabled = config.vacuum.enabled_audit_db || config.vacuum.enabled_server_db;
+
     rsx! {
         div { class: "card bg-base-200 p-6",
             div { class: "flex justify-between items-center mb-4",
                 h2 { class: "text-xl font-semibold", "Database Statistics" }
                 div { class: "flex gap-2",
-                    button {
-                        class: "btn btn-sm btn-primary",
-                        onclick: move |_| on_cleanup.call(()),
-                        "Run Cleanup"
+                    div {
+                        class: if !cleanup_enabled { "tooltip tooltip-bottom" } else { "" },
+                        "data-tip": if !cleanup_enabled { "Enable retention policy first" } else { "" },
+                        button {
+                            class: "btn btn-sm btn-primary",
+                            disabled: !cleanup_enabled,
+                            onclick: move |_| on_cleanup.call(()),
+                            "Run Cleanup"
+                        }
                     }
-                    button {
-                        class: "btn btn-sm btn-secondary",
-                        onclick: move |_| on_vacuum.call(()),
-                        "Truncate + Vacuum DB"
+                    div {
+                        class: if !vacuum_enabled { "tooltip tooltip-bottom" } else { "" },
+                        "data-tip": if !vacuum_enabled { "Enable vacuum for at least one database first" } else { "" },
+                        button {
+                            class: "btn btn-sm btn-secondary",
+                            disabled: !vacuum_enabled,
+                            onclick: move |_| on_vacuum.call(()),
+                            "Truncate + Vacuum DB"
+                        }
                     }
                 }
             }

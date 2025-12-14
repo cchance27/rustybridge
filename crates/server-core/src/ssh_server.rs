@@ -7,7 +7,7 @@ use crate::{
     secrets::{self, SecretBoxedString},
 };
 use base64::Engine;
-use rb_types::{audit::AuditContext, config::ServerConfig};
+use rb_types::config::ServerConfig;
 use russh::{
     MethodKind,
     MethodSet,
@@ -73,132 +73,26 @@ pub async fn run_ssh_server(config: ServerConfig, registry: Arc<crate::sessions:
     server_config.methods.push(MethodKind::PublicKey);
     server_config.keys.push(host_key);
 
-    // Spawn background task for SSH auth session cleanup
-    let cleanup_pool = pool.clone();
+    // Initialize Task Manager
+    let task_manager = crate::scheduler::TaskManager::new(pool.clone())
+        .await
+        .map_err(|e| ServerError::Internal(format!("Failed to init task manager: {}", e)))?;
+
+    crate::scheduler::tasks::register_builtin_tasks(&task_manager, pool.clone(), registry.clone())
+        .await
+        .map_err(|e| ServerError::Internal(format!("Failed to register tasks: {}", e)))?;
+
+    // Set global instance for API access
+    if let Err(_) = crate::scheduler::set_global_manager(task_manager.clone()) {
+        tracing::warn!("Failed to set global task manager - admin UI may not work");
+    }
+
+    let manager_handle = task_manager.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(3600)); // Every hour
-        loop {
-            interval.tick().await;
-            match state_store::cleanup_expired_ssh_auth_sessions(&cleanup_pool).await {
-                Ok(count) if count > 0 => {
-                    info!(count, "cleaned up expired/used ssh auth sessions");
-                }
-                Err(e) => {
-                    warn!(error = %e, "failed to cleanup expired ssh auth sessions");
-                }
-                _ => {}
-            }
+        if let Err(e) = manager_handle.start().await {
+            tracing::error!("task scheduler failed: {}", e);
         }
     });
-
-    // Spawn background task for SSH session cleanup (detached sessions past timeout)
-    {
-        let registry_clone = registry.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(60)); // Every minute
-            loop {
-                interval.tick().await;
-                registry_clone.cleanup_expired_sessions().await;
-            }
-        });
-    }
-
-    // Spawn background task for stale web session cleanup (crashed browsers, etc.)
-    {
-        let registry_clone = registry.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(120)); // Every 2 minutes
-            loop {
-                interval.tick().await;
-                // Clean up web sessions not seen in 5 minutes (10x heartbeat interval)
-                registry_clone.cleanup_stale_web_sessions(300).await;
-            }
-        });
-    }
-
-    // Spawn background task for periodic retention cleanup
-    {
-        tokio::spawn(async move {
-            // Initial delay before first cleanup (let server fully start)
-            tokio::time::sleep(Duration::from_secs(60)).await;
-
-            loop {
-                // Get current cleanup interval from config (minimum 30s to prevent spinning)
-                let interval_secs = match crate::retention::get_retention_config().await {
-                    Ok(config) => config.cleanup_interval_secs.max(30),
-                    Err(_) => rb_types::audit::default_cleanup_interval(),
-                };
-
-                // Wait for the configured interval
-                tokio::time::sleep(Duration::from_secs(interval_secs)).await;
-
-                match crate::retention::run_retention_cleanup().await {
-                    Ok(result) if result.total_deleted() > 0 => {
-                        // Log automated audit event using system context
-                        let ctx = rb_types::audit::AuditContext::system("retention-cleanup");
-                        crate::audit::log_event_from_context_best_effort(
-                            &ctx,
-                            rb_types::audit::EventType::AuditRetentionRun {
-                                total_deleted: result.total_deleted(),
-                                sessions_deleted: result.sessions_deleted,
-                                client_sessions_deleted: result.client_sessions_deleted,
-                                session_events_deleted: result.session_events_deleted,
-                                orphan_events_deleted: result.orphan_events_deleted,
-                                is_automated: true, // System timer triggered
-                            },
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        warn!(error = ?e, "periodic retention cleanup failed");
-                    }
-                    _ => {} // No data deleted, no event logged
-                }
-            }
-        });
-    }
-
-    // Spawn background task for periodic vacuum/checkpoint (runs less frequently)
-    {
-        tokio::spawn(async move {
-            // Longer initial delay for vacuum (5 minutes after start)
-            tokio::time::sleep(Duration::from_secs(300)).await;
-
-            loop {
-                // Get vacuum interval from config (minimum 5 minutes to prevent excessive load)
-                let interval_secs = match crate::retention::get_retention_config().await {
-                    Ok(config) => config.vacuum.interval_secs.max(300),
-                    Err(_) => rb_types::audit::default_vacuum_interval(),
-                };
-
-                // Wait for the configured interval
-                tokio::time::sleep(Duration::from_secs(interval_secs)).await;
-
-                // Vacuum all enabled databases
-                match crate::retention::vacuum_all_databases().await {
-                    Ok(results) => {
-                        for result in results {
-                            // Log automated vacuum event for each database
-                            let ctx = AuditContext::system("vacuum-task");
-                            crate::audit!(
-                                &ctx,
-                                DatabaseVacuumed {
-                                    database: result.database.clone(),
-                                    size_before_kb: result.size_before_kb,
-                                    size_after_kb: result.size_after_kb,
-                                    file_size_before_kb: result.file_size_before_kb,
-                                    file_size_after_kb: result.file_size_after_kb,
-                                }
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        warn!(error = ?e, "periodic vacuum failed");
-                    }
-                }
-            }
-        });
-    }
 
     let mut server = super::server_manager::ServerManager { registry };
     info!(bind = %config.bind, port = config.port, "starting embedded SSH server");
