@@ -1,17 +1,18 @@
 //! Database initialization, migration, and connection management.
 
-use std::{
-    env, fs::OpenOptions, io::ErrorKind, path::{Path, PathBuf}
-};
-
+use crate::DbResult;
 #[cfg(feature = "client")]
 use rb_types::state::DbLocation;
 use sqlx::{migrate::Migrator, sqlite::SqlitePoolOptions};
+use std::{
+    env,
+    fs::OpenOptions,
+    io::ErrorKind,
+    path::{Path, PathBuf},
+};
 use tokio::sync::OnceCell;
 use tracing::warn;
 use url::Url;
-
-use crate::DbResult;
 
 #[cfg(feature = "client")]
 static CLIENT_MIGRATOR: Migrator = sqlx::migrate!("./migrations/client");

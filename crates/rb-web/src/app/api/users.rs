@@ -1,15 +1,15 @@
-use dioxus::prelude::*;
-#[cfg(feature = "server")]
-use rb_types::auth::ClaimLevel;
-use rb_types::{
-    auth::ClaimType, users::{CreateUserRequest, UpdateUserRequest, UserGroupInfo}
-};
-
 use crate::error::ApiError;
+use dioxus::prelude::*;
+use rb_types::{
+    auth::ClaimType,
+    users::{CreateUserRequest, UpdateUserRequest, UserGroupInfo},
+};
 #[cfg(feature = "server")]
-use crate::server::audit::WebAuditContext;
-#[cfg(feature = "server")]
-use crate::server::auth::guards::{WebAuthSession, ensure_claim};
+use {
+    crate::server::audit::WebAuditContext,
+    crate::server::auth::guards::{WebAuthSession, ensure_claim},
+    rb_types::auth::ClaimLevel,
+};
 
 #[cfg(feature = "server")]
 fn ensure_user_claim(auth: &WebAuthSession, level: ClaimLevel) -> Result<(), ApiError> {

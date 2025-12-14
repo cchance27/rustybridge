@@ -1,11 +1,11 @@
 //! Server Settings admin page for retention configuration and database management.
 
+use crate::app::{
+    api::settings::{get_database_stats, get_retention_settings, run_cleanup, update_retention_settings, vacuum_all_databases},
+    components::{Layout, toast::use_toast},
+};
 use dioxus::prelude::*;
 use rb_types::audit::{DatabaseStats, RetentionConfig, RetentionPolicy};
-
-use crate::app::{
-    api::settings::{get_database_stats, get_retention_settings, run_cleanup, update_retention_settings, vacuum_all_databases}, components::{Layout, toast::use_toast}
-};
 
 /// Admin page for server settings including retention policies
 #[component]

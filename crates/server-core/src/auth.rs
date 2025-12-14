@@ -7,9 +7,8 @@ pub mod oidc;
 pub mod ssh_auth;
 pub mod ssh_cert;
 
-use tracing::error;
-
 use crate::error::{ServerError, ServerResult};
+use tracing::error;
 
 pub fn parse_login_target(input: &str) -> LoginTarget {
     if let Some((user, relay)) = input.split_once(':') {

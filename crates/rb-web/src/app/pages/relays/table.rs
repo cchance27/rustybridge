@@ -1,9 +1,10 @@
+use crate::components::{CredentialBadge, Protected, StructuredTooltip, Table, TableActions, TooltipSection, icons::EditIcon};
 use dioxus::prelude::*;
 use rb_types::{
-    access::PrincipalKind, auth::{ClaimLevel, ClaimType}, relay::RelayHostInfo
+    access::PrincipalKind,
+    auth::{ClaimLevel, ClaimType},
+    relay::RelayHostInfo,
 };
-
-use crate::components::{CredentialBadge, Protected, StructuredTooltip, Table, TableActions, TooltipSection, icons::EditIcon};
 
 /// Render the credential cell for a relay host
 pub fn render_credential_cell(

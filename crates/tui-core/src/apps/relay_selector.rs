@@ -1,8 +1,6 @@
-use std::fmt;
-
-use ratatui::Frame;
-
 use crate::{AppAction, TuiApp, TuiResult, widgets::Menu};
+use ratatui::Frame;
+use std::fmt;
 
 /// Represents a relay host option in the menu
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -125,7 +123,8 @@ impl TuiApp for RelaySelectorApp {
         self.menu.render(frame, chunks[0]);
 
         use ratatui::{
-            style::{Color, Style}, widgets::Paragraph
+            style::{Color, Style},
+            widgets::Paragraph,
         };
 
         let footer_chunks = Layout::default()

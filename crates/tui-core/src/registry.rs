@@ -1,6 +1,5 @@
-use std::collections::HashMap;
-
 use crate::TuiApp;
+use std::collections::HashMap;
 
 /// Factory function type for creating TUI apps
 pub type AppFactory = Box<dyn Fn() -> Box<dyn TuiApp> + Send + Sync>;

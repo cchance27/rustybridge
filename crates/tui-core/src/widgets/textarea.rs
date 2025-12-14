@@ -1,5 +1,8 @@
 use ratatui::{
-    Frame, layout::Rect, text::{Line, Span, Text}, widgets::{Block, Borders, Paragraph, Wrap}
+    Frame,
+    layout::Rect,
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
 
 #[derive(Clone)]

@@ -1,14 +1,13 @@
 //! Grouped event view with drill-down navigation.
 //! Shows group summaries first, then drills into a selected group's events.
 
-use std::collections::HashMap;
-
+use crate::app::api::{
+    audit::{GroupSummaryQuery, GroupSummaryWithCount, GroupedEvent, StreamEventsQuery, get_event_groups, stream_audit_events},
+    users::list_users,
+};
 use dioxus::prelude::*;
 use rb_types::audit::EventCategory;
-
-use crate::app::api::{
-    audit::{GroupSummaryQuery, GroupSummaryWithCount, GroupedEvent, StreamEventsQuery, get_event_groups, stream_audit_events}, users::list_users
-};
+use std::collections::HashMap;
 
 /// Window size - how many events to keep in memory at once
 #[cfg(feature = "web")]

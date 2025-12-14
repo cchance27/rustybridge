@@ -1,5 +1,6 @@
 use std::{
-    path::{Path, PathBuf}, sync::Arc
+    path::{Path, PathBuf},
+    sync::Arc,
 };
 
 // Internal Result type alias
@@ -7,7 +8,9 @@ type Result<T> = crate::ClientResult<T>;
 use rb_types::client::{AuthPreferences, ClientIdentity};
 use rpassword::{prompt_password, read_password};
 use russh::{
-    MethodSet, client::{self, AuthResult, KeyboardInteractiveAuthResponse}, keys::{self, Certificate, HashAlg, PrivateKeyWithHashAlg}
+    MethodSet,
+    client::{self, AuthResult, KeyboardInteractiveAuthResponse},
+    keys::{self, Certificate, HashAlg, PrivateKeyWithHashAlg},
 };
 use secrecy::{ExposeSecret, SecretString};
 use ssh_core::session::SessionHandle;

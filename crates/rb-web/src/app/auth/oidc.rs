@@ -1,11 +1,8 @@
+use crate::error::ApiError;
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "server")]
-use tracing::info;
-
-use crate::error::ApiError;
-#[cfg(feature = "server")]
-use crate::server::auth::guards::WebAuthSession;
+use {crate::server::auth::guards::WebAuthSession, tracing::info};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OidcLinkStatus {
@@ -83,9 +80,8 @@ pub async fn unlink_oidc() -> Result<(), ApiError> {
     auth: WebAuthSession,
 )]
 pub async fn get_user_oidc_status(user_id: i64) -> Result<OidcLinkStatus, ApiError> {
-    use rb_types::auth::{ClaimLevel, ClaimType};
-
     use crate::server::auth::guards::ensure_claim;
+    use rb_types::auth::{ClaimLevel, ClaimType};
 
     // Require users:view permission
     ensure_claim(&auth, &ClaimType::Users(ClaimLevel::View))?;
@@ -118,9 +114,8 @@ pub async fn get_user_oidc_status(user_id: i64) -> Result<OidcLinkStatus, ApiErr
     connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>
 )]
 pub async fn unlink_user_oidc(user_id: i64) -> Result<(), ApiError> {
-    use rb_types::auth::{ClaimLevel, ClaimType};
-
     use crate::server::auth::guards::ensure_claim;
+    use rb_types::auth::{ClaimLevel, ClaimType};
 
     // Require users:manage permission
     ensure_claim(&auth, &ClaimType::Users(ClaimLevel::Edit))?;

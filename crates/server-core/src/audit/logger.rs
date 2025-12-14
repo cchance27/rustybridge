@@ -1,9 +1,8 @@
 //! Core audit event logging functionality.
 
+use crate::error::{ServerError, ServerResult};
 use rb_types::audit::{AuditContext, AuditEvent, EventType};
 use tracing::warn;
-
-use crate::error::{ServerError, ServerResult};
 
 /// Log an audit event to the audit database.
 ///

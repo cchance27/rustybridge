@@ -1,9 +1,8 @@
-use std::{collections::HashMap, ffi::OsString, path::PathBuf};
-
 use anyhow::{Result, anyhow};
 use clap::{CommandFactory, Parser};
 use rb_cli::client_cli::{ClientArgs, ClientEnv};
 use rb_types::{client::ClientConfig, ssh::LocaleMode};
+use std::{collections::HashMap, ffi::OsString, path::PathBuf};
 
 struct Case {
     name: &'static str,

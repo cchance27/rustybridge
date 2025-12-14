@@ -1,10 +1,9 @@
 //! TUI action processing.
 
+use super::{AuthPromptState, ServerHandler};
 use russh::{ChannelId, CryptoVec, server::Session};
 use tracing::warn;
 use tui_core::AppAction;
-
-use super::{AuthPromptState, ServerHandler};
 
 impl ServerHandler {
     pub(super) async fn process_action(

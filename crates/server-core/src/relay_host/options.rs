@@ -1,9 +1,10 @@
+use crate::{
+    ServerContext,
+    error::{ServerError, ServerResult},
+    secrets::{SecretBoxedString, encrypt_string_with},
+};
 use sqlx::SqliteExecutor;
 use tracing::info;
-
-use crate::{
-    ServerContext, error::{ServerError, ServerResult}, secrets::{SecretBoxedString, encrypt_string_with}
-};
 
 /// Set a relay option and record an audit event.
 pub async fn set_relay_option_by_id(

@@ -1,21 +1,20 @@
-#[cfg(feature = "server")]
-use axum::http::HeaderMap;
 use dioxus::{
-    fullstack::{JsonEncoding, WebSocketOptions, Websocket}, prelude::*
+    fullstack::{JsonEncoding, WebSocketOptions, Websocket},
+    prelude::*,
 };
-#[cfg(feature = "server")]
-use rb_types::auth::{ClaimLevel, ClaimType};
 use rb_types::ssh::SessionEvent;
 #[cfg(feature = "server")]
-use server_core::sessions::SessionRegistry;
-#[cfg(feature = "server")]
-use tracing::{debug, error, info, trace, warn};
+use {
+    crate::server::auth::guards::{WebAuthSession, ensure_claim},
+    axum::http::HeaderMap,
+    rb_types::auth::{ClaimLevel, ClaimType},
+    server_core::sessions::SessionRegistry,
+    tracing::{debug, error, info, trace, warn},
+};
 #[cfg(feature = "server")]
 type SharedRegistry = std::sync::Arc<SessionRegistry>;
 
 use crate::error::ApiError;
-#[cfg(feature = "server")]
-use crate::server::auth::guards::{WebAuthSession, ensure_claim};
 
 pub type SessionEventsSocket = Websocket<String, SessionEvent, JsonEncoding>;
 

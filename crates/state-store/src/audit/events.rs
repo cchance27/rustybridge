@@ -2,12 +2,12 @@
 //!
 //! This module handles storing and querying audit events in the audit database.
 
+use crate::{DbError, DbResult};
 use rb_types::{
-    audit::{AuditEvent, EventFilter}, state::DbHandle
+    audit::{AuditEvent, EventFilter},
+    state::DbHandle,
 };
 use sqlx::Row;
-
-use crate::{DbError, DbResult};
 
 /// Insert an audit event into the database.
 pub async fn insert_audit_event(db: &DbHandle, event: &AuditEvent) -> DbResult<()> {

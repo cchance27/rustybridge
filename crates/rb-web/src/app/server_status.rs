@@ -1,7 +1,6 @@
+use crate::app::{auth::hooks::use_auth, components::use_toast};
 use dioxus::{fullstack::use_websocket, prelude::*};
 use tracing::debug;
-
-use crate::app::{auth::hooks::use_auth, components::use_toast};
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum ConnectionState {
@@ -61,9 +60,8 @@ pub fn ServerStatusProvider(children: Element) -> Element {
 /// Dedicated child component so hook ordering stays stable while login state toggles.
 #[component]
 fn ServerStatusMonitor(state: Signal<ConnectionState>) -> Element {
-    use dioxus::fullstack::WebSocketOptions;
-
     use crate::{app::api::ws::session_events::ssh_web_events, error::ApiError};
+    use dioxus::fullstack::WebSocketOptions;
 
     let toast = use_toast();
 

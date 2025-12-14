@@ -1,19 +1,24 @@
 //! SSH authentication handler methods.
 
-use std::borrow::Cow;
-
-use rb_types::{
-    audit::{AuthMethod, EventType}, auth::{AuthDecision, LoginTarget}
-};
-use russh::server::Auth;
-use tracing::{error, info, warn};
-
 use super::{ServerHandler, display_addr};
 use crate::auth::{
-    authenticate_password, parse_login_target, ssh_auth::{
-        check_ssh_auth_session, create_ssh_auth_session, mark_ssh_auth_session_used, reject_ssh_auth_session, verify_user_public_key
-    }
+    authenticate_password,
+    parse_login_target,
+    ssh_auth::{
+        check_ssh_auth_session,
+        create_ssh_auth_session,
+        mark_ssh_auth_session_used,
+        reject_ssh_auth_session,
+        verify_user_public_key,
+    },
 };
+use rb_types::{
+    audit::{AuthMethod, EventType},
+    auth::{AuthDecision, LoginTarget},
+};
+use russh::server::Auth;
+use std::borrow::Cow;
+use tracing::{error, info, warn};
 
 impl ServerHandler {
     pub(super) fn oidc_failed_prompt() -> Auth {

@@ -1,13 +1,14 @@
 use dioxus::prelude::*;
 use rb_types::ssh::{AdminSessionSummary, UserSessionSummary};
 #[cfg(feature = "server")]
-use server_core::sessions::SessionRegistry;
+use {
+    crate::server::auth::guards::{WebAuthSession, ensure_authenticated, ensure_claim},
+    server_core::sessions::SessionRegistry,
+};
 #[cfg(feature = "server")]
 type SharedRegistry = std::sync::Arc<SessionRegistry>;
 
 use crate::error::ApiError;
-#[cfg(feature = "server")]
-use crate::server::auth::guards::{WebAuthSession, ensure_authenticated, ensure_claim};
 
 #[get(
     "/api/sessions/all",

@@ -1,11 +1,11 @@
-use dioxus::prelude::*;
-use rb_types::ssh::SshKey;
-
 use crate::error::ApiError;
 #[cfg(feature = "server")]
 use crate::server::{
-    audit::WebAuditContext, auth::guards::{WebAuthSession, ensure_authenticated}
+    audit::WebAuditContext,
+    auth::guards::{WebAuthSession, ensure_authenticated},
 };
+use dioxus::prelude::*;
+use rb_types::ssh::SshKey;
 
 #[get(
     "/api/my/ssh_keys",

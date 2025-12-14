@@ -1,8 +1,8 @@
-use std::borrow::Cow;
-
 use russh::{
-    Preferred, keys::{Algorithm, HashAlg}
+    Preferred,
+    keys::{Algorithm, HashAlg},
 };
+use std::borrow::Cow;
 
 pub fn default_preferred() -> Preferred {
     Preferred::DEFAULT.clone()

@@ -1,10 +1,11 @@
-use dioxus::prelude::*;
-
 use crate::{
     app::{
-        api::auth::logout, auth::{context::AuthState, hooks::use_auth}
-    }, components::Layout
+        api::auth::logout,
+        auth::{context::AuthState, hooks::use_auth},
+    },
+    components::Layout,
 };
+use dioxus::prelude::*;
 
 #[component]
 pub fn LogoutPage() -> Element {

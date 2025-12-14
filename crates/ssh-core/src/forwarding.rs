@@ -19,6 +19,12 @@ mod traits;
 // Re-export public API
 pub use manager::ForwardingManager;
 pub use parsing::{
-    parse_dynamic_socks, parse_env_entry, parse_local_tcp, parse_local_unix, parse_remote_tcp, parse_remote_unix, parse_subsystem
+    parse_dynamic_socks,
+    parse_env_entry,
+    parse_local_tcp,
+    parse_local_unix,
+    parse_remote_tcp,
+    parse_remote_unix,
+    parse_subsystem,
 };
 pub use traits::{ForwardSession, ForwardStream, ForwardStreamIo, RemoteForwardChannel, RemoteRegistrar};

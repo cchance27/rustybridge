@@ -1,10 +1,10 @@
-use dioxus::prelude::*;
-
 use crate::app::{
-    components::Terminal, session::provider::{ResizeDirection, use_session}
+    components::Terminal,
+    session::provider::{ResizeDirection, use_session},
 };
 #[cfg(feature = "web")]
 use crate::bindings::{fit_terminal, focus_terminal};
+use dioxus::prelude::*;
 
 #[component]
 pub fn SessionWindow(session_id: String) -> Element {

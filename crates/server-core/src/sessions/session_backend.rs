@@ -3,12 +3,10 @@
 //! This module provides trait-based abstractions for session I/O backends,
 //! allowing sessions to be created from and attached to by both web and SSH clients.
 
-use std::sync::Arc;
-
-use async_trait::async_trait;
-use tokio::sync::{broadcast, mpsc};
-
 use crate::relay::RelayHandle;
+use async_trait::async_trait;
+use std::sync::Arc;
+use tokio::sync::{broadcast, mpsc};
 
 /// Errors that can occur in session backend operations
 #[derive(Debug, thiserror::Error)]

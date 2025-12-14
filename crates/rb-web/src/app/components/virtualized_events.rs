@@ -1,13 +1,12 @@
 //! Virtualized event list component with infinite scroll, windowing, and collapsible groups.
 
-use std::collections::{HashMap, HashSet};
-
+use crate::app::api::{
+    audit::{GroupSummary, GroupedEvent, StreamEventsQuery, stream_audit_events},
+    users::list_users,
+};
 use dioxus::prelude::*;
 use rb_types::audit::EventCategory;
-
-use crate::app::api::{
-    audit::{GroupSummary, GroupedEvent, StreamEventsQuery, stream_audit_events}, users::list_users
-};
+use std::collections::{HashMap, HashSet};
 
 /// Window size - how many events to keep in memory at once
 const WINDOW_SIZE: usize = 200;

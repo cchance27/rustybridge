@@ -2,9 +2,8 @@
 //!
 //! This module handles creating, deleting, assigning roles and managing role claims.
 
-use rb_types::auth::ClaimType;
-
 use crate::error::{ServerError, ServerResult};
+use rb_types::auth::ClaimType;
 
 /// Get claims for a group.
 ///

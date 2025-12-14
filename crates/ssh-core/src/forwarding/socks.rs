@@ -1,9 +1,10 @@
+use super::traits::ForwardSession;
 use tokio::{
-    io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, copy_bidirectional}, net::TcpStream, task::JoinHandle
+    io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, copy_bidirectional},
+    net::TcpStream,
+    task::JoinHandle,
 };
 use tracing::warn;
-
-use super::traits::ForwardSession;
 
 type Result<T> = crate::SshResult<T>;
 

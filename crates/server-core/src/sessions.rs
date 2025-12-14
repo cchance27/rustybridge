@@ -1,21 +1,30 @@
 pub mod session_backend;
 pub mod web;
 
-use std::{
-    collections::{HashMap, VecDeque}, sync::{
-        Arc, atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering}
-    }, time::Duration
-};
-
+use crate::session_recorder::SessionRecorder;
 use chrono::{DateTime, Utc};
 use rb_types::ssh::{
-    ConnectionAmounts, ConnectionType, SessionEvent, SessionKind, SessionOrigin, SessionStateSummary, TUIApplication, UserSessionSummary, WebSessionMeta
+    ConnectionAmounts,
+    ConnectionType,
+    SessionEvent,
+    SessionKind,
+    SessionOrigin,
+    SessionStateSummary,
+    TUIApplication,
+    UserSessionSummary,
+    WebSessionMeta,
 };
 use session_backend::SessionBackend;
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering},
+    },
+    time::Duration,
+};
 use tokio::sync::{RwLock, broadcast};
 use tracing::{debug, info, warn};
-
-use crate::session_recorder::SessionRecorder;
 
 #[derive(Debug, Clone)]
 pub enum SessionState {

@@ -1,8 +1,7 @@
 //! Unit tests for claim checking helper wrappers.
 
-use rb_types::auth::{AuthUserInfo, ClaimType};
-
 use super::*;
+use rb_types::auth::{AuthUserInfo, ClaimType};
 
 fn test_user(claims: Vec<ClaimType>) -> AuthUserInfo {
     AuthUserInfo {

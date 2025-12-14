@@ -1,17 +1,17 @@
-use std::net::SocketAddr;
-
+use crate::server::auth::WebAuthSession;
 use axum::{extract::ConnectInfo, http::HeaderMap, response::Redirect};
 use dioxus::prelude::*;
 use openidconnect::{AuthorizationCode, TokenResponse};
 use rb_types::{
-    audit::{AuthMethod, EventType}, auth::oidc::OidcConfig
+    audit::{AuthMethod, EventType},
+    auth::oidc::OidcConfig,
 };
 use server_core::{
-    api as sc_api, auth::oidc::{create_client, generate_auth_url}
+    api as sc_api,
+    auth::oidc::{create_client, generate_auth_url},
 };
+use std::net::SocketAddr;
 use tracing::{error, info, warn};
-
-use crate::server::auth::WebAuthSession;
 
 #[cfg(feature = "server")]
 pub(super) async fn get_oidc_config() -> Option<OidcConfig> {

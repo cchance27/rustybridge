@@ -1,9 +1,8 @@
 //! Server configuration and options management.
 
+use crate::{DbError, DbResult};
 use rb_types::audit::RetentionConfig;
 use sqlx::{Row, SqliteExecutor};
-
-use crate::{DbError, DbResult};
 
 // --------------------------------
 // Generic Server Options

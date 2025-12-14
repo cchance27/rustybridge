@@ -1,9 +1,8 @@
-use dioxus::prelude::*;
-use tracing::debug;
-
 use crate::app::session::provider::use_session;
 #[cfg(feature = "web")]
 use crate::bindings::{fit_terminal, focus_terminal};
+use dioxus::prelude::*;
+use tracing::debug;
 
 #[component]
 pub fn SessionDock() -> Element {

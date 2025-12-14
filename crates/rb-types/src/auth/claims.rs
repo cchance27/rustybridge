@@ -1,6 +1,5 @@
-use std::{borrow::Cow, fmt, str::FromStr};
-
 use serde::{Deserialize, Serialize};
+use std::{borrow::Cow, fmt, str::FromStr};
 
 pub const ATTACH_ANY_STR: &str = "server:attach_any";
 pub const ATTACH_ANY_CLAIM: ClaimType<'static> = ClaimType::Custom(Cow::Borrowed(ATTACH_ANY_STR));

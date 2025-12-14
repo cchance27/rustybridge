@@ -1,9 +1,10 @@
+use crate::{
+    app::api::groups::{add_member_to_group, remove_member_from_group},
+    components::{Modal, use_toast},
+    error::ApiError,
+};
 use dioxus::prelude::*;
 use rb_types::users::{GroupInfo, UserGroupInfo};
-
-use crate::{
-    app::api::groups::{add_member_to_group, remove_member_from_group}, components::{Modal, use_toast}, error::ApiError
-};
 
 /// User Groups Management Modal
 #[component]

@@ -1,8 +1,7 @@
+use crate::server::auth::WebAuthSession;
 use axum::response::{IntoResponse, Redirect};
 use server_core::api as sc_api;
 use tracing::{error, info, warn};
-
-use crate::server::auth::WebAuthSession;
 
 /// Unlink OIDC account from the current user
 #[cfg(feature = "server")]

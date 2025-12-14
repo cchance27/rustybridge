@@ -1,6 +1,5 @@
-use std::time::Duration;
-
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use std::time::Duration;
 
 pub fn format_duration(d: Duration) -> String {
     let secs = d.as_secs();

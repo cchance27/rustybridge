@@ -1,6 +1,5 @@
-use ssh_key::{Certificate, PublicKey};
-
 use crate::error::ServerResult;
+use ssh_key::{Certificate, PublicKey};
 
 // TODO: Implement proper SSH certificate validation
 // The ssh-key crate API may have changed or we need to use a different approach

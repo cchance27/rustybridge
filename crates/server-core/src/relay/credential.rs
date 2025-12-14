@@ -2,15 +2,14 @@
 //!
 //! This module handles fetching, resolving, and managing credentials for relay connections.
 
-use std::collections::HashMap;
-
+use crate::{
+    error::{ServerError, ServerResult},
+    secrets::{SecretBoxedString, SecretVec, decrypt_secret, encrypt_secret},
+};
 use secrecy::ExposeSecret;
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
 use tracing::{error, warn};
-
-use crate::{
-    error::{ServerError, ServerResult}, secrets::{SecretBoxedString, SecretVec, decrypt_secret, encrypt_secret}
-};
 
 // Internal Result type alias
 type Result<T> = ServerResult<T>;

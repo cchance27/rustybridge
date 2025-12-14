@@ -38,7 +38,9 @@ pub use error::{DbError, DbResult};
 // Re-export types from rb-types
 pub use rb_types::access::{PrincipalKind, RelayAclPrincipal};
 pub use rb_types::{
-    auth::{ClaimLevel, ClaimType, OidcLinkInfo, OidcProfile, UserAuthRecord}, relay::RelayInfo, state::{DbHandle, RelayCredentialRow, Role}
+    auth::{ClaimLevel, ClaimType, OidcLinkInfo, OidcProfile, UserAuthRecord},
+    relay::RelayInfo,
+    state::{DbHandle, RelayCredentialRow, Role},
 };
 pub use rbac::*;
 pub use relay::*;

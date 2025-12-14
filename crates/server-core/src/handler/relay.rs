@@ -1,17 +1,16 @@
 //! Relay connection establishment and management.
 
-use std::{collections::HashMap, sync::Arc};
-
+use super::{ServerHandler, display_addr};
+use crate::{
+    relay::start_bridge_backend,
+    secrets::{SecretBoxedString, decrypt_string_if_encrypted, encrypt_string},
+};
 use rb_types::{relay::RelayInfo, ssh::ConnectionType};
 use russh::{ChannelId, CryptoVec, server::Session};
 use secrecy::ExposeSecret;
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{mpsc::unbounded_channel, oneshot};
 use tracing::{info, warn};
-
-use super::{ServerHandler, display_addr};
-use crate::{
-    relay::start_bridge_backend, secrets::{SecretBoxedString, decrypt_string_if_encrypted, encrypt_string}
-};
 
 impl ServerHandler {
     pub(super) async fn connect_to_relay(

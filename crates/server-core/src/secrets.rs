@@ -1,22 +1,28 @@
-use std::{
-    fs, path::{Path, PathBuf}
-};
-
+use crate::error::{ServerError, ServerResult};
 use argon2::{
-    Algorithm, Argon2, Params, Version, password_hash::{PasswordHasher, SaltString}
+    Algorithm,
+    Argon2,
+    Params,
+    Version,
+    password_hash::{PasswordHasher, SaltString},
 };
 use base64::Engine;
 use chacha20poly1305::{
-    Key, XChaCha20Poly1305, XNonce, aead::{Aead, KeyInit, OsRng}
+    Key,
+    XChaCha20Poly1305,
+    XNonce,
+    aead::{Aead, KeyInit, OsRng},
 };
 use hkdf::Hkdf;
 use rand::{Rng, RngCore};
 use rb_types::credentials::EncryptedBlob;
 use secrecy::{ExposeSecret, SecretBox};
 use sha2::Sha256;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 use tracing::warn;
-
-use crate::error::{ServerError, ServerResult};
 
 pub type SecretBoxedString = SecretBox<String>;
 pub type SecretVec<T> = SecretBox<Vec<T>>;

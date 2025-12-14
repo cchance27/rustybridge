@@ -1,10 +1,8 @@
 // Session management for TUI apps over SSH
 
-use std::time::Instant;
-
-use ratatui::{Terminal, backend::Backend, layout::Rect};
-
 use crate::{TuiApp, TuiResult};
+use ratatui::{Terminal, backend::Backend, layout::Rect};
+use std::time::Instant;
 
 /// Manages a TUI app session including rendering and lifecycle
 pub struct AppSession<B: Backend> {

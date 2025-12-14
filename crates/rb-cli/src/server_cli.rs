@@ -1,9 +1,9 @@
-use std::path::PathBuf;
-
 use clap::{Parser, Subcommand, ValueEnum};
 use rb_types::{
-    auth::ClaimType, config::{ServerConfig, WebServerConfig, WebTlsConfig}
+    auth::ClaimType,
+    config::{ServerConfig, WebServerConfig, WebTlsConfig},
 };
+use std::path::PathBuf;
 
 const DEFAULT_SERVER_PORT: u16 = 2222;
 

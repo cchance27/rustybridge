@@ -1,10 +1,11 @@
-use dioxus::prelude::*;
-
 use crate::{
     app::{
-        api::relays::{clear_relay_auth, clear_relay_credential}, pages::relays::state::RelayState
-    }, components::{Modal, use_toast}
+        api::relays::{clear_relay_auth, clear_relay_credential},
+        pages::relays::state::RelayState,
+    },
+    components::{Modal, use_toast},
 };
+use dioxus::prelude::*;
 
 /// Modal for clearing authentication from a relay
 #[component]

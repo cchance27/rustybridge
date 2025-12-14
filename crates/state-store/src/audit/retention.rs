@@ -3,12 +3,12 @@
 //! This module implements cascading cleanup where deleting relay_sessions
 //! automatically cascades to related data (chunks, participants, client_sessions, events).
 
+use crate::DbResult;
 use chrono::Utc;
 use rb_types::{
-    audit::{DatabaseStats, OrphanEventsSizes, RetentionConfig, RetentionPolicy, RetentionResult, SessionDataSizes, TableRowCounts}, state::DbHandle
+    audit::{DatabaseStats, OrphanEventsSizes, RetentionConfig, RetentionPolicy, RetentionResult, SessionDataSizes, TableRowCounts},
+    state::DbHandle,
 };
-
-use crate::DbResult;
 
 // --------------------------------
 // Size Measurements

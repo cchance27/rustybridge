@@ -1,16 +1,24 @@
-use chrono::{Duration, Utc};
-use dioxus::{
-    fullstack::{WebSocketOptions, use_websocket}, prelude::*
-};
-use rb_types::ssh::SessionEvent;
-
 use crate::app::{
     api::{
-        sessions::{close_session, list_my_sessions as list_my_active_sessions}, ws::session_events::ssh_web_events
-    }, auth::context::AuthState, components::{
-        StructuredTooltip, Table, TooltipSection, icons::{BrowserIcon, TerminalIcon}, use_toast
-    }, session::provider::use_session
+        sessions::{close_session, list_my_sessions as list_my_active_sessions},
+        ws::session_events::ssh_web_events,
+    },
+    auth::context::AuthState,
+    components::{
+        StructuredTooltip,
+        Table,
+        TooltipSection,
+        icons::{BrowserIcon, TerminalIcon},
+        use_toast,
+    },
+    session::provider::use_session,
 };
+use chrono::{Duration, Utc};
+use dioxus::{
+    fullstack::{WebSocketOptions, use_websocket},
+    prelude::*,
+};
+use rb_types::ssh::SessionEvent;
 
 #[component]
 pub fn SessionsSection() -> Element {

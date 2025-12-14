@@ -1,11 +1,15 @@
 use std::{
-    io::{self, Write}, path::{Path, PathBuf}, sync::Arc
+    io::{self, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
 };
 
 // Internal Result type alias
 type Result<T> = crate::ClientResult<T>;
 use russh::{
-    Channel, client::{Msg, Session}, keys::{self, HashAlg, PublicKey}
+    Channel,
+    client::{Msg, Session},
+    keys::{self, HashAlg, PublicKey},
 };
 use sqlx::{Row, SqlitePool};
 use ssh_core::forwarding::ForwardingManager;

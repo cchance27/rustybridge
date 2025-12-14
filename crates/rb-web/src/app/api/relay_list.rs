@@ -1,9 +1,8 @@
-use dioxus::prelude::*;
-use rb_types::relay::RelayInfo;
-
 use crate::error::ApiError;
 #[cfg(feature = "server")]
 use crate::server::auth::guards::{WebAuthSession, ensure_authenticated};
+use dioxus::prelude::*;
+use rb_types::relay::RelayInfo;
 
 #[get(
     "/api/relays/list",

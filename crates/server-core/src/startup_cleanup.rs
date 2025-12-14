@@ -4,10 +4,9 @@
 //! in an unclosed state due to server restart or crash, and applies retention
 //! policies to the audit database.
 
+use crate::error::ServerResult;
 use chrono::Utc;
 use tracing::{info, warn};
-
-use crate::error::ServerResult;
 
 /// Run all startup cleanup tasks.
 ///

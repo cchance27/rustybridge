@@ -1,12 +1,11 @@
 // Authentication server functions
 // These are Dioxus server functions that can be called from client code via RPC
 
-use dioxus::prelude::*;
-use rb_types::auth::{AuthUserInfo, LoginRequest, LoginResponse};
-
 use crate::error::ApiError;
 #[cfg(feature = "server")]
 use crate::server::auth::WebAuthSession;
+use dioxus::prelude::*;
+use rb_types::auth::{AuthUserInfo, LoginRequest, LoginResponse};
 
 #[post(
     "/api/auth/login",

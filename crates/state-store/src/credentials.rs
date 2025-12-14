@@ -1,9 +1,8 @@
 //! Credential management operations.
 
+use crate::DbResult;
 use rb_types::state::RelayCredentialRow;
 use sqlx::{Row, SqliteExecutor};
-
-use crate::DbResult;
 
 fn map_cred_row(r: sqlx::sqlite::SqliteRow) -> RelayCredentialRow {
     RelayCredentialRow {

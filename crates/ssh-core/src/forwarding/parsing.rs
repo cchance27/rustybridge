@@ -1,8 +1,13 @@
-use std::path::PathBuf;
-
 use rb_types::ssh::{
-    DynamicSocksForward, EnvEntry, LocalTcpForward, LocalUnixForward, RemoteTcpForward, RemoteUnixForward, SubsystemRequest
+    DynamicSocksForward,
+    EnvEntry,
+    LocalTcpForward,
+    LocalUnixForward,
+    RemoteTcpForward,
+    RemoteUnixForward,
+    SubsystemRequest,
 };
+use std::path::PathBuf;
 
 /// Parse a local TCP forward specification.
 ///

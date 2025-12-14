@@ -1,7 +1,6 @@
+use crate::app::api::{access::*, groups::list_groups, users::list_users};
 use dioxus::prelude::*;
 use rb_types::access::{GrantAccessRequest, PrincipalKind};
-
-use crate::app::api::{access::*, groups::list_groups, users::list_users};
 
 #[component]
 pub fn RelayAccessForm(relay_id: i64, on_change: Option<EventHandler<()>>) -> Element {

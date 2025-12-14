@@ -1,9 +1,8 @@
 //! User and group management operations.
 
+use crate::DbResult;
 use rb_types::auth::UserAuthRecord;
 use sqlx::{Row, SqliteExecutor};
-
-use crate::DbResult;
 
 fn current_ts() -> i64 {
     std::time::SystemTime::now()

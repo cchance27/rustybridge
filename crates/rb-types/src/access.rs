@@ -1,9 +1,7 @@
 //! Access control and principal-related types.
-use std::{fmt::Display, str::FromStr};
-
-use serde::{Deserialize, Serialize};
-
 use crate::auth::ClaimType;
+use serde::{Deserialize, Serialize};
+use std::{fmt::Display, str::FromStr};
 
 /// Distinguishes whether an ACL principal represents a user, group, or other kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

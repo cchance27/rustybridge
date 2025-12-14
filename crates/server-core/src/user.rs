@@ -2,15 +2,14 @@
 //!
 //! This module handles adding, removing, listing, and configuring users and their public keys.
 
-use std::borrow::Cow;
-
+use crate::{
+    ServerContext,
+    error::{ServerError, ServerResult},
+};
 use rb_types::auth::ClaimType;
 use russh::keys::ssh_key;
+use std::borrow::Cow;
 use tracing::{info, warn};
-
-use crate::{
-    ServerContext, error::{ServerError, ServerResult}
-};
 
 /// Add a user with a password, tracking the full context of who performed the action.
 ///

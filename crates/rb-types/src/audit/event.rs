@@ -1,11 +1,10 @@
 //! Audit event type definitions and builders.
 
+use super::{AuditContext, EventCategory};
+use crate::auth::ClaimType;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
-use super::{AuditContext, EventCategory};
-use crate::auth::ClaimType;
 
 /// Authentication method used for login events.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

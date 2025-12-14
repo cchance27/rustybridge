@@ -1,8 +1,7 @@
+use crate::error::{ServerError, ServerResult};
 use rand::{Rng, distributions::Alphanumeric};
 use rb_types::auth::ssh::{SshAuthSession, SshAuthStatus};
 use tracing::{info, warn};
-
-use crate::error::{ServerError, ServerResult};
 
 const SESSION_EXPIRY_SECONDS: i64 = 300; // 5 minutes
 const SESSION_CODE_LENGTH: usize = 32;

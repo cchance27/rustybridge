@@ -1,11 +1,11 @@
-use std::collections::HashMap;
-
+use crate::{
+    app::api::users::create_user,
+    components::{Modal, use_toast},
+    error::ApiError,
+};
 use dioxus::prelude::*;
 use rb_types::users::{CreateUserRequest, UserGroupInfo};
-
-use crate::{
-    app::api::users::create_user, components::{Modal, use_toast}, error::ApiError
-};
+use std::collections::HashMap;
 
 /// Self-contained Add User Modal
 #[component]

@@ -1,9 +1,11 @@
-use ratatui::{
-    Frame, layout::{Constraint, Direction, Layout, Rect}, style::{Color, Modifier, Style}, widgets::{Block, Borders, Clear, Paragraph, Wrap}
-};
-
 use super::types::{CredentialType, ModalInputHints, PopupState};
 use crate::utils::centered_rect;
+use ratatui::{
+    Frame,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+};
 
 impl super::ManagementApp {
     pub fn render_popup(&mut self, frame: &mut Frame, area: Rect) {

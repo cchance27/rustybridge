@@ -1,6 +1,5 @@
-use dioxus::prelude::*;
-
 use crate::app::components::{Layout, RequireAuth};
+use dioxus::prelude::*;
 
 #[component]
 pub fn DashboardPage() -> Element {

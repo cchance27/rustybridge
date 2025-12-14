@@ -2,13 +2,12 @@
 //!
 //! Multi-track timeline visualization for session audit events.
 
-use std::collections::HashMap;
-
-use dioxus::prelude::*;
-
 use crate::app::{
-    api::relay_session_timeline::{RelaySessionTimelineData, TimelineEvent, get_relay_session_timeline}, components::icons::{BrowserIcon, TerminalIcon}
+    api::relay_session_timeline::{RelaySessionTimelineData, TimelineEvent, get_relay_session_timeline},
+    components::icons::{BrowserIcon, TerminalIcon},
 };
+use dioxus::prelude::*;
+use std::collections::HashMap;
 /// Track configuration for styling
 struct TrackConfig {
     icon: &'static str,

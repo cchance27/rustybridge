@@ -1,16 +1,18 @@
+use super::session_window::SessionWindow;
+use crate::app::{
+    api::relay_list::list_user_relays,
+    auth::hooks::use_auth,
+    session::provider::use_session,
+    storage::{BrowserStorage, StorageType},
+};
 use dioxus::prelude::*;
 use tracing::debug;
 #[cfg(feature = "web")]
-use wasm_bindgen::JsValue;
-
-use super::session_window::SessionWindow;
-#[cfg(feature = "web")]
-use crate::app::components::use_toast;
-use crate::app::{
-    api::relay_list::list_user_relays, auth::hooks::use_auth, session::provider::use_session, storage::{BrowserStorage, StorageType}
+use {
+    crate::app::components::use_toast,
+    crate::bindings::{fit_terminal, focus_terminal},
+    wasm_bindgen::JsValue,
 };
-#[cfg(feature = "web")]
-use crate::bindings::{fit_terminal, focus_terminal};
 
 #[derive(Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 enum DrawerState {

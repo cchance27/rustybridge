@@ -1,8 +1,8 @@
-use dioxus::prelude::*;
-
 use crate::{
-    app::{api::relays::delete_relay_host, pages::relays::state::RelayState}, components::{Modal, use_toast}
+    app::{api::relays::delete_relay_host, pages::relays::state::RelayState},
+    components::{Modal, use_toast},
 };
+use dioxus::prelude::*;
 
 /// Modal for confirming relay deletion
 #[component]

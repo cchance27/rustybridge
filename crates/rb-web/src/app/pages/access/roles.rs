@@ -1,13 +1,16 @@
 //! Roles section with table and modals
 //! Self-contained components for managing roles
 
+use crate::{
+    app::api::roles::*,
+    components::{Protected, StructuredTooltip, Table, TooltipSection, icons, use_toast},
+    error::ApiError,
+    pages::access::modals::{ConfirmDeleteRoleModal, EditRoleClaimsModal, ManageRoleGroupsModal, ManageRoleUsersModal},
+};
 use dioxus::prelude::*;
 use rb_types::{
-    auth::{ClaimLevel, ClaimType}, users::{GroupInfo, RoleInfo, UserGroupInfo}
-};
-
-use crate::{
-    app::api::roles::*, components::{Protected, StructuredTooltip, Table, TooltipSection, icons, use_toast}, error::ApiError, pages::access::modals::{ConfirmDeleteRoleModal, EditRoleClaimsModal, ManageRoleGroupsModal, ManageRoleUsersModal}
+    auth::{ClaimLevel, ClaimType},
+    users::{GroupInfo, RoleInfo, UserGroupInfo},
 };
 
 /// Main Roles Section component

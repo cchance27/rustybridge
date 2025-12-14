@@ -1,8 +1,6 @@
-use std::fmt;
-
-use rb_types::relay::HostkeyReview;
-
 use crate::apps::relay_selector::RelayItem;
+use rb_types::relay::HostkeyReview;
+use std::fmt;
 
 // Public types for credentials used by AppAction
 #[derive(Clone, Debug, PartialEq, Eq)]

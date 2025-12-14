@@ -1,15 +1,15 @@
-use std::collections::HashSet;
-
-use chrono::{DateTime, Utc};
-use dioxus::{fullstack::use_websocket, prelude::*};
-use rb_types::ssh::{SessionEvent, SessionStateSummary, UserSessionSummary, WebSessionMeta};
-use tracing::{debug, error, warn};
-
 use crate::app::{
-    auth::hooks::use_auth, session::types::{Session, SessionStatus, WindowGeometry}, storage::{BrowserStorage, StorageType}
+    auth::hooks::use_auth,
+    session::types::{Session, SessionStatus, WindowGeometry},
+    storage::{BrowserStorage, StorageType},
 };
 #[cfg(feature = "web")]
 use crate::bindings::focus_terminal;
+use chrono::{DateTime, Utc};
+use dioxus::{fullstack::use_websocket, prelude::*};
+use rb_types::ssh::{SessionEvent, SessionStateSummary, UserSessionSummary, WebSessionMeta};
+use std::collections::HashSet;
+use tracing::{debug, error, warn};
 
 const MAX_SESSIONS: usize = 4;
 
@@ -99,11 +99,10 @@ pub fn use_session_provider() -> SessionContext {
     });
     let pending_restores = use_signal(|| Option::<Vec<UserSessionSummary>>::None);
 
-    use dioxus::fullstack::WebSocketOptions;
-
     use crate::app::api::ws::session_events::ssh_web_events;
     #[cfg(feature = "web")]
     use crate::app::components::use_toast;
+    use dioxus::fullstack::WebSocketOptions;
     #[cfg(feature = "web")]
     let toast = use_toast();
 
@@ -387,15 +386,15 @@ pub fn use_session_provider() -> SessionContext {
                     drop(sessions);
 
                     // Perform the save if needed, and cleanup orphaned key if timestamps differ
-                    if let Some((relay_id, session_number, old_ts, new_ts, geometry, minimized)) = session_to_save {
-                        if let Some(user_id) = context.get_current_user_id() {
-                            // Save with the new (server-synced) timestamp key
-                            context.save_session_state(user_id, relay_id, session_number, new_ts, geometry.clone(), minimized);
+                    if let Some((relay_id, session_number, old_ts, new_ts, geometry, minimized)) = session_to_save
+                        && let Some(user_id) = context.get_current_user_id()
+                    {
+                        // Save with the new (server-synced) timestamp key
+                        context.save_session_state(user_id, relay_id, session_number, new_ts, geometry.clone(), minimized);
 
-                            // Delete orphaned key if old timestamp differs from new
-                            if old_ts != new_ts {
-                                context.remove_session_storage(user_id, relay_id, session_number, old_ts);
-                            }
+                        // Delete orphaned key if old timestamp differs from new
+                        if old_ts != new_ts {
+                            context.remove_session_storage(user_id, relay_id, session_number, old_ts);
                         }
                     }
                 }

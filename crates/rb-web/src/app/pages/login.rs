@@ -1,11 +1,12 @@
-use dioxus::prelude::*;
-use rb_types::auth::LoginRequest;
-
 use crate::{
     app::{
-        api::auth::login, auth::{context::AuthState, hooks::use_auth}
-    }, components::Layout
+        api::auth::login,
+        auth::{context::AuthState, hooks::use_auth},
+    },
+    components::Layout,
 };
+use dioxus::prelude::*;
+use rb_types::auth::LoginRequest;
 
 #[component]
 pub fn LoginPage() -> Element {

@@ -1,10 +1,8 @@
-use std::path::PathBuf;
-
+use crate::session::{SessionHandle, SharedSessionHandle};
 use async_trait::async_trait;
 use russh::{Channel, ChannelStream, client};
+use std::path::PathBuf;
 use tokio::io::{AsyncRead, AsyncWrite};
-
-use crate::session::{SessionHandle, SharedSessionHandle};
 
 // Internal Result type alias for convenience
 type Result<T> = crate::SshResult<T>;

@@ -1,9 +1,9 @@
 #[cfg(feature = "server")]
-use anyhow::{Result, anyhow};
-#[cfg(feature = "server")]
-use base64::Engine;
-#[cfg(feature = "server")]
-use server_core::api::SessionChunk;
+use {
+    anyhow::{Result, anyhow},
+    base64::Engine,
+    server_core::api::SessionChunk,
+};
 
 #[cfg(not(feature = "server"))]
 fn main() {}

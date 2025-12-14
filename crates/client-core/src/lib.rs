@@ -2,16 +2,17 @@ mod auth;
 pub mod error;
 mod hostkeys;
 
-use std::{borrow::Cow, sync::Arc, time::Duration};
-
 use auth::authenticate;
 pub use error::{ClientError, ClientResult};
 use hostkeys::{ClientHandler, HostKeyPolicy, HostKeyVerifier};
 use rb_types::client::{AuthPreferences, ClientConfig};
 use russh::client;
 use ssh_core::{
-    crypto::{default_preferred, legacy_preferred}, forwarding::ForwardingManager, session::{self, ShellOptions, run_command, run_shell, run_subsystem}
+    crypto::{default_preferred, legacy_preferred},
+    forwarding::ForwardingManager,
+    session::{self, ShellOptions, run_command, run_shell, run_subsystem},
 };
+use std::{borrow::Cow, sync::Arc, time::Duration};
 use tracing::{info, warn};
 
 pub async fn run_client(args: ClientConfig) -> ClientResult<()> {

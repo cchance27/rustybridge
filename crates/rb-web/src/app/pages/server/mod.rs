@@ -1,9 +1,8 @@
 mod sessions;
 
+use crate::components::{Layout, RequireAuth};
 use dioxus::prelude::*;
 use rb_types::auth::{ClaimLevel, ClaimType};
-
-use crate::components::{Layout, RequireAuth};
 
 #[component]
 pub fn ServerPage() -> Element {

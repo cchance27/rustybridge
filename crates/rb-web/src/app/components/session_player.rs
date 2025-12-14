@@ -1,12 +1,13 @@
+use crate::app::{
+    api::audit::{SessionChunk, SessionStreamClient, SessionStreamServer, get_session_events, session_stream_ws, session_summary},
+    components::structured_tooltip::{StructuredTooltip, TooltipSection},
+};
 use base64::{Engine as _, prelude::BASE64_STANDARD};
 use dioxus::{
-    fullstack::{WebSocketOptions, use_websocket}, prelude::*
+    fullstack::{WebSocketOptions, use_websocket},
+    prelude::*,
 };
 use tracing::debug;
-
-use crate::app::{
-    api::audit::{SessionChunk, SessionStreamClient, SessionStreamServer, get_session_events, session_stream_ws, session_summary}, components::structured_tooltip::{StructuredTooltip, TooltipSection}
-};
 
 /// Format milliseconds as MM:SS.mmm
 fn format_duration(ms: i64) -> String {
@@ -31,10 +32,10 @@ fn format_bytes(bytes: i64) -> String {
 }
 
 #[cfg(feature = "web")]
-use wasm_bindgen::{JsCast, JsValue};
-
-#[cfg(feature = "web")]
-use crate::bindings::{init_rusty_bridge_terminal, write_to_terminal};
+use {
+    crate::bindings::{init_rusty_bridge_terminal, write_to_terminal},
+    wasm_bindgen::{JsCast, JsValue},
+};
 
 #[cfg(feature = "web")]
 async fn init_terminal(terminal_id: &str, term_size: Option<(u16, u16)>) -> Result<(), JsValue> {

@@ -4,20 +4,26 @@
 //! CLI, TUI). Callers should prefer these helpers instead of reaching into
 //! internal modules or `state_store` directly.
 
-use std::collections::{HashMap, HashSet};
-
+use crate::{
+    error::{ServerError, ServerResult},
+    secrets,
+    sessions::SessionRegistry,
+};
 use base64::Engine;
 use rb_types::{
-    access::{PrincipalKind, RelayAccessPrincipal, RelayAccessSource, UserRelayAccess}, audit::{AuditContext, RecordedSessionChunk}, auth::{OidcLinkInfo, OidcProfile, UserAuthRecord, oidc::OidcConfig}, credentials::AuthWebConfig, relay::{RelayHostInfo, RelayInfo}, state::DbHandle, users::{GroupInfo, UserGroupInfo}
+    access::{PrincipalKind, RelayAccessPrincipal, RelayAccessSource, UserRelayAccess},
+    audit::{AuditContext, RecordedSessionChunk},
+    auth::{OidcLinkInfo, OidcProfile, UserAuthRecord, oidc::OidcConfig},
+    credentials::AuthWebConfig,
+    relay::{RelayHostInfo, RelayInfo},
+    state::DbHandle,
+    users::{GroupInfo, UserGroupInfo},
 };
 use secrecy::ExposeSecret;
 use sqlx::{Row, SqlitePool};
 use state_store::ClaimType;
+use std::collections::{HashMap, HashSet};
 use tracing::error;
-
-use crate::{
-    error::{ServerError, ServerResult}, secrets, sessions::SessionRegistry
-};
 
 /// Shared accessor for the audit database so wrappers accept either a raw handle
 /// or the live [`SessionRegistry`].

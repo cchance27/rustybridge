@@ -1,16 +1,15 @@
-use std::collections::HashMap;
-
+use crate::error::{SshCoreError, SshResult};
 use base64::Engine;
 use cbc::{
-    Decryptor, cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7}
+    Decryptor,
+    cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7},
 };
 use des::TdesEde3;
 use hex::FromHex;
 use md5;
 use rsa::{RsaPrivateKey, pkcs1::DecodeRsaPrivateKey, pkcs8::EncodePrivateKey};
 use russh::keys;
-
-use crate::error::{SshCoreError, SshResult};
+use std::collections::HashMap;
 
 /// Load a private key from string data, supporting:
 /// - OpenSSH keys

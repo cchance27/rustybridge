@@ -1,14 +1,20 @@
-use std::{collections::HashMap, time::Duration};
-
-use ratatui::{
-    Frame, layout::{Constraint, Direction, Layout}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, Clear, Paragraph, TableState, Tabs}
-};
-use rb_types::relay::HostkeyReview;
-
 use super::types::{CredentialItem, PopupState};
 use crate::{
-    AppAction, TuiApp, TuiResult, app::{StatusKind, StatusLine}, apps::relay_selector::RelayItem
+    AppAction,
+    TuiApp,
+    TuiResult,
+    app::{StatusKind, StatusLine},
+    apps::relay_selector::RelayItem,
 };
+use ratatui::{
+    Frame,
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, Paragraph, TableState, Tabs},
+};
+use rb_types::relay::HostkeyReview;
+use std::{collections::HashMap, time::Duration};
 
 /// Admin management interface
 pub struct ManagementApp {

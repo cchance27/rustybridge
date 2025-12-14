@@ -6,9 +6,15 @@ mod sessions;
 use crate::{
     app::{
         api::{
-            audit::{RecordedSession, list_my_sessions}, ssh_keys::{add_my_ssh_key, delete_my_ssh_key, get_my_ssh_keys}
-        }, auth::oidc::get_oidc_link_status, components::{Layout, Modal, Table, use_toast}, session::provider::use_session, storage::{BrowserStorage, StorageType}
-    }, components::RequireAuth
+            audit::{RecordedSession, list_my_sessions},
+            ssh_keys::{add_my_ssh_key, delete_my_ssh_key, get_my_ssh_keys},
+        },
+        auth::oidc::get_oidc_link_status,
+        components::{Layout, Modal, Table, use_toast},
+        session::provider::use_session,
+        storage::{BrowserStorage, StorageType},
+    },
+    components::RequireAuth,
 };
 
 #[component]

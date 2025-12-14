@@ -1,8 +1,10 @@
-use ratatui::{
-    Frame, layout::{Constraint, Rect}, style::{Color, Modifier, Style}, widgets::{Block, Borders, Cell, Paragraph, Row, Table}
-};
-
 use super::utils::{clear_line, draw_segment};
+use ratatui::{
+    Frame,
+    layout::{Constraint, Rect},
+    style::{Color, Modifier, Style},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+};
 
 impl super::ManagementApp {
     pub fn render_command_line(&self, frame: &mut Frame, area: Rect, commands: &str) {

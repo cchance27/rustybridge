@@ -2,17 +2,23 @@
 //!
 //! This module handles creating TUI apps and processing management actions.
 
+use crate::{
+    ServerContext,
+    error::{ServerError, ServerResult},
+    secrets::{SecretBoxedString, decrypt_string_if_encrypted, is_encrypted_marker},
+};
 use rb_types::relay::HostkeyReview;
 use secrecy::ExposeSecret;
 use tracing::{info, warn};
 use tui_core::{
-    AppAction, apps::{
-        ManagementApp, RelayItem, RelaySelectorApp, management::{CredentialItem, CredentialSpec}, relay_selector
-    }
-};
-
-use crate::{
-    ServerContext, error::{ServerError, ServerResult}, secrets::{SecretBoxedString, decrypt_string_if_encrypted, is_encrypted_marker}
+    AppAction,
+    apps::{
+        ManagementApp,
+        RelayItem,
+        RelaySelectorApp,
+        management::{CredentialItem, CredentialSpec},
+        relay_selector,
+    },
 };
 
 /// Create a ManagementApp with all relay hosts loaded from the database (admin view)
@@ -201,11 +207,11 @@ pub async fn handle_management_action(
                 );
             }
 
-            use std::sync::{Arc, Mutex};
-
             use russh::{
-                client, keys::{HashAlg, PublicKey}
+                client,
+                keys::{HashAlg, PublicKey},
             };
+            use std::sync::{Arc, Mutex};
 
             struct CaptureHandler {
                 key: Arc<Mutex<Option<PublicKey>>>,

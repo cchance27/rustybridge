@@ -1,8 +1,10 @@
-use std::collections::VecDeque;
-
 use ratatui::{
-    Frame, layout::Rect, text::{Line, Text}, widgets::{Paragraph, Wrap}
+    Frame,
+    layout::Rect,
+    text::{Line, Text},
+    widgets::{Paragraph, Wrap},
 };
+use std::collections::VecDeque;
 
 /// A scrollable log widget that maintains a fixed number of lines
 pub struct ScrollableLog {

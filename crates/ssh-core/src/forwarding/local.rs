@@ -1,14 +1,14 @@
-use std::net::SocketAddr;
-
+use super::traits::ForwardSession;
 use rb_types::ssh::{LocalTcpForward, LocalUnixForward};
+use std::net::SocketAddr;
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 use tokio::{
-    io::{AsyncWriteExt, copy_bidirectional}, net::TcpStream, task::JoinHandle
+    io::{AsyncWriteExt, copy_bidirectional},
+    net::TcpStream,
+    task::JoinHandle,
 };
 use tracing::warn;
-
-use super::traits::ForwardSession;
 
 type Result<T> = crate::SshResult<T>;
 
@@ -48,7 +48,6 @@ where
     S: ForwardSession,
 {
     use std::fs;
-
     use tracing::info;
 
     let path = spec.local_socket.clone();

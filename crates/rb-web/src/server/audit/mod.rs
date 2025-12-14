@@ -3,16 +3,15 @@
 //! This module provides an Axum extractor that automatically creates an AuditContext
 //! from the authenticated session and request information.
 
-use std::net::SocketAddr;
-
+use crate::server::auth::guards::WebAuthSession;
 use axum::{
-    extract::{ConnectInfo, FromRequestParts}, http::request::Parts
+    extract::{ConnectInfo, FromRequestParts},
+    http::request::Parts,
 };
 use axum_session::Session;
 use rb_types::audit::AuditContext;
 use server_core::sessions::web::WebSessionManager;
-
-use crate::server::auth::guards::WebAuthSession;
+use std::net::SocketAddr;
 
 /// Extractor for audit context in web requests.
 ///

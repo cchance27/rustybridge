@@ -1,13 +1,15 @@
 //! FAB (Floating Action Button) and Add modals for Access page
 //! Each component is self-contained with its own state, validation, and handlers.
 
+use crate::{
+    app::components::{MultiFab, Protected},
+    error::ApiError,
+    pages::access::modals::{AddGroupModal, AddRoleModal, AddUserModal},
+};
 use dioxus::prelude::*;
 use rb_types::{
-    auth::{ClaimLevel, ClaimType}, users::{GroupInfo, RoleInfo, UserGroupInfo}
-};
-
-use crate::{
-    app::components::{MultiFab, Protected}, error::ApiError, pages::access::modals::{AddGroupModal, AddRoleModal, AddUserModal}
+    auth::{ClaimLevel, ClaimType},
+    users::{GroupInfo, RoleInfo, UserGroupInfo},
 };
 
 /// Main FAB component - just controls which modals are open

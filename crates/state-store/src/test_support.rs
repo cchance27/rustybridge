@@ -7,16 +7,15 @@
 //! By default, this uses a temporary directory that is deleted when the factory
 //! is dropped. To persist test DB files for debugging, set `RB_TEST_DB_PERSIST=1`.
 
-use std::{
-    path::{Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}
-};
-
+use crate::{DbResult, migrate_audit, migrate_server};
 use rb_types::state::DbHandle;
 use sqlx::sqlite::SqlitePoolOptions;
+use std::{
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tempfile::TempDir;
 use tokio::sync::OnceCell;
-
-use crate::{DbResult, migrate_audit, migrate_server};
 
 fn unique_suffix() -> String {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();

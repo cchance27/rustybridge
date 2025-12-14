@@ -1,9 +1,19 @@
+use crate::error::ServerResult;
 use openidconnect::{
-    AuthenticationFlow, ClientId, ClientSecret, CsrfToken, EndpointMaybeSet, EndpointNotSet, EndpointSet, IssuerUrl, Nonce, RedirectUrl, Scope, core::{CoreClient, CoreProviderMetadata, CoreResponseType}
+    AuthenticationFlow,
+    ClientId,
+    ClientSecret,
+    CsrfToken,
+    EndpointMaybeSet,
+    EndpointNotSet,
+    EndpointSet,
+    IssuerUrl,
+    Nonce,
+    RedirectUrl,
+    Scope,
+    core::{CoreClient, CoreProviderMetadata, CoreResponseType},
 };
 use rb_types::auth::oidc::OidcConfig;
-
-use crate::error::ServerResult;
 
 pub type OidcClient = CoreClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet, EndpointMaybeSet>;
 

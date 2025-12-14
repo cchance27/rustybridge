@@ -1,20 +1,25 @@
-use std::collections::HashMap;
-
+use crate::{
+    app::api::relays::fetch_relay_hostkey_for_review,
+    components::{Fab, Layout, Protected, RequireAuth, use_toast},
+};
 use dioxus::prelude::*;
 use rb_types::{
-    auth::{ClaimLevel, ClaimType}, credentials::AuthWebConfig
+    auth::{ClaimLevel, ClaimType},
+    credentials::AuthWebConfig,
 };
-
-use crate::{
-    app::api::relays::fetch_relay_hostkey_for_review, components::{Fab, Layout, Protected, RequireAuth, use_toast}
-};
+use std::collections::HashMap;
 
 mod modals;
 mod state;
 mod table;
 
 use modals::{
-    access_modal::AccessManagementModal, assign_modal::AssignCredentialModal, clear_modal::ClearCredentialModal, delete_modal::DeleteRelayModal, edit_modal::EditRelayModal, hostkey_modal::HostkeyReviewModal
+    access_modal::AccessManagementModal,
+    assign_modal::AssignCredentialModal,
+    clear_modal::ClearCredentialModal,
+    delete_modal::DeleteRelayModal,
+    edit_modal::EditRelayModal,
+    hostkey_modal::HostkeyReviewModal,
 };
 use state::RelayState;
 use table::RelaysTable;

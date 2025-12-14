@@ -2,14 +2,14 @@
 //!
 //! Provides endpoints for fetching session timeline data for visualization.
 
-use dioxus::prelude::*;
-#[cfg(feature = "server")]
-use rb_types::auth::{ClaimLevel, ClaimType};
-use serde::{Deserialize, Serialize};
-
 use crate::error::ApiError;
+use dioxus::prelude::*;
+use serde::{Deserialize, Serialize};
 #[cfg(feature = "server")]
-use crate::server::auth::guards::{WebAuthSession, ensure_claim};
+use {
+    crate::server::auth::guards::{WebAuthSession, ensure_claim},
+    rb_types::auth::{ClaimLevel, ClaimType},
+};
 
 // ==== Types ====
 

@@ -1,5 +1,9 @@
 use ratatui::{
-    Frame, layout::Rect, style::{Color, Style}, text::{Line, Span}, widgets::Paragraph
+    Frame,
+    layout::Rect,
+    style::{Color, Style},
+    text::{Line, Span},
+    widgets::Paragraph,
 };
 
 /// A text input widget with a prompt

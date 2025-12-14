@@ -1,6 +1,5 @@
-use dioxus::prelude::*;
-
 use crate::app::components::icons::{ChevronDownIcon, ChevronUpDownIcon, ChevronUpIcon};
+use dioxus::prelude::*;
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct TableColumn {

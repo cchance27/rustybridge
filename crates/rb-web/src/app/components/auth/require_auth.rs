@@ -1,7 +1,6 @@
+use crate::app::auth::hooks::{use_auth, use_has_all_claims, use_has_any_claim, use_has_claim};
 use dioxus::prelude::*;
 use rb_types::auth::ClaimType;
-
-use crate::app::auth::hooks::{use_auth, use_has_all_claims, use_has_any_claim, use_has_claim};
 
 /// Route guard component that requires authentication and optional claims
 ///

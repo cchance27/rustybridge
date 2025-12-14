@@ -1,9 +1,9 @@
+use crate::{
+    error::{ServerError, ServerResult},
+    secrets,
+};
 use rb_types::state::DbHandle;
 use sqlx::SqlitePool;
-
-use crate::{
-    error::{ServerError, ServerResult}, secrets
-};
 
 /// Runtime dependencies for server-core operations.
 ///

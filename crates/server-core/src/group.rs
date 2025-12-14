@@ -2,9 +2,8 @@
 //!
 //! This module handles adding, removing, listing, and configuring groups and group memberships.
 
-use rb_types::auth::ClaimType;
-
 use crate::error::{ServerError, ServerResult};
+use rb_types::auth::ClaimType;
 
 /// Add a new group, tracking the full context of who performed the action.
 ///

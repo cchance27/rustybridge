@@ -1,20 +1,18 @@
+use crate::error::ApiError;
 use dioxus::{
-    fullstack::{JsonEncoding, WebSocketOptions, Websocket}, prelude::*
+    fullstack::{JsonEncoding, WebSocketOptions, Websocket},
+    prelude::*,
 };
 use rb_types::audit::{AuditEvent, RecordedSessionChunk, RecordedSessionSummary};
-#[cfg(feature = "server")]
-use rb_types::audit::{EventCategory, EventFilter};
-#[cfg(feature = "server")]
-use rb_types::auth::{ClaimLevel, ClaimType};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "server")]
-use tracing::{debug, error, info};
-#[cfg(feature = "server")]
-use vt100;
-
-use crate::error::ApiError;
-#[cfg(feature = "server")]
-use crate::server::auth::guards::{WebAuthSession, ensure_claim};
+use {
+    crate::server::auth::guards::{WebAuthSession, ensure_claim},
+    rb_types::audit::{EventCategory, EventFilter},
+    rb_types::auth::{ClaimLevel, ClaimType},
+    tracing::{debug, error, info},
+    vt100,
+};
 
 // Shared DTO aliases so UI code remains unchanged
 pub type RecordedSession = RecordedSessionSummary;
@@ -756,7 +754,8 @@ pub async fn export_session(
     auth: WebAuthSession,
 ) -> impl axum::response::IntoResponse {
     use axum::{
-        http::{StatusCode, header}, response::IntoResponse
+        http::{StatusCode, header},
+        response::IntoResponse,
     };
     use base64::Engine;
 

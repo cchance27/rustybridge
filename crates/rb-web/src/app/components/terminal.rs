@@ -1,21 +1,20 @@
 use dioxus::prelude::*;
-#[cfg(feature = "web")]
-use futures::{StreamExt, channel::mpsc};
-#[cfg(feature = "web")]
-use gloo_events::EventListener;
-#[cfg(feature = "web")]
-use js_sys::Reflect;
 use serde::Serialize;
 #[cfg(feature = "web")]
-use tracing::{debug, error, warn};
-#[cfg(feature = "web")]
-use wasm_bindgen::prelude::*;
-#[cfg(feature = "web")]
-use web_sys::wasm_bindgen::{JsCast, JsValue};
-
-#[cfg(feature = "web")]
-use crate::bindings::{
-    get_terminal_dimensions, init_rusty_bridge_terminal, setup_terminal_input, setup_terminal_resize, write_to_terminal
+use {
+    crate::bindings::{
+        get_terminal_dimensions,
+        init_rusty_bridge_terminal,
+        setup_terminal_input,
+        setup_terminal_resize,
+        write_to_terminal,
+    },
+    futures::{StreamExt, channel::mpsc},
+    gloo_events::EventListener,
+    js_sys::Reflect,
+    tracing::{debug, error, warn},
+    wasm_bindgen::prelude::*,
+    web_sys::wasm_bindgen::{JsCast, JsValue},
 };
 
 #[derive(Clone, Props, PartialEq, Serialize)]
@@ -247,11 +246,9 @@ pub fn Terminal(props: TerminalProps) -> Element {
                     let mut connected = connected;
                     let value = value.clone();
                     async move {
-                        use std::rc::Rc;
-
-                        use dioxus::fullstack::WebSocketOptions;
-
                         use crate::app::api::ws::ssh::ssh_terminal_ws;
+                        use dioxus::fullstack::WebSocketOptions;
+                        use std::rc::Rc;
 
                         debug!(relay_name = %relay_name, "terminal: attempting to connect relay");
                         let result = ssh_terminal_ws(relay_name, initial_session_number, target_user_id, WebSocketOptions::new()).await;

@@ -1,9 +1,8 @@
+use super::claims;
+use crate::error::ApiError;
 use axum_session_auth::AuthSession;
 use rb_types::auth::{ATTACH_ANY_CLAIM, ClaimType};
 use server_core::sessions::web::WebSessionManager;
-
-use super::claims;
-use crate::error::ApiError;
 
 pub type WebAuthSession = AuthSession<super::WebUser, i64, WebSessionManager, ()>;
 

@@ -1,9 +1,9 @@
 //! Tests for audit event logging.
-use rb_types::{
-    audit::{AuditEvent, ClientType, EventCategory, EventFilter, EventType}, state::DbHandle
-};
-
 use crate::audit::events::{count_audit_events, insert_audit_event, query_audit_events};
+use rb_types::{
+    audit::{AuditEvent, ClientType, EventCategory, EventFilter, EventType},
+    state::DbHandle,
+};
 
 async fn setup_test_db() -> DbHandle {
     // Create in-memory SQLite database

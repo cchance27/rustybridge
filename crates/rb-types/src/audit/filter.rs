@@ -1,8 +1,7 @@
 //! Query filters for searching audit events.
 
-use serde::{Deserialize, Serialize};
-
 use super::EventCategory;
+use serde::{Deserialize, Serialize};
 
 /// Query filter for searching audit events with various criteria.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

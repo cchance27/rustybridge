@@ -1,8 +1,7 @@
-use std::{env, os::fd::AsFd};
-
 use rb_types::ssh::NewlineMode;
 use russh::Pty;
 use rustix::termios::{self, ControlModes, InputModes, LocalModes, OutputModes, SpecialCodeIndex as Sc, Termios};
+use std::{env, os::fd::AsFd};
 use tracing::warn;
 
 pub fn newline_mode_from_env() -> Option<NewlineMode> {

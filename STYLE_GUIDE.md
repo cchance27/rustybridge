@@ -169,5 +169,29 @@ pub mod test_support;
 
 ---
 
-## 19. AI Agent Notes
+## 19. Feature-Gated Imports
+*   **Group cfg-gated imports**: When multiple imports share the same `#[cfg(...)]` attribute, group them into a single block using curly braces. This reduces clutter and makes it clear which imports are feature-gated.
+    *   *Bad:*
+        ```rust
+        #[cfg(feature = "server")]
+        use crate::server::audit::WebAuditContext;
+        #[cfg(feature = "server")]
+        use crate::server::auth::guards::{WebAuthSession, ensure_claim};
+        #[cfg(feature = "server")]
+        use rb_types::auth::ClaimLevel;
+        ```
+    *   *Good:*
+        ```rust
+        #[cfg(feature = "server")]
+        use {
+            crate::server::audit::WebAuditContext,
+            crate::server::auth::guards::{WebAuthSession, ensure_claim},
+            rb_types::auth::ClaimLevel,
+        };
+        ```
+*   **One block per feature**: Each file should have at most one `#[cfg(feature = "server")]` use block and one `#[cfg(feature = "web")]` use block at the top of the file.
+
+---
+
+## 20. AI Agent Notes
 *   **Compilation**: AI Agents should always use `cargo --message-format=short` when running checks or builds to limit token usage and reduce noise in output.

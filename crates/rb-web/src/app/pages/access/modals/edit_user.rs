@@ -1,15 +1,18 @@
-use std::{collections::HashMap, str::FromStr as _};
-
-use dioxus::prelude::*;
-use rb_types::{
-    auth::ClaimType, users::{GroupInfo, RoleInfo, UpdateUserRequest, UserGroupInfo}
-};
-
 use crate::{
     app::api::{
-        groups::{add_member_to_group, remove_member_from_group}, roles::{assign_role_to_user, revoke_role_from_user}, users::*
-    }, components::{Modal, use_toast}, error::ApiError
+        groups::{add_member_to_group, remove_member_from_group},
+        roles::{assign_role_to_user, revoke_role_from_user},
+        users::*,
+    },
+    components::{Modal, use_toast},
+    error::ApiError,
 };
+use dioxus::prelude::*;
+use rb_types::{
+    auth::ClaimType,
+    users::{GroupInfo, RoleInfo, UpdateUserRequest, UserGroupInfo},
+};
+use std::{collections::HashMap, str::FromStr as _};
 
 /// Edit User Modal with password, roles, groups, and claims management
 #[component]

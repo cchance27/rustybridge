@@ -1,13 +1,14 @@
-use std::collections::HashMap;
-
+use crate::{
+    app::{api::relays::*, pages::relays::state::RelayState},
+    components::{CredentialForm, RelayAccessForm, StepModal, use_toast},
+};
 use dioxus::prelude::*;
 use rb_types::{
-    credentials::CustomAuthRequest, relay::{CreateRelayRequest, UpdateRelayRequest}, validation::{CredentialValidationInput, ValidationError}
+    credentials::CustomAuthRequest,
+    relay::{CreateRelayRequest, UpdateRelayRequest},
+    validation::{CredentialValidationInput, ValidationError},
 };
-
-use crate::{
-    app::{api::relays::*, pages::relays::state::RelayState}, components::{CredentialForm, RelayAccessForm, StepModal, use_toast}
-};
+use std::collections::HashMap;
 
 /// Modal for creating or editing a relay
 #[component]

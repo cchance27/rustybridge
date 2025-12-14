@@ -1,7 +1,6 @@
+use crate::error::ServerResult;
 use rb_types::access::{PrincipalKind, RelayAccessPrincipal};
 use tracing::info;
-
-use crate::error::ServerResult;
 
 /// Grant relay access, tracking the full context of who performed the action.
 ///

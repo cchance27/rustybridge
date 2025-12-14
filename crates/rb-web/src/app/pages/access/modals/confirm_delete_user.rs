@@ -1,6 +1,5 @@
-use dioxus::prelude::*;
-
 use crate::components::Modal;
+use dioxus::prelude::*;
 
 // TODO: Confirmation dialogs should really be a component itself, they're all the same, a type field and a name field is all that differs.
 

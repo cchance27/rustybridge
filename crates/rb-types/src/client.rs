@@ -3,13 +3,11 @@
 //! These structs remain dependency-light so they can be reused by CLI parsing,
 //! auth helpers, or future UIs without pulling in the full client runtime.
 
-use std::path::PathBuf;
-
-#[cfg(feature = "secrecy")]
-use secrecy::SecretString;
-
 #[cfg(feature = "secrecy")]
 use crate::ssh::{ForwardingConfig, NewlineMode};
+#[cfg(feature = "secrecy")]
+use secrecy::SecretString;
+use std::path::PathBuf;
 
 /// Public-key identity and optional certificate to present during SSH auth.
 #[derive(Clone, Debug, PartialEq, Eq)]

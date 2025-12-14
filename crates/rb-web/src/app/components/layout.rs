@@ -1,6 +1,5 @@
-use dioxus::prelude::*;
-
 use crate::components::{Footer, NavBar};
+use dioxus::prelude::*;
 
 #[component]
 pub fn Layout(children: Element) -> Element {

@@ -1,11 +1,9 @@
 //! Role-based access control (RBAC) operations.
 
-use std::str::FromStr;
-
+use crate::{ClaimType, DbResult};
 use rb_types::state::Role;
 use sqlx::{Row, SqliteExecutor};
-
-use crate::{ClaimType, DbResult};
+use std::str::FromStr;
 
 fn current_ts() -> i64 {
     std::time::SystemTime::now()

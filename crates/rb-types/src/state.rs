@@ -4,11 +4,10 @@
 //! `rb-types` so other crates can exchange structured data without depending
 //! on the state-store implementation details.
 
-use std::path::PathBuf;
-
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "sqlx")]
 use sqlx::{FromRow, SqlitePool};
+use std::path::PathBuf;
 
 /// Relay credential record as stored in the database.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

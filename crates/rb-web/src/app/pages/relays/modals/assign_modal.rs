@@ -1,15 +1,16 @@
-use std::collections::HashMap;
-
-use dioxus::prelude::*;
-use rb_types::{
-    credentials::CustomAuthRequest, validation::{CredentialValidationInput, ValidationError}
-};
-
 use crate::{
     app::{
-        api::relays::{assign_relay_credential, set_custom_auth}, pages::relays::state::RelayState
-    }, components::{CredentialForm, Modal, use_toast}
+        api::relays::{assign_relay_credential, set_custom_auth},
+        pages::relays::state::RelayState,
+    },
+    components::{CredentialForm, Modal, use_toast},
 };
+use dioxus::prelude::*;
+use rb_types::{
+    credentials::CustomAuthRequest,
+    validation::{CredentialValidationInput, ValidationError},
+};
+use std::collections::HashMap;
 
 /// Modal for assigning authentication to a relay
 #[component]

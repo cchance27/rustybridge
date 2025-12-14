@@ -1,13 +1,13 @@
+use crate::server::auth::WebAuthSession;
 use axum::response::Redirect;
 use dioxus::prelude::*;
 use openidconnect::{AuthorizationCode, TokenResponse};
 use server_core::{
-    api as sc_api, auth::oidc::{create_client, generate_auth_url}
+    api as sc_api,
+    auth::oidc::{create_client, generate_auth_url},
 };
 use tracing::{error, info, warn};
 use url::Url;
-
-use crate::server::auth::WebAuthSession;
 
 /// Initiate OIDC linking flow for already-authenticated user
 #[get("/api/auth/oidc/link?return_to", auth: WebAuthSession)]

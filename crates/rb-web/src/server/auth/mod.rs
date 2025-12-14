@@ -6,13 +6,12 @@ pub mod middleware;
 pub mod session;
 pub mod types;
 
+use crate::error::ApiError;
 pub use claims::*;
 use dioxus::prelude::*;
 pub use guards::*;
 use rb_types::auth::{AuthDecision, AuthUserInfo, LoginRequest, LoginResponse};
 pub use types::*;
-
-use crate::error::ApiError;
 
 pub mod oidc;
 pub mod oidc_link;

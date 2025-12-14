@@ -1,6 +1,5 @@
-use tracing::level_filters::LevelFilter;
-
 use crate::error::ServerResult;
+use tracing::level_filters::LevelFilter;
 
 /// Set the server log level, persisting it to the database and applying it immediately.
 pub async fn set_server_log_level(level: &str) -> ServerResult<()> {

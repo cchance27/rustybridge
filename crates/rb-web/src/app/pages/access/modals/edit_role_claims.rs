@@ -1,11 +1,11 @@
-use std::str::FromStr as _;
-
+use crate::{
+    app::api::roles::{add_role_claim, remove_role_claim},
+    components::{Modal, use_toast},
+    error::ApiError,
+};
 use dioxus::prelude::*;
 use rb_types::{auth::ClaimType, users::RoleInfo};
-
-use crate::{
-    app::api::roles::{add_role_claim, remove_role_claim}, components::{Modal, use_toast}, error::ApiError
-};
+use std::str::FromStr as _;
 
 /// Role Claims Management Modal
 #[component]

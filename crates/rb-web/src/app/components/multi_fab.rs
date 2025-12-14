@@ -1,7 +1,6 @@
+use crate::components::Protected;
 use dioxus::prelude::*;
 use rb_types::auth::{ClaimLevel, ClaimType};
-
-use crate::components::Protected;
 
 /// A multi-action floating action button (FAB) that expands to show additional actions.
 /// Supports "Add User", "Add Group", and "Add Role" actions with role-based access control.

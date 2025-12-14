@@ -1,13 +1,12 @@
+use crate::error::ApiError;
 use dioxus::prelude::*;
 use rb_types::access::{GrantAccessRequest, PrincipalKind, RelayAccessPrincipal};
 #[cfg(feature = "server")]
-use rb_types::auth::{ClaimLevel, ClaimType};
-
-use crate::error::ApiError;
-#[cfg(feature = "server")]
-use crate::server::audit::WebAuditContext;
-#[cfg(feature = "server")]
-use crate::server::auth::guards::{WebAuthSession, ensure_claim};
+use {
+    crate::server::audit::WebAuditContext,
+    crate::server::auth::guards::{WebAuthSession, ensure_claim},
+    rb_types::auth::{ClaimLevel, ClaimType},
+};
 
 #[get(
     "/api/relays/{relay_id}/access",

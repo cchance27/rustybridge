@@ -1,11 +1,11 @@
-use std::collections::HashMap;
-
+use crate::{
+    app::api::groups::create_group,
+    components::{Modal, use_toast},
+    error::ApiError,
+};
 use dioxus::prelude::*;
 use rb_types::users::GroupInfo;
-
-use crate::{
-    app::api::groups::create_group, components::{Modal, use_toast}, error::ApiError
-};
+use std::collections::HashMap;
 
 /// Self-contained Add Group Modal
 #[component]

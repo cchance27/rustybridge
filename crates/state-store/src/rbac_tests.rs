@@ -1,8 +1,6 @@
-use std::borrow::Cow;
-
-use sqlx::SqlitePool;
-
 use crate::*;
+use sqlx::SqlitePool;
+use std::borrow::Cow;
 
 async fn setup_db() -> DbHandle {
     // Use in-memory DB for testing

@@ -1,8 +1,8 @@
-use dioxus::prelude::*;
-
 use crate::app::{
-    api::audit::{ListSessionsQuery, RecordedSession, list_sessions}, components::{Layout, PaginationConfig, SortDirection, Table, TableColumn}
+    api::audit::{ListSessionsQuery, RecordedSession, list_sessions},
+    components::{Layout, PaginationConfig, SortDirection, Table, TableColumn},
 };
+use dioxus::prelude::*;
 
 #[component]
 pub fn SessionHistory() -> Element {

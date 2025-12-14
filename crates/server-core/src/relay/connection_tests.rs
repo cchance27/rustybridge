@@ -1,9 +1,8 @@
 //! Unit tests for relay connection configuration.
 
-use std::collections::HashMap;
-
 use super::*;
 use crate::secrets::SecretBoxedString;
+use std::collections::HashMap;
 
 #[test]
 fn test_build_client_config_defaults() {

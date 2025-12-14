@@ -1,15 +1,17 @@
-use std::{collections::HashMap, str::FromStr as _};
-
-use dioxus::prelude::*;
-use rb_types::{
-    auth::ClaimType, users::{GroupInfo, RoleInfo}
-};
-
 use crate::{
     app::api::{
-        groups::{add_group_claim, remove_group_claim}, roles::{assign_role_to_group, revoke_role_from_group}
-    }, components::{Modal, use_toast}, error::ApiError
+        groups::{add_group_claim, remove_group_claim},
+        roles::{assign_role_to_group, revoke_role_from_group},
+    },
+    components::{Modal, use_toast},
+    error::ApiError,
 };
+use dioxus::prelude::*;
+use rb_types::{
+    auth::ClaimType,
+    users::{GroupInfo, RoleInfo},
+};
+use std::{collections::HashMap, str::FromStr as _};
 
 /// Edit Group Modal with name, roles, and claims management
 #[component]

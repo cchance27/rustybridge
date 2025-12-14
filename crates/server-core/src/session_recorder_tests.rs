@@ -1,13 +1,11 @@
 //! Unit tests for session recorder.
 
-use std::sync::{OnceLock, atomic::Ordering};
-
+use super::*;
 use base64::Engine;
 use serde_json::json;
 use sqlx::{Row, sqlite::SqlitePoolOptions};
 use state_store::{DbHandle, migrate_audit};
-
-use super::*;
+use std::sync::{OnceLock, atomic::Ordering};
 
 static SECRETS_INIT: OnceLock<()> = OnceLock::new();
 

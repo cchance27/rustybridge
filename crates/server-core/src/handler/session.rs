@@ -1,15 +1,13 @@
 //! Terminal session and TUI management.
 
-use std::sync::Arc;
-
+use super::ServerHandler;
+use crate::{create_app_by_name, create_management_app, create_management_app_with_tab, create_relay_selector_app};
 use rb_types::{relay::HostkeyReview, ssh::TUIApplication};
 use russh::{ChannelId, Pty, server::Session};
+use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{info, warn};
 use tui_core::{AppSession, backend::RemoteBackend, utils::desired_rect};
-
-use super::ServerHandler;
-use crate::{create_app_by_name, create_management_app, create_management_app_with_tab, create_relay_selector_app};
 
 impl ServerHandler {
     /// Send the closing sequence, tear down terminal state, and emit disconnect logs.

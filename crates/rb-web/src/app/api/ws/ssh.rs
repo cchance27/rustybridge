@@ -1,28 +1,26 @@
-#[cfg(feature = "server")]
-use axum::http::HeaderMap;
-#[cfg(feature = "server")]
-use dioxus::fullstack::TypedWebsocket;
 use dioxus::{
-    fullstack::{JsonEncoding, WebSocketOptions, Websocket}, prelude::*
+    fullstack::{JsonEncoding, WebSocketOptions, Websocket},
+    prelude::*,
 };
 use rb_types::ssh::{SshClientMsg, SshServerMsg};
-#[cfg(feature = "server")]
-use rb_types::{
-    audit::{AuditContext, EventType}, auth::AuthPromptEvent
-};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "server")]
-use server_core::sessions::{SessionRegistry, SshSession};
-#[cfg(feature = "server")]
-use server_core::{audit::log_event_from_context_best_effort, relay::connect_to_relay_backend};
-#[cfg(feature = "server")]
-use tracing::{error, info, warn};
+use {
+    crate::server::auth::guards::{WebAuthSession, ensure_authenticated},
+    axum::http::HeaderMap,
+    dioxus::fullstack::TypedWebsocket,
+    rb_types::{
+        audit::{AuditContext, EventType},
+        auth::AuthPromptEvent,
+    },
+    server_core::sessions::{SessionRegistry, SshSession},
+    server_core::{audit::log_event_from_context_best_effort, relay::connect_to_relay_backend},
+    tracing::{error, info, warn},
+};
 #[cfg(feature = "server")]
 type SharedRegistry = std::sync::Arc<SessionRegistry>;
 
 use crate::error::ApiError;
-#[cfg(feature = "server")]
-use crate::server::auth::guards::{WebAuthSession, ensure_authenticated};
 
 #[derive(Serialize, Deserialize)]
 struct SshStatusResponse {

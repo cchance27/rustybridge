@@ -1,8 +1,8 @@
-use dioxus::prelude::*;
-
 use crate::{
-    app::pages::relays::state::RelayState, components::{Modal, RelayAccessForm}
+    app::pages::relays::state::RelayState,
+    components::{Modal, RelayAccessForm},
 };
+use dioxus::prelude::*;
 
 /// Modal for managing relay access
 #[component]

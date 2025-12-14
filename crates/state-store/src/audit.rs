@@ -3,17 +3,18 @@
 //! This module handles the connection to the separate `audit.db` SQLite database,
 //! which stores session recordings and system event logs.
 
-use std::{
-    env, fs::OpenOptions, io::ErrorKind, path::{Path, PathBuf}
-};
-
+use crate::DbResult;
 use rb_types::state::DbLocation;
 use sqlx::{migrate::Migrator, sqlite::SqlitePoolOptions};
+use std::{
+    env,
+    fs::OpenOptions,
+    io::ErrorKind,
+    path::{Path, PathBuf},
+};
 use tokio::sync::OnceCell;
 use tracing::warn;
 use url::Url;
-
-use crate::DbResult;
 
 pub mod connections;
 pub mod events;

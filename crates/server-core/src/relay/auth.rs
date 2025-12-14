@@ -2,17 +2,16 @@
 //!
 //! This module handles the various authentication methods for connecting to relay hosts.
 
-use std::{collections::HashMap, sync::Arc};
-
-use russh::{CryptoVec, client, keys};
-use secrecy::ExposeSecret;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tracing::{trace, warn};
-
 use super::credential::ResolvedCredential;
 use crate::{
-    error::{ServerError, ServerResult}, secrets::SecretBoxedString
+    error::{ServerError, ServerResult},
+    secrets::SecretBoxedString,
 };
+use russh::{CryptoVec, client, keys};
+use secrecy::ExposeSecret;
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tracing::{trace, warn};
 
 // Internal Result type alias
 type Result<T> = ServerResult<T>;

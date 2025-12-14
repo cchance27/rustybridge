@@ -1,6 +1,5 @@
-use dioxus::prelude::*;
-
 use crate::components::Modal;
+use dioxus::prelude::*;
 
 /// Unlink Modal
 #[component]

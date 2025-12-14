@@ -1,7 +1,6 @@
 //! SSH public key management operations.
-use sqlx::SqliteExecutor;
-
 use crate::DbResult;
+use sqlx::SqliteExecutor;
 
 /// Get all public keys for a user by username
 pub async fn get_user_public_keys(executor: impl SqliteExecutor<'_>, username: &str) -> DbResult<Vec<String>> {

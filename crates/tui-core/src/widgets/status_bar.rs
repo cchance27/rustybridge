@@ -1,7 +1,11 @@
 //! Status bar widget for TUI apps
 
 use ratatui::{
-    Frame, layout::Rect, style::{Color, Style}, text::{Line, Span}, widgets::Paragraph
+    Frame,
+    layout::Rect,
+    style::{Color, Style},
+    text::{Line, Span},
+    widgets::Paragraph,
 };
 
 /// A status bar widget showing left, center, and right aligned text

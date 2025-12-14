@@ -1,15 +1,14 @@
 //! SSH handler implementation that drives per-connection state and the echo TUI.
 
-use std::{net::SocketAddr, sync::Arc, time::Instant};
-
+use crate::{relay::RelayHandle, sessions::SessionRegistry};
 use russh::{ChannelId, CryptoVec, server::Session};
+use std::{net::SocketAddr, sync::Arc, time::Instant};
 use tokio::sync::{
-    mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel}, watch
+    mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+    watch,
 };
 use tracing::{info, warn};
 use tui_core::{AppAction, AppSession, backend::RemoteBackend};
-
-use crate::{relay::RelayHandle, sessions::SessionRegistry};
 
 mod actions;
 mod auth;

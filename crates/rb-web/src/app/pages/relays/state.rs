@@ -1,11 +1,11 @@
-use std::collections::HashMap;
-
+use crate::{app::api::relays::*, error::ApiError};
 use dioxus::prelude::*;
 use rb_types::{
-    credentials::CredentialInfo, relay::{HostkeyReview, RelayHostInfo}, validation::ValidationError
+    credentials::CredentialInfo,
+    relay::{HostkeyReview, RelayHostInfo},
+    validation::ValidationError,
 };
-
-use crate::{app::api::relays::*, error::ApiError};
+use std::collections::HashMap;
 
 /// Centralized state management for the Relays page
 #[derive(Clone, Copy, PartialEq)]

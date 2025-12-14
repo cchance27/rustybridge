@@ -1,8 +1,7 @@
+use crate::app::api::relay_list::list_user_relays;
 use dioxus::prelude::*;
 #[cfg(feature = "web")]
 use wasm_bindgen::JsCast;
-
-use crate::app::api::relay_list::list_user_relays;
 
 // Server function is available on both client and server through Dioxus RPC
 

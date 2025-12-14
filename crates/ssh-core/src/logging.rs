@@ -1,7 +1,7 @@
 use std::sync::{
-    OnceLock, atomic::{AtomicI32, Ordering}
+    OnceLock,
+    atomic::{AtomicI32, Ordering},
 };
-
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{EnvFilter, Registry, reload};
 

@@ -1,6 +1,7 @@
 use base64::Engine;
 use cbc::{
-    Encryptor, cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7}
+    Encryptor,
+    cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
 };
 use des::TdesEde3;
 use rand::RngCore;

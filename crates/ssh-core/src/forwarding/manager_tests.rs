@@ -1,12 +1,17 @@
 //! Unit tests for forwarding manager.
 
-use std::path::PathBuf;
-
-use rb_types::ssh::{
-    DynamicSocksForward, EnvEntry, LocalTcpForward, LocalUnixForward, LocaleMode, RemoteTcpForward, RemoteUnixForward, SubsystemRequest
-};
-
 use super::*;
+use rb_types::ssh::{
+    DynamicSocksForward,
+    EnvEntry,
+    LocalTcpForward,
+    LocalUnixForward,
+    LocaleMode,
+    RemoteTcpForward,
+    RemoteUnixForward,
+    SubsystemRequest,
+};
+use std::path::PathBuf;
 
 #[test]
 fn descriptors_include_all_forward_types() {

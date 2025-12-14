@@ -1,10 +1,8 @@
-use std::{future::Future, pin::Pin, sync::Arc};
-
-use axum::{extract::Request, http::StatusCode, middleware::Next, response::Response};
-use rb_types::auth::ClaimType;
-
 use super::claims;
 use crate::server::auth::WebAuthSession;
+use axum::{extract::Request, http::StatusCode, middleware::Next, response::Response};
+use rb_types::auth::ClaimType;
+use std::{future::Future, pin::Pin, sync::Arc};
 
 type MiddlewareFuture = Pin<Box<dyn Future<Output = Result<Response, StatusCode>> + Send>>;
 type AuthMiddleware = Arc<dyn Fn(WebAuthSession, Request, Next) -> MiddlewareFuture + Send + Sync>;

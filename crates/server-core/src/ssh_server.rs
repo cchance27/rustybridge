@@ -2,22 +2,26 @@
 //!
 //! This module handles starting the SSH server and loading/creating host keys.
 
-use std::{sync::Arc, time::Duration};
-
+use crate::{
+    error::{ServerError, ServerResult},
+    secrets::{self, SecretBoxedString},
+};
 use base64::Engine;
 use rb_types::{audit::AuditContext, config::ServerConfig};
 use russh::{
-    MethodKind, MethodSet, keys::{
-        Algorithm, PrivateKey, ssh_key::{LineEnding, rand_core::OsRng}
-    }, server::{self as ssh_server, Server}
+    MethodKind,
+    MethodSet,
+    keys::{
+        Algorithm,
+        PrivateKey,
+        ssh_key::{LineEnding, rand_core::OsRng},
+    },
+    server::{self as ssh_server, Server},
 };
 use secrecy::ExposeSecret;
 use sqlx::Row;
+use std::{sync::Arc, time::Duration};
 use tracing::{info, warn};
-
-use crate::{
-    error::{ServerError, ServerResult}, secrets::{self, SecretBoxedString}
-};
 
 /// Launch the embedded SSH server using the parsed CLI configuration.
 ///

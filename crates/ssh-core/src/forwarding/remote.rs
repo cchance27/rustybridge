@@ -1,12 +1,12 @@
+use super::traits::{RemoteForwardChannel, RemoteRegistrar};
 use rb_types::ssh::{RemoteTcpForward, RemoteUnixForward};
 #[cfg(unix)]
 use tokio::net::UnixStream;
 use tokio::{
-    io::{AsyncRead, AsyncWrite, AsyncWriteExt, copy_bidirectional}, net::TcpStream
+    io::{AsyncRead, AsyncWrite, AsyncWriteExt, copy_bidirectional},
+    net::TcpStream,
 };
 use tracing::{info, warn};
-
-use super::traits::{RemoteForwardChannel, RemoteRegistrar};
 
 type Result<T> = crate::SshResult<T>;
 

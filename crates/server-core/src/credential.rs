@@ -2,14 +2,15 @@
 //!
 //! This module handles creating, updating, deleting, and assigning credentials.
 
+use crate::{
+    ServerContext,
+    error::{ServerError, ServerResult},
+    secrets::SecretBoxedString,
+};
 use secrecy::ExposeSecret;
 use serde_json::Value as JsonValue;
 use sqlx::Row;
 use tracing::{info, warn};
-
-use crate::{
-    ServerContext, error::{ServerError, ServerResult}, secrets::SecretBoxedString
-};
 
 /// Create a password credential, tracking the full context.
 pub async fn create_password_credential(

@@ -6,22 +6,31 @@
 //! Feature gated behind `forwarding-tests` to avoid running in normal test suites.
 #![cfg(feature = "forwarding-tests")]
 
-use std::{
-    collections::VecDeque, net::TcpListener, path::PathBuf, sync::{
-        Arc, Mutex, atomic::{AtomicBool, Ordering}
-    }
-};
-
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 #[cfg(unix)]
 use rb_types::ssh::RemoteUnixForward;
 use rb_types::ssh::{DynamicSocksForward, ForwardingConfig, LocalTcpForward, RemoteTcpForward};
 use ssh_core::{
-    SshCoreError, SshResult, forwarding::{ForwardSession, ForwardStream, ForwardingManager, RemoteForwardChannel, RemoteRegistrar}
+    SshCoreError,
+    SshResult,
+    forwarding::{ForwardSession, ForwardStream, ForwardingManager, RemoteForwardChannel, RemoteRegistrar},
+};
+use std::{
+    collections::VecDeque,
+    net::TcpListener,
+    path::PathBuf,
+    sync::{
+        Arc,
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use tokio::{
-    io::{self, AsyncReadExt, AsyncWriteExt}, net::{TcpListener as TokioTcpListener, TcpStream}, sync::mpsc, time::{Duration, sleep}
+    io::{self, AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener as TokioTcpListener, TcpStream},
+    sync::mpsc,
+    time::{Duration, sleep},
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

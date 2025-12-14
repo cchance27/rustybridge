@@ -1,9 +1,8 @@
 //! User input processing and interactive authentication prompts.
 
+use super::ServerHandler;
 use russh::{ChannelId, server::Session};
 use tokio::sync::oneshot;
-
-use super::ServerHandler;
 
 impl ServerHandler {
     pub(super) async fn handle_data(&mut self, channel: ChannelId, data: &[u8], session: &mut Session) -> Result<(), russh::Error> {

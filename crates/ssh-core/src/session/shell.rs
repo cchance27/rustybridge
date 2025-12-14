@@ -1,18 +1,22 @@
-use std::{
-    env, io::{self, Cursor, Read, Write}, thread, time::Duration
+use super::SharedSessionHandle;
+use crate::{
+    forwarding::ForwardingManager,
+    logging,
+    terminal::{current_pty_modes, map_input},
 };
-
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size as term_size};
 use rb_types::ssh::NewlineMode;
 use russh::Sig;
 use signal_hook::iterator::Signals;
-use tokio::{
-    io::AsyncWriteExt, sync::mpsc::{UnboundedSender, unbounded_channel}
+use std::{
+    env,
+    io::{self, Cursor, Read, Write},
+    thread,
+    time::Duration,
 };
-
-use super::SharedSessionHandle;
-use crate::{
-    forwarding::ForwardingManager, logging, terminal::{current_pty_modes, map_input}
+use tokio::{
+    io::AsyncWriteExt,
+    sync::mpsc::{UnboundedSender, unbounded_channel},
 };
 
 #[derive(Clone)]

@@ -1,6 +1,5 @@
-use dioxus::prelude::*;
-
 use crate::app::auth::hooks::use_auth;
+use dioxus::prelude::*;
 
 #[component]
 pub fn AvatarDropDown() -> Element {
@@ -66,22 +65,22 @@ pub fn AvatarDropDown() -> Element {
                 // Only show "Link OIDC Account" if not already linked
                 {
                     match oidc_status.read().as_ref() {
-	                        Some(Some(status)) if !status.is_linked => rsx! {
-	                            li {
-	                                a {
-	                                    onclick: move |evt| {
-	                                        // Force a full page navigation to server function routes.
-	                                        // Our `/:..route` catch-all means `/api/*` will otherwise be treated
-	                                        // as an internal route and end up on NotFound until a hard refresh.
-	                                        evt.prevent_default();
-	                                        let _ = navigator.push(NavigationTarget::<String>::External(oidc_link_href_onclick.clone()));
-	                                    },
-	                                    href: "{oidc_link_href}",
-	                                    "Link OIDC Account"
-	                                }
-	                            }
-	                        },
-	                        _ => rsx! {}
+                            Some(Some(status)) if !status.is_linked => rsx! {
+                                li {
+                                    a {
+                                        onclick: move |evt| {
+                                            // Force a full page navigation to server function routes.
+                                            // Our `/:..route` catch-all means `/api/*` will otherwise be treated
+                                            // as an internal route and end up on NotFound until a hard refresh.
+                                            evt.prevent_default();
+                                            let _ = navigator.push(NavigationTarget::<String>::External(oidc_link_href_onclick.clone()));
+                                        },
+                                        href: "{oidc_link_href}",
+                                        "Link OIDC Account"
+                                    }
+                                }
+                            },
+                            _ => rsx! {}
                     }
                 }
 

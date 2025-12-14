@@ -2,23 +2,25 @@
 //!
 //! This module handles establishing, managing, and bridging connections to relay hosts.
 
-use std::{collections::HashMap, sync::Arc};
-
+use super::{auth::authenticate_relay_session, credential::fetch_and_resolve_credential, handler::SharedRelayHandler};
+use crate::{
+    error::{ServerError, ServerResult},
+    secrets::SecretBoxedString,
+};
 use rb_types::{
-    auth::AuthPromptEvent, relay::RelayInfo, ssh::{ForwardingConfig, NewlineMode}
+    auth::AuthPromptEvent,
+    relay::RelayInfo,
+    ssh::{ForwardingConfig, NewlineMode},
 };
 use russh::{ChannelMsg, client};
 use secrecy::ExposeSecret;
 use ssh_core::{crypto::default_preferred, forwarding::ForwardingManager, session::run_shell};
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{
-    broadcast, mpsc::{self, UnboundedReceiver, UnboundedSender}
+    broadcast,
+    mpsc::{self, UnboundedReceiver, UnboundedSender},
 };
 use tracing::{info, warn};
-
-use super::{auth::authenticate_relay_session, credential::fetch_and_resolve_credential, handler::SharedRelayHandler};
-use crate::{
-    error::{ServerError, ServerResult}, secrets::SecretBoxedString
-};
 
 // Internal Result type alias
 type Result<T> = ServerResult<T>;

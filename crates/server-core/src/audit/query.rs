@@ -1,8 +1,7 @@
 //! Query audit events from the database.
 
-use rb_types::audit::{AuditEvent, EventFilter};
-
 use crate::error::{ServerError, ServerResult};
+use rb_types::audit::{AuditEvent, EventFilter};
 
 /// Query audit events with filtering.
 pub async fn query_events(filter: EventFilter) -> ServerResult<Vec<AuditEvent>> {

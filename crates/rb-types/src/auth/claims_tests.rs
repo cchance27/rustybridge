@@ -1,8 +1,7 @@
 //! Unit tests for claim type parsing and comparison.
 
-use std::{borrow::Cow, str::FromStr};
-
 use super::*;
+use std::{borrow::Cow, str::FromStr};
 
 #[test]
 fn test_claim_string_representation() {

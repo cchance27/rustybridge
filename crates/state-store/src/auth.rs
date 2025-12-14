@@ -1,9 +1,8 @@
 //! Authentication and OIDC operations.
 
+use crate::DbResult;
 use rb_types::auth::{OidcLinkInfo, OidcProfile};
 use sqlx::{Row, SqliteExecutor};
-
-use crate::DbResult;
 
 /// Fetch the latest OIDC link (if any) for a given user.
 pub async fn get_latest_oidc_profile(executor: impl SqliteExecutor<'_>, user_id: i64) -> DbResult<Option<OidcProfile>> {

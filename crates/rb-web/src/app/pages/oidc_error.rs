@@ -1,6 +1,5 @@
-use dioxus::prelude::*;
-
 use crate::app::{auth::hooks::use_auth, components::Layout};
+use dioxus::prelude::*;
 
 #[derive(Clone, PartialEq)]
 pub struct OidcError {

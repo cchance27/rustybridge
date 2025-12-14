@@ -1,15 +1,27 @@
-use std::collections::HashMap;
-
+use crate::{
+    app::api::credentials::*,
+    components::{
+        CredentialBadge,
+        CredentialForm,
+        Fab,
+        Layout,
+        Modal,
+        Protected,
+        RequireAuth,
+        StructuredTooltip,
+        Table,
+        TableActions,
+        TooltipSection,
+        use_toast,
+    },
+};
 use dioxus::prelude::*;
 use rb_types::{
-    auth::{ClaimLevel, ClaimType}, credentials::{CreateCredentialRequest, UpdateCredentialRequest}, validation::{CredentialValidationInput, ValidationError}
+    auth::{ClaimLevel, ClaimType},
+    credentials::{CreateCredentialRequest, UpdateCredentialRequest},
+    validation::{CredentialValidationInput, ValidationError},
 };
-
-use crate::{
-    app::api::credentials::*, components::{
-        CredentialBadge, CredentialForm, Fab, Layout, Modal, Protected, RequireAuth, StructuredTooltip, Table, TableActions, TooltipSection, use_toast
-    }
-};
+use std::collections::HashMap;
 
 #[component]
 pub fn CredentialsPage() -> Element {

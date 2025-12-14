@@ -1,9 +1,9 @@
+use crate::{
+    app::{auth::hooks::use_auth, session::provider::use_session},
+    components::{AvatarDropDown, Protected, ThemeToggle},
+};
 use dioxus::prelude::*;
 use rb_types::auth::{ClaimLevel, ClaimType};
-
-use crate::{
-    app::{auth::hooks::use_auth, session::provider::use_session}, components::{AvatarDropDown, Protected, ThemeToggle}
-};
 
 #[component]
 pub fn NavBar() -> Element {

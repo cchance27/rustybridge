@@ -2,7 +2,8 @@
 //! Handles all input processing when popups are active
 
 use super::{
-    forms::{CFAction, FormAction, handle_credential_form_input, handle_form_input}, types::PopupState
+    forms::{CFAction, FormAction, handle_credential_form_input, handle_form_input},
+    types::PopupState,
 };
 use crate::{AppAction, TuiResult};
 

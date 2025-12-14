@@ -1,11 +1,11 @@
-use std::collections::HashMap;
-
+use crate::{
+    app::api::roles::create_role,
+    components::{Modal, use_toast},
+    error::ApiError,
+};
 use dioxus::prelude::*;
 use rb_types::users::RoleInfo;
-
-use crate::{
-    app::api::roles::create_role, components::{Modal, use_toast}, error::ApiError
-};
+use std::collections::HashMap;
 
 /// Self-contained Add Role Modal
 #[component]

@@ -1,14 +1,14 @@
-use std::{env::VarError, time::Duration};
-
+use crate::{
+    error::{ServerError, ServerResult},
+    secrets::{SecretBoxedString, encrypt_string},
+};
 use rb_types::relay::RelayInfo;
 use russh::{
-    client, keys::{HashAlg, PublicKey}
+    client,
+    keys::{HashAlg, PublicKey},
 };
+use std::{env::VarError, time::Duration};
 use tracing::{info, warn};
-
-use crate::{
-    error::{ServerError, ServerResult}, secrets::{SecretBoxedString, encrypt_string}
-};
 
 const FETCH_HOSTKEY_TIMEOUT_ENV: &str = "RB_FETCH_TIMEOUT";
 const DEFAULT_FETCH_HOSTKEY_TIMEOUT_SECS: f64 = 2.0;
@@ -211,7 +211,8 @@ async fn add_relay_host_inner(endpoint: &str, name: &str, fetch_hostkey: bool) -
 
 async fn fetch_and_optionally_store_hostkey(pool: &sqlx::SqlitePool, name: &str, ip: &str, port: u16) -> ServerResult<()> {
     use std::{
-        io::{self, Write}, sync::{Arc, Mutex}
+        io::{self, Write},
+        sync::{Arc, Mutex},
     };
 
     struct CaptureHandler {

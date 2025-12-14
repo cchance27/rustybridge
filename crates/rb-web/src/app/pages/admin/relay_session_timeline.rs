@@ -2,9 +2,8 @@
 //!
 //! Displays the multi-track timeline view for a session's audit events.
 
-use dioxus::prelude::*;
-
 use crate::app::components::{Layout, RelaySessionTimeline};
+use dioxus::prelude::*;
 
 /// Session timeline page component
 #[component]

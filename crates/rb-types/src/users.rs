@@ -1,7 +1,6 @@
 //! User and group domain types plus web DTOs.
-use serde::{Deserialize, Serialize};
-
 use crate::{access::UserRelayAccess, auth::ClaimType};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 /// Minimal user summary.

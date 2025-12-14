@@ -1,9 +1,10 @@
+use crate::{
+    app::api::roles::*,
+    components::{Modal, use_toast},
+    error::ApiError,
+};
 use dioxus::prelude::*;
 use rb_types::users::{GroupInfo, RoleInfo};
-
-use crate::{
-    app::api::roles::*, components::{Modal, use_toast}, error::ApiError
-};
 
 /// Group Roles Management Modal
 #[component]

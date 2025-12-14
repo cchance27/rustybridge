@@ -1,9 +1,8 @@
 //! Relay host management operations.
 
+use crate::DbResult;
 use rb_types::{access::RelayAclPrincipal, relay::RelayInfo};
 use sqlx::{Row, SqliteExecutor};
-
-use crate::DbResult;
 
 /// Return true if the user has access to the relay host either directly or via any group membership.
 pub async fn user_has_relay_access(executor: impl SqliteExecutor<'_>, user_id: i64, relay_host_id: i64) -> DbResult<bool> {

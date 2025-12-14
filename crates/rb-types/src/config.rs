@@ -1,7 +1,6 @@
 //! Configuration structs for server and web frontends.
-use std::path::PathBuf;
-
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Runtime configuration for the embedded SSH relay server.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

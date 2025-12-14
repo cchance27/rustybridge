@@ -23,10 +23,9 @@ pub async fn create_app_router(
     registry: std::sync::Arc<server_core::sessions::SessionRegistry>,
     secure_cookies: bool,
 ) -> anyhow::Result<Router> {
+    use crate::{app::api, server::auth::WebUser};
     use axum_session::{SameSite, SessionLayer, SessionStore};
     use axum_session_auth::AuthSessionLayer;
-
-    use crate::{app::api, server::auth::WebUser};
 
     // Initialize DB for session store
     let db_handle = server_core::api::server_db_handle().await?;

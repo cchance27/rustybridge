@@ -1,6 +1,5 @@
-use dioxus::prelude::*;
-
 use crate::app::components::{GroupedEventView, Layout, VirtualizedEventList};
+use dioxus::prelude::*;
 
 /// Admin page for viewing all audit events with filtering and grouping
 #[component]

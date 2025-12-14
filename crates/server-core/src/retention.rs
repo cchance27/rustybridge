@@ -4,10 +4,9 @@
 //! coordinating between state-store cleanup functions and the periodic
 //! background task.
 
+use crate::error::{ServerError, ServerResult};
 use rb_types::audit::{DatabaseStats, RetentionConfig, RetentionResult, VacuumResult};
 use tracing::{info, warn};
-
-use crate::error::{ServerError, ServerResult};
 
 // --------------------------------
 // Configuration Access

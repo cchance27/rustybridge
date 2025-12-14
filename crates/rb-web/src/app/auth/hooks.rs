@@ -1,7 +1,6 @@
+use super::context::AuthState;
 use dioxus::prelude::*;
 use rb_types::auth::ClaimType;
-
-use super::context::AuthState;
 
 /// Get current auth state from context
 pub fn use_auth() -> Signal<AuthState<'static>> {

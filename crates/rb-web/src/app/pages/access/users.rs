@@ -1,15 +1,20 @@
 //! Users section with table and modals
 //! Self-contained components for managing users
 
-use dioxus::prelude::*;
-use rb_types::{
-    access::RelayAccessSource, auth::{ClaimLevel, ClaimType}, users::{GroupInfo, RoleInfo, UserGroupInfo}
-};
-
 use crate::{
     app::{
-        api::users::*, auth::oidc::{OidcLinkStatus, get_user_oidc_status, unlink_user_oidc}
-    }, components::{Protected, StructuredTooltip, Table, TableActions, TooltipSection, buttons::HoverSwapButton, icons, use_toast}, error::ApiError, pages::access::modals::{ConfirmDeleteUserModal, EditUserModal, ManageUserGroupsModal, ManageUserRolesModal, UnlinkUserModal}
+        api::users::*,
+        auth::oidc::{OidcLinkStatus, get_user_oidc_status, unlink_user_oidc},
+    },
+    components::{Protected, StructuredTooltip, Table, TableActions, TooltipSection, buttons::HoverSwapButton, icons, use_toast},
+    error::ApiError,
+    pages::access::modals::{ConfirmDeleteUserModal, EditUserModal, ManageUserGroupsModal, ManageUserRolesModal, UnlinkUserModal},
+};
+use dioxus::prelude::*;
+use rb_types::{
+    access::RelayAccessSource,
+    auth::{ClaimLevel, ClaimType},
+    users::{GroupInfo, RoleInfo, UserGroupInfo},
 };
 
 /// Main Users Section component

@@ -1,13 +1,16 @@
 //! Groups section with table and modals
 //! Self-contained components for managing groups
 
+use crate::{
+    app::api::{groups::*, users::*},
+    components::{Modal, Protected, StructuredTooltip, Table, TooltipSection, use_toast},
+    error::ApiError,
+    pages::access::modals::{ConfirmDeleteGroupModal, EditGroupModal, ManageGroupRolesModal},
+};
 use dioxus::prelude::*;
 use rb_types::{
-    auth::{ClaimLevel, ClaimType}, users::{GroupInfo, RoleInfo, UserGroupInfo}
-};
-
-use crate::{
-    app::api::{groups::*, users::*}, components::{Modal, Protected, StructuredTooltip, Table, TooltipSection, use_toast}, error::ApiError, pages::access::modals::{ConfirmDeleteGroupModal, EditGroupModal, ManageGroupRolesModal}
+    auth::{ClaimLevel, ClaimType},
+    users::{GroupInfo, RoleInfo, UserGroupInfo},
 };
 
 /// Main Groups Section component

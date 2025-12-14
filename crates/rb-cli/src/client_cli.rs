@@ -1,12 +1,13 @@
-use std::{collections::HashMap, env, path::PathBuf, time::Duration};
-
 use anyhow::{Result, anyhow, bail};
 use clap::{ArgAction, Parser, ValueEnum};
 use rb_types::{
-    client::{ClientConfig, ClientIdentity}, net::parse_target, ssh::{ForwardingConfig, LocaleMode, NewlineMode}
+    client::{ClientConfig, ClientIdentity},
+    net::parse_target,
+    ssh::{ForwardingConfig, LocaleMode, NewlineMode},
 };
 use secrecy::SecretString;
 use ssh_core::{forwarding, terminal::newline_mode_from_env};
+use std::{collections::HashMap, env, path::PathBuf, time::Duration};
 
 pub trait ClientEnv {
     fn var(&self, key: &str) -> Option<String>;

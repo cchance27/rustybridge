@@ -1,7 +1,6 @@
+use crate::app::api::auth::get_current_user;
 use dioxus::prelude::*;
 use rb_types::auth::AuthUserInfo;
-
-use crate::app::api::auth::get_current_user;
 
 /// Authentication state
 #[derive(Clone, PartialEq, Debug)]

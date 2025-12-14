@@ -1,12 +1,11 @@
 //! Minimal russh `Server` that hands each TCP connection to our [`ServerHandler`].
 
-use std::{net::SocketAddr, sync::Arc};
-
-use tracing::{info, warn};
-
 use super::{
-    handler::{ServerHandler, display_addr}, sessions::SessionRegistry
+    handler::{ServerHandler, display_addr},
+    sessions::SessionRegistry,
 };
+use std::{net::SocketAddr, sync::Arc};
+use tracing::{info, warn};
 
 /// Factory invoked by russh whenever a client connects.
 #[derive(Clone)]

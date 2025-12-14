@@ -1,16 +1,16 @@
-use std::{
-    sync::{
-        Arc, atomic::{AtomicBool, AtomicU64, Ordering}
-    }, time::Duration
-};
-
+use crate::secrets;
 use chrono::Utc;
 use rb_types::state::DbHandle;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 use tokio::sync::Mutex;
 use tracing::{debug, error};
 use uuid::Uuid;
-
-use crate::secrets;
 
 // Configuration constants
 /// Compression level for zstd (1-22). Level 3 provides good balance between speed and compression ratio.

@@ -4,12 +4,12 @@ mod modals;
 mod roles;
 mod users;
 
+use crate::{
+    app::api::{groups::*, roles::list_roles, users::*},
+    components::{Layout, RequireAuth},
+};
 use dioxus::prelude::*;
 use rb_types::auth::{ClaimLevel, ClaimType};
-
-use crate::{
-    app::api::{groups::*, roles::list_roles, users::*}, components::{Layout, RequireAuth}
-};
 
 #[component]
 pub fn AccessPage() -> Element {
