@@ -279,6 +279,10 @@ pub fn use_session_provider() -> SessionContext {
                     // Check if we already have this session and update it, or create new
                     let mut sessions = context.sessions.write();
 
+                    // Data: (relay_id, session_number, old_created_at_ts, new_created_at_ts, geometry, minimized)
+                    // old timestamp is needed to delete orphaned localStorage key
+                    let session_to_save: Option<(i64, u32, i64, i64, WindowGeometry, bool)>;
+
                     // First check: do we have a session with matching relay_id + session_number?
                     let found_by_ids = sessions
                         .iter_mut()
@@ -288,6 +292,23 @@ pub fn use_session_provider() -> SessionContext {
                         // Session already exists in this browser - just update counts
                         existing.connections = summary.connections;
                         existing.viewers = summary.viewers;
+
+                        // Capture old timestamp BEFORE syncing to server time
+                        let old_started_at_ts = existing.started_at.timestamp_millis();
+                        let new_started_at_ts = summary.created_at.timestamp_millis();
+
+                        // Always sync started_at with server truth to ensure storage keys match restoration keys
+                        existing.started_at = summary.created_at;
+
+                        // Prepare data to save (includes both old and new timestamps)
+                        session_to_save = Some((
+                            summary.relay_id,
+                            summary.session_number,
+                            old_started_at_ts,
+                            new_started_at_ts,
+                            existing.geometry.clone(),
+                            existing.minimized,
+                        ));
                     } else {
                         // Second check: do we have a session that's still connecting (no session_number yet)
                         // for the same relay name? This handles the race where SessionEvent::Created arrives
@@ -306,11 +327,28 @@ pub fn use_session_provider() -> SessionContext {
                             existing.viewers = summary.viewers;
                             existing.status = SessionStatus::Connected;
 
+                            // Capture old timestamp BEFORE syncing to server time
+                            let old_started_at_ts = existing.started_at.timestamp_millis();
+                            let new_started_at_ts = summary.created_at.timestamp_millis();
+
+                            // Sync started_at with server time
+                            existing.started_at = summary.created_at;
+
                             debug!(
                                 session_id = %existing.id,
                                 session_number = summary.session_number,
                                 "updated connecting session"
                             );
+
+                            // Prepare data to save (includes both old and new timestamps)
+                            session_to_save = Some((
+                                summary.relay_id,
+                                summary.session_number,
+                                old_started_at_ts,
+                                new_started_at_ts,
+                                existing.geometry.clone(),
+                                existing.minimized,
+                            ));
                         } else {
                             // Drop the write lock before calling open_restored
                             drop(sessions);
@@ -338,6 +376,25 @@ pub fn use_session_provider() -> SessionContext {
                             #[cfg(feature = "web")]
                             {
                                 toast.info(&format!("New session synced: {}", summary.relay_name));
+                            }
+
+                            // Return early since we handled the 'else' case completely
+                            continue;
+                        }
+                    }
+
+                    // Drop the lock explicitly before saving state
+                    drop(sessions);
+
+                    // Perform the save if needed, and cleanup orphaned key if timestamps differ
+                    if let Some((relay_id, session_number, old_ts, new_ts, geometry, minimized)) = session_to_save {
+                        if let Some(user_id) = context.get_current_user_id() {
+                            // Save with the new (server-synced) timestamp key
+                            context.save_session_state(user_id, relay_id, session_number, new_ts, geometry.clone(), minimized);
+
+                            // Delete orphaned key if old timestamp differs from new
+                            if old_ts != new_ts {
+                                context.remove_session_storage(user_id, relay_id, session_number, old_ts);
                             }
                         }
                     }
@@ -761,13 +818,10 @@ impl SessionContext {
             self.end_drag();
         }
 
-        // Clean up storage if session has relay_id and session_number
-        if let Some(session) = sessions.read().iter().find(|s| s.id == id)
-            && let (Some(user_id), Some(relay_id), Some(session_number)) =
-                (self.get_current_user_id(), session.relay_id, session.session_number)
-        {
-            self.remove_session_storage(user_id, relay_id, session_number, session.started_at.timestamp_millis());
-        }
+        // NOTE: We intentionally do NOT delete localStorage here.
+        // Storage cleanup happens in SessionEvent::Removed when the server confirms
+        // the session is actually closed. This allows session state to persist
+        // across page refreshes while the session is still active on the server.
 
         sessions.write().retain(|s| s.id != id);
     }
