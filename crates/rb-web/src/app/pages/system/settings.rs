@@ -9,7 +9,7 @@ use rb_types::audit::{DatabaseStats, RetentionConfig, RetentionPolicy};
 
 /// Admin page for server settings including retention policies
 #[component]
-pub fn ServerSettings() -> Element {
+pub fn SystemSettings() -> Element {
     // Load current settings and stats
     let settings = use_resource(get_retention_settings);
     let mut stats = use_resource(get_database_stats);

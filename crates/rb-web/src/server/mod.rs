@@ -6,6 +6,63 @@ use axum::Router;
 use dioxus::prelude::*;
 use tracing::{info, warn};
 
+/// Middleware to ensure ConnectInfo is present.
+///
+/// In production (run_web_server), `into_make_service_with_connect_info` provides the real IP.
+/// In development (dx serve), that is skipped, so we inject a localhost fallback to prevent crashes.
+#[cfg(feature = "server")]
+async fn ensure_connect_info(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::extract::ConnectInfo;
+    use std::net::{SocketAddr, IpAddr};
+    use std::str::FromStr;
+
+    let (mut parts, body) = req.into_parts();
+
+    // Check if ConnectInfo exists; if not, try to extract from headers or fallback
+    if parts.extensions.get::<ConnectInfo<SocketAddr>>().is_none() {
+        let mut ip: Option<IpAddr> = None;
+
+        // Try X-Forwarded-For
+        if let Some(forwarded) = parts.headers.get("x-forwarded-for") {
+            if let Ok(s) = forwarded.to_str() {
+                // X-Forwarded-For can be a list "client, proxy1, proxy2"
+                if let Some(first) = s.split(',').next() {
+                     if let Ok(parsed) = IpAddr::from_str(first.trim()) {
+                         ip = Some(parsed);
+                     }
+                }
+            }
+        }
+
+        // Try X-Real-IP if not found
+        if ip.is_none() {
+            if let Some(real_ip) = parts.headers.get("x-real-ip") {
+                if let Ok(s) = real_ip.to_str() {
+                    if let Ok(parsed) = IpAddr::from_str(s.trim()) {
+                        ip = Some(parsed);
+                    }
+                }
+            }
+        }
+
+        let addr = if let Some(ip) = ip {
+            tracing::debug!("injected ConnectInfo from headers: {}", ip);
+            SocketAddr::new(ip, 0)
+        } else {
+            tracing::debug!("injecting fallback ConnectInfo (127.0.0.1) for dev/test environment");
+            SocketAddr::from(([127, 0, 0, 1], 0))
+        };
+
+        parts.extensions.insert(ConnectInfo(addr));
+    }
+
+    let req = axum::extract::Request::from_parts(parts, body);
+    next.run(req).await
+}
+
 /// Create the configured Axum router with all middleware layers.
 ///
 /// This function sets up:
@@ -67,7 +124,8 @@ pub async fn create_app_router(
         .layer(axum::Extension(registry))
         .layer(axum::Extension(server_ctx))
         .layer(auth_layer)
-        .layer(session_layer);
+        .layer(session_layer)
+        .layer(axum::middleware::from_fn(ensure_connect_info));
 
     Ok(router)
 }

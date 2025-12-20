@@ -10,6 +10,7 @@ use crate::app::{
         TooltipSection,
         icons::{BrowserIcon, TerminalIcon},
         use_toast,
+        Layout, RequireAuth
     },
     session::provider::use_session,
 };
@@ -19,7 +20,22 @@ use dioxus::{
     prelude::*,
 };
 use rb_types::ssh::SessionEvent;
+use rb_types::auth::{ClaimLevel, ClaimType};
 use tracing::debug;
+
+#[component]
+pub fn SystemStatusPage() -> Element {
+    rsx! {
+        RequireAuth {
+            any_claims: vec![ClaimType::Server(ClaimLevel::View)],
+            Layout {
+                div { class: "grid grid-cols-1 gap-6",
+                    SessionsSection {}
+                }
+            }
+        }
+    }
+}
 
 #[component]
 pub fn SessionsSection() -> Element {
@@ -47,7 +63,7 @@ pub fn SessionsSection() -> Element {
                 TimeoutFuture::new(5000).await; // Wait 5 seconds
                 // Check if resource value is None (still loading)
                 if sessions_fallback.value().read().is_none() {
-                    warn!("server sessions: resource still loading after 5s, attempting restart");
+                    tracing::warn!("server sessions: resource still loading after 5s, attempting restart");
                     sessions_fallback.restart();
                 }
             });
@@ -154,8 +170,6 @@ pub fn SessionsSection() -> Element {
     };
 
     rsx! {
-
-
         match sessions() {
             Some(Ok(list)) => {
                 let relay_sessions: Vec<_> = list.iter().filter(|s| matches!(s.session.kind, rb_types::ssh::SessionKind::Relay)).cloned().collect();

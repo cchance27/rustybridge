@@ -14,9 +14,11 @@ use crate::{
         OidcErrorPage,
         ProfilePage,
         RelaysPage,
-        ServerPage,
         SshSuccessPage,
-        admin::{AuditEvents, RelaySessionTimelinePage, ScheduledTasks, ServerSettings, SessionHistory},
+        admin::{AuditEvents, RelaySessionTimelinePage, SessionHistory},
+        SystemStatusPage,
+        SystemSettingsPage,
+        SystemTasksPage,
     },
 };
 use dioxus::prelude::*;
@@ -86,16 +88,16 @@ pub enum Routes {
     ProfilePage {},
     #[route("/access")]
     AccessPage {},
-    #[route("/server")]
-    ServerPage {},
+    #[route("/system/status")]
+    SystemStatusPage {},
     #[route("/admin/sessions")]
     SessionHistory {},
     #[route("/admin/events")]
     AuditEvents {},
-    #[route("/admin/settings")]
-    ServerSettings {},
-    #[route("/admin/tasks")]
-    ScheduledTasks {},
+    #[route("/system/settings")]
+    SystemSettingsPage {},
+    #[route("/system/tasks")]
+    SystemTasksPage {},
     #[route("/admin/sessions/:session_id/replay")]
     SessionPlayer { session_id: String },
     #[route("/admin/sessions/:session_id/timeline")]

@@ -38,29 +38,48 @@ pub fn NavBar() -> Element {
                             any_claims: vec![ClaimType::Credentials(ClaimLevel::View)],
                             li { Link { to: crate::Routes::CredentialsPage {}, "Credentials" } }
                         }
+
+                        // Admin Dropdown
                         Protected {
-                            any_claims: vec![ClaimType::Users(ClaimLevel::View), ClaimType::Groups(ClaimLevel::View)],
-                            li { Link { to: crate::Routes::AccessPage {}, "Access" } }
+                            any_claims: vec![
+                                ClaimType::Server(ClaimLevel::View),
+                                ClaimType::Users(ClaimLevel::View),
+                                ClaimType::Groups(ClaimLevel::View)
+                            ],
+                            li {
+                                details {
+                                    summary { "Admin" }
+                                    ul { class: "p-2 bg-base-200 rounded-t-none z-[50]",
+                                        Protected {
+                                            any_claims: vec![ClaimType::Users(ClaimLevel::View), ClaimType::Groups(ClaimLevel::View)],
+                                            li { Link { to: crate::Routes::AccessPage {}, "Access" } }
+                                        }
+                                        Protected {
+                                            any_claims: vec![ClaimType::Server(ClaimLevel::View)],
+                                            li { Link { to: crate::Routes::SessionHistory {}, "Sessions" } }
+                                        }
+                                        Protected {
+                                            any_claims: vec![ClaimType::Server(ClaimLevel::View)],
+                                            li { Link { to: crate::Routes::AuditEvents {}, "Events" } }
+                                        }
+                                    }
+                                }
+                            }
                         }
+
+                        // System Dropdown
                         Protected {
                             any_claims: vec![ClaimType::Server(ClaimLevel::View)],
-                            li { Link { to: crate::Routes::ServerPage {}, "Server" } }
-                        }
-                        Protected {
-                            any_claims: vec![ClaimType::Server(ClaimLevel::View)],
-                            li { Link { to: crate::Routes::SessionHistory {}, "Sessions" } }
-                        }
-                        Protected {
-                            any_claims: vec![ClaimType::Server(ClaimLevel::View)],
-                            li { Link { to: crate::Routes::AuditEvents {}, "Events" } }
-                        }
-                        Protected {
-                            any_claims: vec![ClaimType::Server(ClaimLevel::View)],
-                            li { Link { to: crate::Routes::ServerSettings {}, "Settings" } }
-                        }
-                        Protected {
-                            any_claims: vec![ClaimType::Server(ClaimLevel::View)],
-                            li { Link { to: crate::Routes::ScheduledTasks {}, "Tasks" } }
+                            li {
+                                details {
+                                    summary { "System" }
+                                    ul { class: "p-2 bg-base-200 rounded-t-none z-[50]",
+                                        li { Link { to: crate::Routes::SystemStatusPage {}, "Status" } }
+                                        li { Link { to: crate::Routes::SystemSettingsPage {}, "Settings" } }
+                                        li { Link { to: crate::Routes::SystemTasksPage {}, "Tasks" } }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

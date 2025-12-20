@@ -12,7 +12,7 @@ use dioxus::prelude::*;
 use rb_types::tasks::{TaskOutcome, TaskState, TaskSummary, ToggleTaskRequest, UpdateTaskScheduleRequest};
 
 #[component]
-pub fn ScheduledTasks() -> Element {
+pub fn SystemTasks() -> Element {
     let mut tasks = use_resource(list_tasks);
 
     rsx! {

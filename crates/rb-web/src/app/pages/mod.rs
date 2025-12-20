@@ -9,8 +9,8 @@ pub mod not_found;
 pub mod oidc_error;
 pub mod profile;
 pub mod relays;
-pub mod server;
 pub mod ssh_success;
+pub mod system;
 
 pub use access::AccessPage;
 pub use admin::{AuditEvents, SessionHistory};
@@ -22,5 +22,5 @@ pub use not_found::NotFoundPage;
 pub use oidc_error::OidcErrorPage;
 pub use profile::ProfilePage;
 pub use relays::RelaysPage;
-pub use server::ServerPage;
 pub use ssh_success::SshSuccessPage;
+pub use system::{SystemStatusPage, SystemSettings as SystemSettingsPage, SystemTasks as SystemTasksPage};
