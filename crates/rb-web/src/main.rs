@@ -21,6 +21,10 @@ fn main() {
             let audit_db = server_core::audit_db_handle().await?;
             let registry = Arc::new(server_core::sessions::SessionRegistry::new(audit_db));
 
+            // Initialize Scheduler (for dev mode)
+            let db_handle = server_core::api::server_db_handle().await?;
+            server_core::scheduler::init(db_handle.pool.clone(), registry.clone()).await?;
+
             // Create the configured router with all middleware layers
             // secure_cookies = false for development (HTTP, not HTTPS)
             rb_web::create_app_router(app_root, registry, false).await

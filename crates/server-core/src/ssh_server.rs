@@ -74,25 +74,7 @@ pub async fn run_ssh_server(config: ServerConfig, registry: Arc<crate::sessions:
     server_config.keys.push(host_key);
 
     // Initialize Task Manager
-    let task_manager = crate::scheduler::TaskManager::new(pool.clone())
-        .await
-        .map_err(|e| ServerError::Internal(format!("Failed to init task manager: {}", e)))?;
-
-    crate::scheduler::tasks::register_builtin_tasks(&task_manager, pool.clone(), registry.clone())
-        .await
-        .map_err(|e| ServerError::Internal(format!("Failed to register tasks: {}", e)))?;
-
-    // Set global instance for API access
-    if let Err(_) = crate::scheduler::set_global_manager(task_manager.clone()) {
-        tracing::warn!("Failed to set global task manager - admin UI may not work");
-    }
-
-    let manager_handle = task_manager.clone();
-    tokio::spawn(async move {
-        if let Err(e) = manager_handle.start().await {
-            tracing::error!("task scheduler failed: {}", e);
-        }
-    });
+    crate::scheduler::init(pool.clone(), registry.clone()).await?;
 
     let mut server = super::server_manager::ServerManager { registry };
     info!(bind = %config.bind, port = config.port, "starting embedded SSH server");
